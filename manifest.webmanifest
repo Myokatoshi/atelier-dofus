@@ -1,0 +1,18 @@
+{
+  "name": "Atelier Dofus 3",
+  "short_name": "Atelier",
+  "description": "Prix HDV partagés, rentabilité des crafts, liste de farm, builds et Almanax pour Dofus 3.",
+  "lang": "fr",
+  "start_url": "./#accueil",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#10302a",
+  "theme_color": "#0f8a6a",
+  "icons": [
+    { "src": "icons/icon-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "icons/icon-512.png", "sizes": "512x512", "type": "image/png" },
+    { "src": "icons/icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" },
+    { "src": "icons/icon.svg", "sizes": "any", "type": "image/svg+xml" }
+  ]
+}

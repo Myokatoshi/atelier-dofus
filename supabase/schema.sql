@@ -1,0 +1,65 @@
+-- Atelier Dofus 3 : schéma Supabase.
+-- À exécuter une fois dans Supabase > SQL Editor > New query > Run.
+
+-- Pseudos des membres (affichés à côté des relevés de prix)
+create table if not exists public.profiles (
+  id uuid primary key references auth.users(id) on delete cascade,
+  pseudo text not null default '' check (char_length(pseudo) <= 30)
+);
+
+-- Relevés de prix HDV : un relevé par objet, par membre et par jour
+create table if not exists public.price_obs (
+  item_id integer not null,
+  user_id uuid not null default auth.uid() references auth.users(id) on delete cascade,
+  d date not null,
+  lo integer not null check (lo >= 0),
+  hi integer not null check (hi >= lo),
+  created_at timestamptz not null default now(),
+  primary key (item_id, user_id, d)
+);
+create index if not exists price_obs_item on public.price_obs (item_id);
+
+-- Données personnelles : stock, plan de craft, choix de farm, builds
+create table if not exists public.user_state (
+  user_id uuid primary key default auth.uid() references auth.users(id) on delete cascade,
+  stock jsonb not null default '{}',
+  plan jsonb not null default '{}',
+  builds jsonb not null default '[]',
+  updated_at timestamptz not null default now()
+);
+
+-- Sécurité : seuls les membres connectés (invités) accèdent aux données
+alter table public.profiles enable row level security;
+alter table public.price_obs enable row level security;
+alter table public.user_state enable row level security;
+
+drop policy if exists "profils lisibles par les membres" on public.profiles;
+create policy "profils lisibles par les membres" on public.profiles for select to authenticated using (true);
+drop policy if exists "chacun gère son profil" on public.profiles;
+create policy "chacun gère son profil" on public.profiles for all to authenticated using (id = auth.uid()) with check (id = auth.uid());
+
+drop policy if exists "prix lisibles par les membres" on public.price_obs;
+create policy "prix lisibles par les membres" on public.price_obs for select to authenticated using (true);
+drop policy if exists "chacun ajoute ses relevés" on public.price_obs;
+create policy "chacun ajoute ses relevés" on public.price_obs for insert to authenticated with check (user_id = auth.uid());
+drop policy if exists "chacun modifie ses relevés" on public.price_obs;
+create policy "chacun modifie ses relevés" on public.price_obs for update to authenticated using (user_id = auth.uid()) with check (user_id = auth.uid());
+drop policy if exists "chacun supprime ses relevés" on public.price_obs;
+create policy "chacun supprime ses relevés" on public.price_obs for delete to authenticated using (user_id = auth.uid());
+
+drop policy if exists "données personnelles privées" on public.user_state;
+create policy "données personnelles privées" on public.user_state for all to authenticated using (user_id = auth.uid()) with check (user_id = auth.uid());
+
+-- Profil créé automatiquement à l'inscription (pseudo = début de l'adresse e-mail)
+create or replace function public.handle_new_user() returns trigger language plpgsql security definer set search_path = public as $$
+begin
+  insert into public.profiles (id, pseudo) values (new.id, split_part(new.email, '@', 1)) on conflict do nothing;
+  return new;
+end $$;
+drop trigger if exists on_auth_user_created on auth.users;
+create trigger on_auth_user_created after insert on auth.users for each row execute function public.handle_new_user();
+
+-- Temps réel : diffuser les nouveaux relevés à tous les membres connectés
+do $$ begin
+  alter publication supabase_realtime add table public.price_obs;
+exception when duplicate_object then null; end $$;

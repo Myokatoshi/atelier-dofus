@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Atelier Dofus 3</title>
+<meta name="description" content="Prix HDV partagés, rentabilité des crafts, liste de farm, builds et Almanax pour Dofus 3.">
+<meta name="theme-color" content="#0f8a6a">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icons/icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="apple-mobile-web-app-title" content="Atelier">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Baloo+2:wght@600;700;800&family=Nunito:wght@400;600;700;800&family=IBM+Plex+Mono:wght@400;500;600&display=swap">
+<link rel="stylesheet" href="css/app.css">
+</head>
+<body>
+<div class="wrap">
+  <header class="appbar">
+    <a class="brand" href="#accueil" aria-label="Atelier Dofus 3, accueil">
+      <svg viewBox="0 0 40 40" aria-hidden="true"><defs><linearGradient id="egg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#7ef0c8"/><stop offset=".55" stop-color="#14a37c"/><stop offset="1" stop-color="#0b5e48"/></linearGradient></defs>
+        <path d="M20 3c7 0 12.5 10.5 12.5 20.5A12.5 12.5 0 0 1 7.5 23.5C7.5 13.5 13 3 20 3z" fill="url(#egg)"/>
+        <path d="M14.5 13c1.6-3.4 3.6-5.3 5.5-5.6" stroke="#fff" stroke-opacity=".75" stroke-width="2.4" stroke-linecap="round" fill="none"/>
+        <circle cx="13.6" cy="17.4" r="1.5" fill="#fff" fill-opacity=".7"/></svg>
+      <span><b>Atelier Dofus 3</b><small>Craft · Prix · Farm · Builds</small></span>
+    </a>
+    <span class="save" id="save" data-s="busy"><i></i><span>Connexion…</span></span>
+  </header>
+
+  <nav class="tabs" id="tabs" aria-label="Sections"></nav>
+
+  <main id="view"><div class="loading">Chargement de l'encyclopédie…</div></main>
+
+  <footer class="note">Données du jeu : <span id="ver">Dofus 3</span>, extraites du client par le projet communautaire DofusDude (dofusdu.de). Les prix sont partagés entre les membres du groupe ; ton stock, ton plan, ta liste de farm et tes builds restent privés. Aucune connexion à ton compte Ankama. Application de fans, sans lien avec Ankama.</footer>
+</div>
+
+<dialog id="sheet" aria-label="Fiche objet"><div class="sheet-in" id="sheet-in"></div></dialog>
+
+
+<dialog id="sheet" aria-label="Fiche objet"><div class="sheet-in" id="sheet-in"></div></dialog>
+
+<script src="config.js"></script>
+<script src="vendor/supabase.js"></script>
+<script src="js/app.js"></script>
+<script>
+  if ("serviceWorker" in navigator) addEventListener("load", () => navigator.serviceWorker.register("sw.js").catch(() => {}));
+</script>
+</body>
+</html>
