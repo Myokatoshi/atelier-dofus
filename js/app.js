@@ -90,7 +90,7 @@ function itemLink(id, sub, px = 28) {
 // =====================================================================
 const CFG = window.ATELIER_CONFIG || {};
 const saveEl = document.getElementById("save");
-const saveState = (st, txt) => { saveEl.dataset.s = st; saveEl.lastElementChild.textContent = txt; };
+const saveState = (st, txt) => { document.querySelectorAll(".save").forEach(el => { el.dataset.s = st; el.lastElementChild.textContent = txt; el.title = txt; }); };
 const LS = "atelier-dofus3-v2", LS_PRICES = "atelier-dofus3-prix";
 function lsLoad() { try { return JSON.parse(localStorage.getItem(LS) || "null"); } catch { return null; } }
 function lsSave() { try { localStorage.setItem(LS, JSON.stringify(S)); } catch {} }
@@ -1520,7 +1520,7 @@ function tourPrep() {
     el.addEventListener("change", () => { tourSetup[key] = el.checked; saveTour(); render(); });
     return h("label", { class: "tour-opt" }, el, h("span", {}, h("strong", { text: label }), h("small", { text: sub })));
   };
-  const age = h("span", { class: "seg", role: "group", "aria-label": "Ancienneté" }, [[1, "Pas relevé aujourd'hui"], [3, "Plus de 3 jours"], [7, "Plus de 7 jours"]].map(([v, l]) =>
+  const age = h("span", { class: "seg seg-full", role: "group", "aria-label": "Ancienneté" }, [[1, "Pas relevé aujourd'hui"], [3, "Plus de 3 jours"], [7, "Plus de 7 jours"]].map(([v, l]) =>
     h("button", { type: "button", "aria-pressed": tourSetup.age === v ? "true" : "false", onclick: () => { tourSetup.age = v; saveTour(); render(); } }, l)));
   const groups = HDV.map(([k, label]) => [label, ids.filter(id => hdvOf(id) === k)]).filter(g => g[1].length);
   return h("div", { class: "grid2" },
@@ -1889,6 +1889,7 @@ const IC = {
   bag: "M6 9a6 6 0 0 1 12 0v11H6z M9 9V6a3 3 0 0 1 6 0v3 M6 14h12",
   book: "M4 5a2 2 0 0 1 2-2h13v16H6a2 2 0 0 0-2 2z M4 21V5 M8 7h7 M8 11h5",
   save: "M12 3v12 M7 10l5 5 5-5 M4 17v3h16v-3",
+  user: "M12 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8z M4 21a8 8 0 0 1 16 0",
   up: "M12 20V5 M6 11l6-6 6 6 M5 20h14",
   ledger: "M6 3h12v18l-3-2-3 2-3-2-3 2z M9 8h6 M9 12h6 M9 16h3",
   route: "M6 19a2 2 0 1 0 0-4 2 2 0 0 0 0 4z M18 9a2 2 0 1 0 0-4 2 2 0 0 0 0 4z M8 17h7a3 3 0 0 0 0-6H9a3 3 0 0 1 0-6h7",
@@ -1898,11 +1899,41 @@ const svgI = name => { const el = s("svg", { class: "i", viewBox: "0 0 24 24", "
 const TABS = [
   ["accueil", "Accueil", "home", "--c-home"], ["plan", "Plan de craft", "hammer", "--c-craft", "c-plan"], ["rentabilite", "Rentabilité", "trend", "--c-gold"],
   ["prix", "Prix HDV", "coins", "--c-gold", "c-prix"], ["tournee", "Tournée HDV", "route", "--c-gold", "c-tour"], ["journal", "Journal", "ledger", "--c-journal"], ["farm", "Farm", "leaf", "--c-farm"], ["metiers", "Métiers", "up", "--c-craft"], ["builds", "Builds", "shield", "--c-build", "c-builds"],
-  ["stock", "Inventaire", "bag", "--c-stock", "c-stock"], ["encyclopedie", "Encyclopédie", "book", "--c-ency"], ["sauvegarde", "Sauvegarde", "save", "--c-save"],
+  ["stock", "Inventaire", "bag", "--c-stock", "c-stock"], ["encyclopedie", "Encyclopédie", "book", "--c-ency"], ["compte", "Compte", "user", "--c-save"],
 ];
+// Sections regroupées : menu latéral (bureau), barre du bas + sous-onglets (téléphone)
+const GROUPS = [
+  ["accueil", "Accueil", "home", "--c-home", ["accueil"]],
+  ["marche", "Marché", "coins", "--c-gold", ["prix", "tournee", "rentabilite", "journal"]],
+  ["production", "Production", "hammer", "--c-craft", ["plan", "metiers", "farm", "stock"]],
+  ["equipement", "Équipement", "shield", "--c-build", ["builds", "encyclopedie"]],
+  ["compte", "Compte", "user", "--c-save", ["compte"]],
+];
+const tabOf = v => TABS.find(t => t[0] === v);
+const groupOf = v => GROUPS.find(g => g[4].includes(v)) || GROUPS[0];
+let lastInGroup = {};
+try { lastInGroup = JSON.parse(localStorage.getItem("atelier-nav") || "{}"); } catch {}
+function navLink(v, cls) {
+  const [, label, ic, c, cnt] = tabOf(v);
+  const a = h("a", { href: "#" + v, "data-v": v, class: cls || null }, h("span", { class: "ib" }, svgI(ic)), h("span", { class: "lb", text: label }), cnt ? h("span", { class: "count", id: cnt, text: "" }) : null);
+  a.style.setProperty("--c", "var(" + c + ")");
+  return a;
+}
 function buildTabs() {
-  document.getElementById("tabs").replaceChildren(...TABS.map(([v, label, ic, c, cnt]) => {
-    const a = h("a", { href: "#" + v, "data-v": v }, h("span", { class: "ib" }, svgI(ic)), h("span", { text: label }), cnt ? h("span", { class: "count", id: cnt, text: "0" }) : null);
+  document.getElementById("tabs").replaceChildren(...GROUPS.map(([g, label, , , tabs]) =>
+    tabs.length === 1 ? h("div", { class: "grp" }, navLink(tabs[0])) : h("div", { class: "grp" }, h("span", { class: "gl", text: label }), tabs.map(v => navLink(v)))));
+  document.getElementById("bottom").replaceChildren(...GROUPS.map(([g, label, ic, c, tabs]) => {
+    const a = h("a", { href: "#" + (lastInGroup[g] && tabs.includes(lastInGroup[g]) ? lastInGroup[g] : tabs[0]), "data-g": g }, h("span", { class: "ib" }, svgI(ic)), h("span", { text: label }), g === "marche" ? h("span", { class: "dot", id: "dot-marche", hidden: true }) : null);
+    a.style.setProperty("--c", "var(" + c + ")");
+    return a;
+  }));
+}
+function subTabs(v) {
+  const g = groupOf(v);
+  if (g[4].length < 2) return null;
+  return h("nav", { class: "subtabs", "aria-label": g[1] }, g[4].map(x => {
+    const [, label, ic, c] = tabOf(x);
+    const a = h("a", { href: "#" + x, "aria-current": x === v ? "page" : null }, svgI(ic), label);
     a.style.setProperty("--c", "var(" + c + ")");
     return a;
   }));
@@ -1942,9 +1973,9 @@ function heroFor(v) {
     tournee: ["Tournée HDV", TOUR && TOUR.i < TOUR.ids.length ? "Objet " + (TOUR.i + 1) + " sur " + TOUR.ids.length + " · HDV " + hdvName(hdvOf(TOUR.ids[TOUR.i])) : "Relève à la chaîne les prix qui manquent, rangés par hôtel des ventes.", "route", TOUR && TOUR.i < TOUR.ids.length ? TOUR.ids.slice(TOUR.i, TOUR.i + 8) : tourCandidates().ids],
     metiers: ["Métiers", "Les recettes à ta portée, leur coût, et le craft le plus rentable pour monter.", "up", Object.entries(D.recipes).filter(([, r]) => r[0] === (+S.settings.job || r[0])).map(([id]) => +id).filter(id => item(id)[1] <= (S.settings.jobs?.[S.settings.job] ?? 200)).sort((a, b) => item(b)[1] - item(a)[1]).slice(0, 8)],
     journal: ["Journal de ventes", "Tes achats et ventes réels, et ce qu'ils t'ont vraiment rapporté.", "ledger", [...new Set(TR.slice().reverse().map(t => t.item_id))]],
-    sauvegarde: ["Sauvegarde", "Exporte ou importe toutes tes données en JSON.", "save", []],
+    compte: ["Compte", "Ton pseudo, ton mot de passe et la sauvegarde de tes données.", "user", []],
   }[v];
-  const fill = { farm: e => supOfE(e) === 9, builds: e => [1, 3, 10, 11].includes(supOfE(e)), encyclopedie: e => supOfE(e) === 13 || supOfE(e) === 12, sauvegarde: e => supOfE(e) === 13 };
+  const fill = { farm: e => supOfE(e) === 9, builds: e => [1, 3, 10, 11].includes(supOfE(e)), encyclopedie: e => supOfE(e) === 13 || supOfE(e) === 12, compte: e => supOfE(e) === 13 };
   let ids = [...new Set(H[3])].filter(id => item(id)[3] >= 0).slice(0, 8);
   if (ids.length < 8) ids = ids.concat(sampleIds(fill[v] || (e => !!D.recipes[e.id]), 8 - ids.length, v).filter(x => !ids.includes(x)));
   return h("section", { class: "hero", "data-sec": v },
@@ -1960,29 +1991,36 @@ function decorate(root, v) {
 // =====================================================================
 // Rendu et navigation
 // =====================================================================
-const VIEWS = { metiers: viewMetiers, journal: viewJournal, tournee: viewTournee, farm: viewFarm, builds: viewBuilds, accueil: viewAccueil, plan: viewPlan, rentabilite: viewRentabilite, prix: viewPrix, stock: viewStock, encyclopedie: viewEncyclopedie, sauvegarde: viewSauvegarde };
+const VIEWS = { metiers: viewMetiers, journal: viewJournal, tournee: viewTournee, farm: viewFarm, builds: viewBuilds, accueil: viewAccueil, plan: viewPlan, rentabilite: viewRentabilite, prix: viewPrix, stock: viewStock, encyclopedie: viewEncyclopedie, compte: viewSauvegarde };
 function renderCounts() {
-  document.getElementById("c-plan").textContent = S.targets.length;
-  document.getElementById("c-stock").textContent = Object.keys(S.stock).length;
-  document.getElementById("c-prix").textContent = Object.keys(prices()).length;
-  document.getElementById("c-builds").textContent = S.builds.length;
-  const ct = document.getElementById("c-tour"); if (ct) ct.textContent = TOUR && TOUR.i < TOUR.ids.length ? TOUR.ids.length - TOUR.i : tourCandidates().ids.length;
+  const set = (id, n) => { const el = document.getElementById(id); if (el) { el.textContent = n; el.dataset.z = n ? "0" : "1"; } };
+  set("c-plan", S.targets.length);
+  set("c-stock", Object.keys(S.stock).length);
+  set("c-prix", Object.keys(prices()).length);
+  set("c-builds", S.builds.length);
+  const tour = TOUR && TOUR.i < TOUR.ids.length ? TOUR.ids.length - TOUR.i : tourCandidates().ids.length;
+  set("c-tour", tour);
+  const dot = document.getElementById("dot-marche"); if (dot) { dot.textContent = tour > 99 ? "99+" : tour; dot.hidden = !tour; }
 }
 function render() {
   if (!D) return;
   document.getElementById("tabs").hidden = NEED_LOGIN;
+  document.getElementById("bottom").hidden = NEED_LOGIN;
   if (NEED_LOGIN) { const root = document.getElementById("view"); root.dataset.sec = "accueil"; root.replaceChildren(h("div", { class: "stack" }, viewLogin())); return; }
   const a = document.activeElement, focusId = a && a.id, caret = a && a.selectionStart;
-  document.querySelectorAll("nav.tabs a").forEach(x => { if (x.dataset.v === view) x.setAttribute("aria-current", "page"); else x.removeAttribute("aria-current"); });
+  document.querySelectorAll(".sidenav a").forEach(x => { if (x.dataset.v === view) x.setAttribute("aria-current", "page"); else x.removeAttribute("aria-current"); });
+  const grp = groupOf(view)[0];
+  lastInGroup[grp] = view; try { localStorage.setItem("atelier-nav", JSON.stringify(lastInGroup)); } catch {}
+  document.querySelectorAll(".bottom a").forEach(x => { if (x.dataset.g === grp) { x.setAttribute("aria-current", "page"); x.setAttribute("href", "#" + view); } else x.removeAttribute("aria-current"); });
   const root = document.getElementById("view");
   root.dataset.sec = view;
-  root.replaceChildren(h("div", { class: "stack" }, heroFor(view), VIEWS[view]()));
+  root.replaceChildren(h("div", { class: "stack" }, subTabs(view), heroFor(view), VIEWS[view]()));
   decorate(root, view);
   renderCounts();
   if (focusId && /^(q-|enc-)/.test(focusId)) { const el = document.getElementById(focusId); if (el) { el.focus(); try { if (caret != null) el.setSelectionRange(caret, caret); } catch {} } }
   if (sheet.open) renderSheet();
 }
-function route() { const v = location.hash.slice(1); view = VIEWS[v] ? v : "accueil"; render(); }
+function route() { let v = location.hash.slice(1); if (v === "sauvegarde") v = "compte"; view = VIEWS[v] ? v : "accueil"; render(); window.scrollTo(0, 0); }
 window.addEventListener("hashchange", route);
 
 fetch(PATH.core).then(r => r.json()).then(d => {

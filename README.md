@@ -40,7 +40,7 @@ Chaque push sur `main` est recopié automatiquement sur `gh-pages` par [`.github
 
 ### 3. Ajouter les membres du groupe
 
-Supabase > **Authentication** > **Users** > **Add user** > **Create new user** : saisis l'e-mail et un mot de passe provisoire, coche **Auto Confirm User**, puis transmets ces identifiants à ton ami. Il pourra changer son mot de passe dans l'onglet **Sauvegarde**.
+Supabase > **Authentication** > **Users** > **Add user** > **Create new user** : saisis l'e-mail et un mot de passe provisoire, coche **Auto Confirm User**, puis transmets ces identifiants à ton ami. Il pourra changer son mot de passe dans l'onglet **Compte**.
 
 Mot de passe oublié : dans la même page, ouvre le membre puis change son mot de passe.
 
@@ -50,9 +50,9 @@ Mot de passe oublié : dans la même page, ouvre le membre puis change son mot d
 2. Installe l'appli :
    - **Android / PC (Chrome, Edge)** : bouton **Installer** dans la barre d'adresse ou le menu ;
    - **iPhone (Safari)** : bouton **Partager** > **Sur l'écran d'accueil**.
-3. Choisis ton pseudo et change ton mot de passe dans l'onglet **Sauvegarde**.
+3. Choisis ton pseudo et change ton mot de passe dans l'onglet **Compte**.
 
-Pour reprendre tes données de la version Claude : onglet **Sauvegarde** de l'ancienne version > **Copier**, puis **Importer** ici. Les prix importés se partagent ensuite avec le bouton de l'onglet **Prix HDV**.
+Pour reprendre tes données de la version Claude : onglet **Compte** de l'ancienne version > **Copier**, puis **Importer** ici. Les prix importés se partagent ensuite avec le bouton de l'onglet **Prix HDV**.
 
 ## Développement
 
