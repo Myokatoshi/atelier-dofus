@@ -38,12 +38,15 @@ const iso = d => d.getFullYear() + "-" + pad(d.getMonth() + 1) + "-" + pad(d.get
 const today = () => iso(new Date());
 const parseD = s => { const [y, m, d] = s.split("-").map(Number); return new Date(y, m - 1, d); };
 function parseKamas(v) {
-  let s = String(v).trim().toLowerCase().replace(/\s| | /g, "").replace(",", ".");
+  // « 1 200 », « 1.200 », « 1,200 », « 1200 » = 1 200 kamas ; « 1,5k » = 1 500 ; « 2,5m » = 2 500 000
+  let s = String(v).trim().toLowerCase().replace(/[\s\u202f\u00a0'’₭]/g, "").replace(/kamas$|kama$/, "");
   if (!s) return null;
   let mult = 1;
   if (s.endsWith("m")) { mult = 1e6; s = s.slice(0, -1); } else if (s.endsWith("k")) { mult = 1e3; s = s.slice(0, -1); }
-  const n = parseFloat(s);
-  return isNaN(n) || n < 0 ? null : Math.round(n * mult);
+  // Sans suffixe, les kamas sont entiers : le point et la virgule séparent les milliers
+  s = mult === 1 ? s.replace(/[.,]/g, "") : s.replace(",", ".");
+  if (!/^\d+(\.\d+)?$/.test(s)) return null;
+  return Math.round(parseFloat(s) * mult);
 }
 
 function h(tag, attrs, ...kids) {
@@ -142,7 +145,7 @@ async function flush() {
 function fromAnyBackup(o) {
   const out = { stock: o.stock || {}, prices: {}, targets: (o.targets || []).map(t => ({ id: +t.id, qty: Math.max(1, +t.qty || 1) })), expand: o.expand || {}, farm: o.farm || {},
     alerts: Array.isArray(o.alerts) ? o.alerts.filter(a => a && a.item && a.kind && a.price != null) : [],
-    builds: Array.isArray(o.builds) ? o.builds.filter(b => b && Array.isArray(b.items)).map(b => ({ id: String(b.id || Math.random().toString(36).slice(2)), name: String(b.name || "Build"), items: b.items.map(Number), at: b.at || Date.now() })) : [],
+    builds: Array.isArray(o.builds) ? o.builds.filter(b => b && Array.isArray(b.items)).map(b => ({ id: String(b.id || Math.random().toString(36).slice(2)), name: String(b.name || "Build"), items: b.items.map(Number), perso: b.perso && typeof b.perso === "object" ? b.perso : undefined, at: b.at || Date.now() })) : [],
     settings: { tax: 2, basis: "mid", ...(o.settings || {}) } };
   for (const [id, v] of Object.entries(o.prices || {})) {
     if (Array.isArray(v)) out.prices[id] = v.filter(x => x && x.d && x.lo != null).map(x => ({ d: x.d, lo: +x.lo, hi: +(x.hi ?? x.lo) }));
@@ -339,8 +342,10 @@ const obsOf = id => prices()[id] || [];
 function priceAt(id, at) { const o = obsOf(id); for (let i = o.length - 1; i >= 0; i--) if (!at || o[i].d <= at) return o[i]; return null; }
 const midOf = o => (o.lo + o.hi) / 2;
 const pick = (o, basis) => !o ? null : basis === "lo" ? o.lo : basis === "hi" ? o.hi : midOf(o);
+function myObs(id, d) { return ((SH && ME ? (RAW[id] || {})[ME] : S.prices[id]) || []).find(o => o.d === d) || null; }
 function addObs(id, lo, hi, d = today()) {
-  if (lo == null && hi == null) return;
+  if (lo == null && hi == null) return false;
+  if (CFG.supabaseUrl && SB && !ME) { toast("Connexion au groupe en cours : réessaie dans un instant"); return false; }
   if (lo == null) lo = hi; if (hi == null) hi = lo;
   if (lo > hi) [lo, hi] = [hi, lo];
   if (SH && ME) {
@@ -510,7 +515,7 @@ const ageDays = d => Math.round((parseD(today()) - parseD(d)) / 86400000);
 function quickObs(id, after) {
   const lo = h("input", { class: "cell sm", inputmode: "decimal", placeholder: "basse", "aria-label": "Moyenne basse" });
   const hi = h("input", { class: "cell sm", inputmode: "decimal", placeholder: "haute", "aria-label": "Moyenne haute" });
-  const go = () => { const a = parseKamas(lo.value), b = parseKamas(hi.value); if (a == null && b == null) { lo.focus(); return; } addObs(id, a, b); toast("Relevé enregistré pour " + item(id)[0]); after ? after() : render(); };
+  const go = () => { const a = parseKamas(lo.value), b = parseKamas(hi.value); if (a == null && b == null) { lo.focus(); return; } if (addObs(id, a, b) === false) return; toast("Relevé enregistré pour " + item(id)[0]); after ? after() : render(); };
   [lo, hi].forEach(x => x.addEventListener("keydown", e => { if (e.key === "Enter") go(); }));
   return h("span", { class: "row", style: "gap:6px" }, lo, hi, h("button", { type: "button", class: "btn sm", onclick: go }, "Ajouter"));
 }
@@ -611,8 +616,8 @@ function chart(id, mode) {
     const show = () => {
       cross.setAttribute("x1", x(i)); cross.setAttribute("x2", x(i)); cross.setAttribute("visibility", "visible");
       tip.replaceChildren(h("strong", { text: d.long }),
-        h("span", {}, h("i", { class: "k", style: "background:var(--s-hdv)" }), "HDV : " + (d.lo == null ? "aucun relevé" : range(d.lo, d.hi) + " k" + (d.n > 1 ? " (" + d.n + " relevés)" : ""))),
-        recipe(id) ? h("span", {}, h("i", { class: "k", style: "background:var(--s-craft)" }), "Coût du craft : " + (d.c == null ? "prix manquants" : k(d.c) + " k")) : null);
+        h("span", {}, h("i", { class: "k", style: "background:var(--s-hdv)" }), "HDV : " + (d.lo == null ? "aucun relevé" : range(d.lo, d.hi) + " ₭" + (d.n > 1 ? " (" + d.n + " relevés)" : ""))),
+        recipe(id) ? h("span", {}, h("i", { class: "k", style: "background:var(--s-craft)" }), "Coût du craft : " + (d.c == null ? "prix manquants" : k(d.c) + " ₭")) : null);
       tip.hidden = false;
       const pct = x(i) / W * 100;
       tip.style.left = pct > 60 ? "auto" : `calc(${pct}% + 12px)`;
@@ -637,7 +642,7 @@ function chart(id, mode) {
 // Fiche objet (panneau latéral)
 // =====================================================================
 const sheet = document.getElementById("sheet"), sheetIn = document.getElementById("sheet-in");
-let sheetStack = [], chartMode = "week";
+let sheetStack = [], chartMode = "week", obsEditDate = null;
 try { chartMode = localStorage.getItem(LS + "-chart") || "week"; } catch {}
 async function loadChunk(n) {
   if (!DET[n]) { try { DET[n] = await (await fetch(PATH.det(n))).json(); } catch { DET[n] = {}; } }
@@ -645,6 +650,7 @@ async function loadChunk(n) {
 }
 async function loadDet(id) { return (await loadChunk(id % 32))[id] || {}; }
 function openSheet(id, push = true) {
+  obsEditDate = null;
   if (push && sheet.open && sheetStack[sheetStack.length - 1] !== id) sheetStack.push(id);
   else if (!sheet.open) sheetStack = [id];
   renderSheet();
@@ -674,31 +680,48 @@ async function renderSheet() {
 
   // Prix
   const last = priceAt(id), o = obsOf(id);
-  const dateIn = h("input", { type: "date", value: today(), max: today(), "aria-label": "Date du relevé" });
+  const dateIn = h("input", { type: "date", value: obsEditDate || today(), max: today(), "aria-label": "Date du relevé" });
   const loIn = h("input", { class: "cell", inputmode: "decimal", placeholder: "ex. 1 200", id: "obs-lo" });
   const hiIn = h("input", { class: "cell", inputmode: "decimal", placeholder: "ex. 1 500", id: "obs-hi" });
+  const saveBtn = h("button", { type: "button", class: "btn primary" });
+  const mineNote = h("p", { class: "small", style: "color:var(--kamas);font-weight:700" });
+  // Pré-remplit avec ton relevé de la date choisie : le modifier remplace l'ancien
+  const fill = () => {
+    const m = myObs(id, dateIn.value || today());
+    loIn.value = m ? fmt.format(m.lo) : ""; hiIn.value = m ? fmt.format(m.hi) : "";
+    saveBtn.textContent = m ? "Modifier mon relevé" : "Enregistrer le relevé";
+    mineNote.textContent = m ? "Ton relevé du " + parseD(m.d).toLocaleDateString("fr-FR", { day: "numeric", month: "long" }) + " : " + range(m.lo, m.hi) + " ₭. Modifie les valeurs puis enregistre." : "";
+  };
+  dateIn.addEventListener("change", fill);
+  fill();
   const save = () => {
     const a = parseKamas(loIn.value), b = parseKamas(hiIn.value);
+    if ((loIn.value.trim() && a == null) || (hiIn.value.trim() && b == null)) { toast("Prix illisible : écris par exemple 1200, 1 200, 12k ou 1,5m"); return; }
     if (a == null && b == null) { loIn.focus(); return; }
-    addObs(id, a, b, dateIn.value || today()); toast("Relevé enregistré"); renderSheet();
+    const was = myObs(id, dateIn.value || today());
+    if (addObs(id, a, b, dateIn.value || today()) === false) return;
+    toast(was ? "Relevé modifié" : "Relevé enregistré"); obsEditDate = null; renderSheet();
   };
+  saveBtn.addEventListener("click", save);
   [loIn, hiIn].forEach(x => x.addEventListener("keydown", e => { if (e.key === "Enter") save(); }));
   const seg = h("span", { class: "seg", role: "group", "aria-label": "Période" }, ["week", "month"].map(m =>
     h("button", { type: "button", "aria-pressed": chartMode === m ? "true" : "false", onclick: () => { chartMode = m; try { localStorage.setItem(LS + "-chart", m); } catch {} renderSheet(); } }, m === "week" ? "Par semaine" : "Par mois")));
   const prices = h("section", { class: "panel" },
-    h("div", { class: "row between" }, h("h3", { text: "Prix à l'HDV" }), last ? h("span", { class: "chip kamas", text: range(last.lo, last.hi) + " k · " + ago(last.d) }) : h("span", { class: "chip", text: "aucun relevé" })),
+    h("div", { class: "row between" }, h("h3", { text: "Prix à l'HDV" }), last ? h("span", { class: "chip kamas", text: range(last.lo, last.hi) + " ₭ · " + ago(last.d) + (last.n > 1 ? " · moyenne de " + last.n : "") }) : h("span", { class: "chip", text: "aucun relevé" })),
     h("div", { class: "form-row" },
-      h("label", {}, "Moyenne basse", loIn), h("label", {}, "Moyenne haute", hiIn), h("label", {}, "Date", dateIn),
-      h("button", { type: "button", class: "btn primary", onclick: save }, "Enregistrer le relevé")),
-    h("p", { class: "note", text: "Prix à l'unité, en kamas. Accepte « 12k » ou « 1,5m ». Un relevé par jour et par personne : ton nouveau relevé du jour remplace le précédent." + (SH ? " Partagé avec tout le groupe ; si plusieurs membres relèvent le même jour, l'atelier prend la moyenne." : "") }),
+      h("label", {}, "Moyenne basse", loIn), h("label", {}, "Moyenne haute", hiIn), h("label", {}, "Date", dateIn), saveBtn),
+    mineNote,
+    h("p", { class: "note", text: "Prix à l'unité, en kamas : 1200, 1 200, 1.200, 12k ou 1,5m. Un relevé par jour et par personne, modifiable à tout moment (choisis sa date ou clique sur « Modifier » dans l'historique)." + (SH ? " Partagé avec tout le groupe ; si plusieurs membres relèvent le même jour, l'atelier prend la moyenne." : "") }),
     h("div", { class: "row between" }, h("span", { class: "label", text: "Évolution sur 12 " + (chartMode === "week" ? "semaines" : "mois") }), seg),
     chart(id, chartMode),
     o.length ? h("details", {}, h("summary", { class: "note", text: o.length + " relevé" + (o.length > 1 ? "s" : "") + " enregistré" + (o.length > 1 ? "s" : "") }),
       h("div", { class: "tablewrap" }, h("table", {}, h("tbody", {}, o.slice().reverse().slice(0, 60).map(x => h("tr", {},
         h("td", { text: parseD(x.d).toLocaleDateString("fr-FR", { day: "numeric", month: "short", year: "numeric" }) }),
-        h("td", { class: "n", text: range(x.lo, x.hi) + " k" }),
+        h("td", { class: "n", text: range(x.lo, x.hi) + " ₭" }),
         h("td", { class: "small muted", text: SH && x.by ? (x.n > 1 ? "moyenne de " + x.n + " : " : "par ") + x.by.map(whoName).join(", ") : "" }),
-        h("td", {}, !SH || (x.by || []).includes(ME) ? h("button", { type: "button", class: "x", "aria-label": "Supprimer mon relevé", title: SH ? "Supprimer mon relevé de ce jour" : "Supprimer ce relevé", onclick: () => { delObs(id, x.d); renderSheet(); } }, "×") : null))))))) : null);
+        h("td", {}, myObs(id, x.d) ? h("span", { class: "row", style: "gap:4px;flex-wrap:nowrap" },
+          h("button", { type: "button", class: "btn sm", title: "Modifier mon relevé de ce jour", onclick: () => { obsEditDate = x.d; renderSheet(); setTimeout(() => { const el = document.getElementById("obs-lo"); el?.scrollIntoView({ block: "center" }); el?.select(); }, 40); } }, "Modifier"),
+          h("button", { type: "button", class: "x", "aria-label": "Supprimer mon relevé", title: "Supprimer mon relevé de ce jour", onclick: () => { delObs(id, x.d); renderSheet(); } }, "×")) : null))))))) : null);
 
   // Rentabilité du craft
   let craftSec = null;
@@ -707,9 +730,9 @@ async function renderSheet() {
     craftSec = h("section", { class: "panel" },
       h("div", { class: "row between" }, h("h3", { text: "Crafter ou acheter ?" }), verdictEl(v)),
       h("div", { class: "econ" },
-        h("div", {}, h("span", { class: "label", text: "Coût du craft" }), h("span", { class: "v", text: c.missing ? "incomplet" : range(c.lo, c.hi) + " k" }), c.missing ? h("span", { class: "chip warn", text: c.missing + " prix manquant" + (c.missing > 1 ? "s" : "") }) : null),
-        h("div", {}, h("span", { class: "label", text: "Prix HDV" }), h("span", { class: "v", text: last ? range(last.lo, last.hi) + " k" : "—" })),
-        h("div", {}, h("span", { class: "label", text: "Marge nette / unité" }), h("span", { class: "v " + (m == null ? "muted" : m >= 0 ? "pos" : "neg"), text: m == null ? "—" : (m >= 0 ? "+" : "") + k(m) + " k" }), h("span", { class: "note", text: "après " + S.settings.tax + " % de taxe HDV" }))),
+        h("div", {}, h("span", { class: "label", text: "Coût du craft" }), h("span", { class: "v", text: c.missing ? "incomplet" : range(c.lo, c.hi) + " ₭" }), c.missing ? h("span", { class: "chip warn", text: c.missing + " prix manquant" + (c.missing > 1 ? "s" : "") }) : null),
+        h("div", {}, h("span", { class: "label", text: "Prix HDV" }), h("span", { class: "v", text: last ? range(last.lo, last.hi) + " ₭" : "—" })),
+        h("div", {}, h("span", { class: "label", text: "Marge nette / unité" }), h("span", { class: "v " + (m == null ? "muted" : m >= 0 ? "pos" : "neg"), text: m == null ? "—" : (m >= 0 ? "+" : "") + k(m) + " ₭" }), h("span", { class: "note", text: "après " + S.settings.tax + " % de taxe HDV" }))),
       h("div", { class: "tablewrap" }, h("table", {},
         h("thead", {}, h("tr", {}, h("th", { text: "Ingrédient" }), h("th", { class: "n", text: "Qté" }), h("th", { class: "n", text: "Prix unit." }), h("th", { text: "Voie" }), h("th", { class: "n", text: "Sous-total" }))),
         h("tbody", {}, r[1].map(([ing, q]) => {
@@ -793,10 +816,10 @@ function almanaxCard() {
         h("button", { type: "button", class: "link", onclick: () => openSheet(a[1]) }, h("h3", {}, h("span", { class: "nm", text: a[2] + " × " + item(a[1])[0] }))),
         h("div", { class: "chips" },
           h("span", { class: "chip " + (have >= a[2] ? "job" : "warn"), text: have >= a[2] ? "En stock (" + have + ")" : "En stock : " + have + " / " + a[2] }),
-          h("span", { class: "chip kamas", text: o ? "≈ " + k(midOf(o) * a[2]) + " k à l'HDV" : "prix inconnu" })),
+          h("span", { class: "chip kamas", text: o ? "≈ " + k(midOf(o) * a[2]) + " ₭ à l'HDV" : "prix inconnu" })),
         h("p", {}, h("strong", { text: a[3] + ". " }), h("span", { class: "muted", text: a[4] })))),
     h("div", { class: "row between" }, h("span", { class: "label", text: "Les 7 prochains jours" }),
-      h("span", { class: "chip kamas", text: "À acheter : ≈ " + k(weekCost) + " k" + (weekMissing ? " (+ " + weekMissing + " sans prix)" : "") })),
+      h("span", { class: "chip kamas", text: "À acheter : ≈ " + k(weekCost) + " ₭" + (weekMissing ? " (+ " + weekMissing + " sans prix)" : "") })),
     h("div", { class: "almlist" }, days.map(([d, x], i) => {
       const st = S.stock[x[1]] || 0, p = priceAt(x[1]);
       return h("div", { class: "r" + (i === 0 ? " today" : "") },
@@ -851,12 +874,12 @@ function viewAccueil() {
         h("section", { class: "panel" },
           h("div", { class: "row between" }, h("h2", { text: "Prix à revérifier" }), h("a", { href: "#prix", class: "small", text: "Tous les prix" })),
           stale.length ? h("div", { class: "tablewrap" }, h("table", {}, h("tbody", {}, stale.slice(0, 6).map(x => h("tr", {},
-            h("td", {}, itemLink(x.id, range(x.o.lo, x.o.hi) + " k")), h("td", {}, h("span", { class: "chip warn", text: ago(x.o.d) }))))))) :
+            h("td", {}, itemLink(x.id, range(x.o.lo, x.o.hi) + " ₭")), h("td", {}, h("span", { class: "chip warn", text: ago(x.o.d) }))))))) :
             h("p", { class: "muted", text: "Tous tes relevés datent de moins d'une semaine." })),
         SH ? h("section", { class: "panel" },
           h("h2", { text: "Dernières mises à jour du groupe" }),
           recent.length ? h("div", { class: "tablewrap" }, h("table", {}, h("tbody", {}, recent.slice(0, 8).map(r => h("tr", {},
-            h("td", {}, itemLink(r.id, range(r.o.lo, r.o.hi) + " k")),
+            h("td", {}, itemLink(r.id, range(r.o.lo, r.o.hi) + " ₭")),
             h("td", { class: "small muted", text: "par " + whoName(r.u) }),
             h("td", {}, h("span", { class: "chip", text: ago(r.o.d) }))))))) :
             h("p", { class: "muted", text: "Aucun prix partagé pour l'instant. Le premier relevé que tu saisis sera visible par tout le groupe." })) : null)));
@@ -905,10 +928,10 @@ function viewPlan() {
       h("div", { class: "row between" }, h("span", { class: "row", style: "gap:8px" }, h("span", { class: "label", text: "Quantité" }), qtyCtrl(t.qty, set)),
         h("button", { type: "button", class: "btn sm", title: "Retire les ingrédients du stock et ajoute l'objet fabriqué", onclick: () => markCrafted(t) }, "✓ J'ai crafté")),
       h("div", { class: "econ" },
-        h("div", {}, h("span", { class: "label", text: "Coût / unité" }), h("span", { class: "v", text: range(uc.lo, uc.hi) + " k" }), uc.missing ? h("span", { class: "chip warn", text: uc.missing + " prix manquant" + (uc.missing > 1 ? "s" : "") }) : null),
-        h("div", {}, h("span", { class: "label", text: "Prix HDV" }), hdv ? h("span", { class: "v", text: range(hdv.lo, hdv.hi) + " k" }) : quickObs(t.id)),
+        h("div", {}, h("span", { class: "label", text: "Coût / unité" }), h("span", { class: "v", text: range(uc.lo, uc.hi) + " ₭" }), uc.missing ? h("span", { class: "chip warn", text: uc.missing + " prix manquant" + (uc.missing > 1 ? "s" : "") }) : null),
+        h("div", {}, h("span", { class: "label", text: "Prix HDV" }), hdv ? h("span", { class: "v", text: range(hdv.lo, hdv.hi) + " ₭" }) : quickObs(t.id)),
         h("div", {}, h("span", { class: "label", text: "Marge nette totale" }),
-          m == null ? h("span", { class: "v muted", text: "—" }) : h("span", { class: "v " + (m >= 0 ? "pos" : "neg"), text: (m >= 0 ? "+" : "") + k(m * t.qty) + " k" }))),
+          m == null ? h("span", { class: "v muted", text: "—" }) : h("span", { class: "v " + (m >= 0 ? "pos" : "neg"), text: (m >= 0 ? "+" : "") + k(m * t.qty) + " ₭" }))),
       h("details", { class: "tree", open: S.targets.length <= 2 }, h("summary", { text: "Recette (" + r[1].length + " ingrédients)" }), tree(t.id, t.qty, 0))));
   }
 
@@ -924,7 +947,7 @@ function viewPlan() {
       h("div", { class: "row", style: "gap:8px" }, h("span", { class: "label", text: "Prix" }), basisSeg,
         toBuy.length ? h("button", { type: "button", class: "btn sm", onclick: e => copyText(toBuy.map(r => r.buy + " × " + item(r.id)[0]).join("\n"), e.currentTarget) }, "Copier la liste") : null)),
     h("div", { class: "tiles" },
-      h("div", { class: "tile kamas" }, h("span", { class: "label", text: "À dépenser" }), h("span", { class: "v", text: k(cost) + " k" }),
+      h("div", { class: "tile kamas" }, h("span", { class: "label", text: "À dépenser" }), h("span", { class: "v", text: k(cost) + " ₭" }),
         missing ? h("span", { class: "chip warn", text: missing + " sans prix" }) : h("span", { class: "small muted", text: "fourchette " + range(costLo, costHi) })),
       h("div", { class: "tile" }, h("span", { class: "label", text: "Couvert par le stock" }), h("span", { class: "v", text: pct + " %" }), h("div", { class: "bar" }, h("span", { style: "width:" + pct + "%" }))),
       h("div", { class: "tile" }, h("span", { class: "label", text: "À acheter / à farmer" }), h("span", { class: "v", text: toBuy.length + " / " + toFarm.length }), h("a", { href: "#farm", class: "small", text: "Liste de farm" })),
@@ -939,7 +962,7 @@ function viewPlan() {
       h("td", { class: "n" }, r.buy ? (r.farm ? h("span", { class: "chip job", text: k(r.buy) + " à farmer" }) : k(r.buy)) : "✓"),
       h("td", { class: "n" }, r.o ? h("button", { type: "button", class: "link", title: "Ouvrir la fiche pour ajouter un relevé", onclick: () => openSheet(r.id) }, range(r.o.lo, r.o.hi)) : r.buy ? quickObs(r.id) : "—"),
       h("td", { class: "n", text: r.buy && !r.farm ? (r.p == null ? "?" : k(r.cost)) : "" })))),
-    h("tfoot", {}, h("tr", {}, h("td", { colspan: 5, text: "Total à dépenser (prix " + ({ lo: "bas", mid: "moyen", hi: "haut" })[basis] + ")" }), h("td", { class: "n", text: k(cost) + " k" }))))));
+    h("tfoot", {}, h("tr", {}, h("td", { colspan: 5, text: "Total à dépenser (prix " + ({ lo: "bas", mid: "moyen", hi: "haut" })[basis] + ")" }), h("td", { class: "n", text: k(cost) + " ₭" }))))));
   right.append(h("p", { class: "note", text: "Le stock est consommé en priorité. Un ingrédient marqué « je fabrique » est remplacé par sa recette ; « ▲ moins cher à crafter » signale qu'il reviendrait moins cher de le fabriquer d'après tes relevés." }));
   return h("div", { class: "grid2" }, left, right);
 }
@@ -1112,7 +1135,7 @@ function viewStock() {
   const unpriced = ids.filter(id => !priceAt(id)).length;
   const p = h("section", { class: "panel" },
     h("div", { class: "row between" }, h("h2", { text: "Inventaire" }),
-      h("span", { class: "chips" }, h("span", { class: "chip", text: ids.length + " objets" }), h("span", { class: "chip kamas", text: "Valeur : " + k(total) + " k" }), unpriced ? h("span", { class: "chip warn", text: unpriced + " sans prix" }) : null)),
+      h("span", { class: "chips" }, h("span", { class: "chip", text: ids.length + " objets" }), h("span", { class: "chip kamas", text: "Valeur : " + k(total) + " ₭" }), unpriced ? h("span", { class: "chip warn", text: unpriced + " sans prix" }) : null)),
     searchBox("Ajouter un objet ou une ressource à l'inventaire", {}, id => { if (!S.stock[id]) setStock(id, 1); render(); setTimeout(() => document.getElementById("s-" + id)?.select(), 0); }, "q-stock"));
   if (!ids.length) p.append(h("div", { class: "empty" }, h("strong", { text: "Aucun objet en stock" }), h("span", { text: "Ajoute tes ressources avec la recherche, saisis-les dans la liste de courses du plan, ou utilise « J'ai crafté » pour mettre le stock à jour après un craft." })));
   else p.append(h("div", { class: "tablewrap" }, h("table", {},
@@ -1279,7 +1302,7 @@ function viewFarm() {
       h("section", { class: "panel" },
         h("div", { class: "row between" }, h("h2", { text: "Ressources" }), h("div", { class: "row", style: "gap:6px" }, h("button", { type: "button", class: "btn sm", onclick: () => setAll(true) }, "Tout farmer"), h("button", { type: "button", class: "btn sm", onclick: () => setAll(false) }, "Tout acheter"))),
         h("div", { style: "display:grid;gap:10px" }, need.map(r => h("article", { class: "target" },
-          h("div", { class: "head" }, itemLink(r.id, "×" + k(r.buy) + " · " + (r.o ? range(r.o.lo, r.o.hi) + " k/u" : "prix inconnu"), 32),
+          h("div", { class: "head" }, itemLink(r.id, "×" + k(r.buy) + " · " + (r.o ? range(r.o.lo, r.o.hi) + " ₭/u" : "prix inconnu"), 32),
             h("span", { class: "seg", role: "group", "aria-label": "Choix" }, [[false, "Acheter"], [true, "Farmer"]].map(([v, l]) =>
               h("button", { type: "button", "aria-pressed": !!r.farm === v ? "true" : "false", onclick: () => { if (v) S.farm[r.id] = true; else delete S.farm[r.id]; persist("plan"); render(); } }, l)))),
           sourcesEl(r.id, false, r.buy))))),
@@ -1444,7 +1467,7 @@ function viewBuilds() {
       h("div", { class: "stack" },
         h("section", { class: "panel" },
           h("div", { class: "row" }, rename,
-            h("button", { type: "button", class: "btn sm", title: "Créer une variante de ce build", onclick: () => { const nb = { id: Math.random().toString(36).slice(2, 10), name: b.name + " (variante)", items: [...b.items], at: Date.now() }; S.builds.push(nb); buildSel = nb.id; CMP = { ...CMP, a: b.id, b: nb.id }; persist("builds"); render(); toast("Variante créée : modifie-la puis compare-la dans « Comparer »"); } }, "Dupliquer"),
+            h("button", { type: "button", class: "btn sm", title: "Créer une variante de ce build", onclick: () => { const nb = { id: Math.random().toString(36).slice(2, 10), name: b.name + " (variante)", items: [...b.items], perso: b.perso ? JSON.parse(JSON.stringify(b.perso)) : undefined, at: Date.now() }; S.builds.push(nb); buildSel = nb.id; CMP = { ...CMP, a: b.id, b: nb.id }; persist("builds"); render(); toast("Variante créée : modifie-la puis compare-la dans « Comparer »"); } }, "Dupliquer"),
             S.builds.length > 1 ? h("button", { type: "button", class: "btn sm", onclick: () => { CMP = { ...CMP, a: b.id, b: (S.builds.find(x => x.id !== b.id) || {}).id }; location.hash = "#comparer"; } }, "Comparer") : null,
             h("button", { type: "button", class: "btn sm", onclick: () => { const i = S.builds.indexOf(b), copy = { ...b, items: [...b.items] }; S.builds = S.builds.filter(x => x !== b); buildSel = null; persist("builds"); render(); toast("Build supprimé", () => { S.builds.splice(i, 0, copy); buildSel = copy.id; persist("builds"); render(); }); } }, "Supprimer")),
           over.length ? h("p", { class: "neg small", text: "Trop de pièces pour : " + over.join(", ") + "." }) : null,
@@ -1457,7 +1480,7 @@ function viewBuilds() {
               h("td", { class: "n" }, !r.cr ? h("span", { class: "muted", text: "non craftable" }) : r.cr.missing ? h("span", { class: "chip warn", text: r.cr.missing + " sans prix" }) : range(r.cr.lo, r.cr.hi)),
               h("td", { class: "n" }, r.best ? h("span", { class: "chip " + (r.how === "craft" ? "job" : "kamas"), text: (r.how === "craft" ? "Crafter " : "Acheter ") + kk((r.best.lo + r.best.hi) / 2) }) : "—"),
               h("td", {}, h("button", { type: "button", class: "x", "aria-label": "Retirer " + item(r.id)[0], onclick: () => { b.items = b.items.filter(x => x !== r.id); persist("builds"); render(); } }, "×"))))),
-            h("tfoot", {}, h("tr", {}, h("td", { colspan: 3, text: "Coût total du build (meilleure option par pièce)" }), h("td", { class: "n", text: range(cost.lo, cost.hi) + " k" }), h("td", {}))))),
+            h("tfoot", {}, h("tr", {}, h("td", { colspan: 3, text: "Coût total du build (meilleure option par pièce)" }), h("td", { class: "n", text: range(cost.lo, cost.hi) + " ₭" }), h("td", {}))))),
           cost.missing ? h("p", { class: "note", text: cost.missing + " pièce(s) sans prix HDV ni coût de craft complet : elles ne sont pas comptées. Ajoute un relevé dans la colonne Prix HDV." }) : null,
           h("div", { class: "row" },
             crafts.length ? h("button", { type: "button", class: "btn primary", onclick: () => { for (const id of crafts) if (!S.targets.some(t => t.id === id)) S.targets.push({ id, qty: 1 }); persist("plan"); toast(crafts.length + " pièce(s) ajoutée(s) au plan de craft"); render(); } }, "Ajouter les " + crafts.length + " pièces craftables au plan") : null,
@@ -1467,9 +1490,12 @@ function viewBuilds() {
           h("div", { class: "tiles", style: "grid-template-columns:repeat(2,minmax(0,1fr))" },
             h("div", { class: "tile kamas" }, h("span", { class: "label", text: "Coût du build" }), h("span", { class: "v", text: kk((cost.lo + cost.hi) / 2) }), h("span", { class: "small muted", text: "fourchette " + range(cost.lo, cost.hi) })),
             h("div", { class: "tile" }, h("span", { class: "label", text: "Niveau requis" }), h("span", { class: "v", text: Math.max(0, ...b.items.map(id => item(id)[1])) }), h("span", { class: "small muted", text: b.items.length + " pièces" }))),
-          h("h2", { text: "Statistiques des équipements" }),
+          h("div", { class: "row between" }, h("h2", { text: "Statistiques des équipements" }),
+            h("span", { class: "seg", role: "group", "aria-label": "Jet" }, [["min", "Min"], ["mid", "Moyen"], ["max", "Max"]].map(([v, l]) =>
+              h("button", { type: "button", "aria-pressed": (S.settings.jet || "max") === v ? "true" : "false", onclick: () => { S.settings.jet = v; persist("plan"); render(); } }, l)))),
           missingDet.length ? h("p", { class: "muted", text: "Chargement des effets…" }) : statsEl(tot),
-          h("p", { class: "note", text: "Total des effets des pièces (jet minimum à jet maximum) et des bonus de panoplie. Ne comprend pas les points de caractéristiques, les parchemins, la forgemagie ni les exos." })),
+          h("p", { class: "note", text: "Total des effets des pièces (jet minimum à jet maximum) et des bonus de panoplie. Les stats finales, avec niveau, points et parchemins, sont dans le panneau Personnage." })),
+        missingDet.length ? null : persoPanel(b, S.settings.jet || "max"),
         setRows.length ? h("section", { class: "panel" }, h("h2", { text: "Panoplies" }),
           h("div", { style: "display:grid;gap:8px" }, setRows.map(sr => h("div", { style: "display:grid;gap:4px" },
             h("div", { class: "row between" }, h("strong", { text: D.sets[sr.st] || "Panoplie" }), h("span", { class: "chip job", text: sr.n + " / " + sr.of + " pièces" })),
@@ -1561,14 +1587,14 @@ function tourRun() {
   const unit = h("p", { class: "tour-unit" });
   const showUnit = () => {
     const a = parseKamas(lo.value), b = parseKamas(hi.value);
-    unit.textContent = lot > 1 && (a != null || b != null) ? "Soit " + range((a ?? b) / lot, (b ?? a) / lot) + " k à l'unité" : "";
+    unit.textContent = lot > 1 && (a != null || b != null) ? "Soit " + range((a ?? b) / lot, (b ?? a) / lot) + " ₭ à l'unité" : "";
   };
   [lo, hi].forEach(x => x.addEventListener("input", showUnit));
   const next = () => { TOUR.i++; saveTour(); render(); setTimeout(() => document.getElementById("tour-lo")?.focus(), 30); };
   const save = () => {
     const a = parseKamas(lo.value), b = parseKamas(hi.value);
     if (a == null && b == null) { lo.focus(); return; }
-    addObs(id, a == null ? null : Math.round(a / lot), b == null ? null : Math.round(b / lot));
+    if (addObs(id, a == null ? null : Math.round(a / lot), b == null ? null : Math.round(b / lot)) === false) return;
     TOUR.saved++; next();
   };
   lo.addEventListener("keydown", e => { if (e.key === "Enter") { e.preventDefault(); if (hi.value) save(); else hi.focus(); } });
@@ -1587,7 +1613,7 @@ function tourRun() {
       h("div", { style: "display:grid;gap:4px;min-width:0" },
         h("h2", { text: item(id)[0] }),
         h("span", { class: "muted small", text: typeName(id) + " · niveau " + item(id)[1] + (r ? " · " + jobName(r[0]) : "") }),
-        h("span", { class: "chip kamas" }, o ? "Dernier relevé : " + range(o.lo, o.hi) + " k · " + ago(o.d) : "Jamais relevé"))),
+        h("span", { class: "chip kamas" }, o ? "Dernier relevé : " + range(o.lo, o.hi) + " ₭ · " + ago(o.d) : "Jamais relevé"))),
     h("div", { class: "row between" }, h("span", { class: "label", text: "Prix affichés pour un lot de" }), lots),
     h("div", { class: "tour-inputs" }, lo, hi),
     unit,
@@ -1691,7 +1717,7 @@ function journalForm() {
   // Aides calculées en direct, sans redessiner le formulaire (la saisie en cours reste intacte)
   function refresh() {
     const c = calc();
-    unitEl.textContent = c.total != null ? "Soit " + k(c.total / c.qty) + " k à l'unité" : "";
+    unitEl.textContent = c.total != null ? "Soit " + k(c.total / c.qty) + " ₭ à l'unité" : "";
     feeIn.placeholder = c.autoFee != null ? k(c.autoFee) + " (" + S.settings.tax + " %)" : S.settings.tax + " % du prix";
     costIn.placeholder = c.sug ? k(c.sug.v) : "inconnu";
     sugEl.textContent = c.sug ? "Proposé : " + c.sug.how : "Laisse vide si tu ne le connais pas";
@@ -1765,9 +1791,9 @@ function journalChart(mode) {
     const show = () => {
       cross.setAttribute("x1", x(i)); cross.setAttribute("x2", x(i)); cross.setAttribute("visibility", "visible");
       tip.replaceChildren(h("strong", { text: b.long }),
-        h("span", {}, h("i", { class: "k", style: "background:var(--s-hdv)" }), "Ventes nettes : " + k(b.net) + " k (" + b.nV + ")"),
-        h("span", {}, h("i", { class: "k", style: "background:var(--s-craft)" }), "Achats : " + k(b.buy) + " k (" + b.nA + ")"),
-        h("span", {}, h("i", { class: "k", style: "background:var(--fg)" }), "Solde : " + (b.solde >= 0 ? "+" : "") + k(b.solde) + " k"));
+        h("span", {}, h("i", { class: "k", style: "background:var(--s-hdv)" }), "Ventes nettes : " + k(b.net) + " ₭ (" + b.nV + ")"),
+        h("span", {}, h("i", { class: "k", style: "background:var(--s-craft)" }), "Achats : " + k(b.buy) + " ₭ (" + b.nA + ")"),
+        h("span", {}, h("i", { class: "k", style: "background:var(--fg)" }), "Solde : " + (b.solde >= 0 ? "+" : "") + k(b.solde) + " ₭"));
       tip.hidden = false; const pct = x(i) / W * 100;
       tip.style.left = pct > 60 ? "auto" : `calc(${pct}% + 12px)`; tip.style.right = pct > 60 ? `calc(${100 - pct}% + 12px)` : "auto";
     };
@@ -1942,8 +1968,8 @@ function viewAlertes() {
   let hint = null, ph = "ex. 1 200";
   if (AF.item) {
     const st = alertState({ kind: AF.kind, item: AF.item, price: 0 }, C);
-    if (AF.kind === "craft") { hint = !recipe(AF.item) ? "Cet objet ne se fabrique pas." : st.cur == null ? "Marge inconnue : il manque des prix." : "Marge actuelle : " + k(st.cur) + " k par craft"; ph = "ex. 5k"; }
-    else if (st.o) { hint = "Dernier relevé : " + range(st.o.lo, st.o.hi) + " k (" + ago(st.o.d) + ")"; ph = k(AF.kind === "buy" ? st.o.lo * .9 : st.o.hi * 1.1); }
+    if (AF.kind === "craft") { hint = !recipe(AF.item) ? "Cet objet ne se fabrique pas." : st.cur == null ? "Marge inconnue : il manque des prix." : "Marge actuelle : " + k(st.cur) + " ₭ par craft"; ph = "ex. 5k"; }
+    else if (st.o) { hint = "Dernier relevé : " + range(st.o.lo, st.o.hi) + " ₭ (" + ago(st.o.d) + ")"; ph = k(AF.kind === "buy" ? st.o.lo * .9 : st.o.hi * 1.1); }
     else hint = "Pas encore de prix relevé pour cet objet.";
   }
   const priceIn = h("input", { class: "cell", id: "af-price", inputmode: "decimal", value: AF.price, placeholder: ph, "aria-label": "Seuil en kamas", style: "width:100%;text-align:left;font-size:1rem;padding:10px 12px;border-radius:12px" });
@@ -2003,6 +2029,84 @@ function viewAlertes() {
 }
 
 // =====================================================================
+// Personnage : niveau, points de caractéristiques, parchemins, stats finales
+// Règles appliquées (Dofus, hypothèses vérifiables en jeu) :
+//   capital = 5 points par niveau gagné ; Vitalité 1:1 ; Sagesse 3:1 ;
+//   Force/Intelligence/Chance/Agilité : 1 point jusqu'à 100, 2 jusqu'à 200, 3 jusqu'à 300, puis 4 ;
+//   base : 6 PA (7 dès le niveau 100), 3 PM, 1 invocation, PV = 50 + 5 × niveau + Vitalité,
+//   Prospection = 100 + Chance/10, Initiative = Force + Intelligence + Chance + Agilité,
+//   Tacle/Fuite = Agilité/10, Retrait/Esquive PA et PM = Sagesse/10.
+// =====================================================================
+const PRIM = [[11, "Vitalité"], [12, "Sagesse"], [10, "Force"], [15, "Intelligence"], [13, "Chance"], [14, "Agilité"]];
+const PV = -1; // pseudo-caractéristique : points de vie
+function persoOf(b) {
+  const p = b.perso || {};
+  return { lvl: p.lvl || Math.max(1, ...b.items.map(id => item(id)[1])), capital: p.capital ?? null,
+    parcho: { 10: 100, 11: 100, 12: 100, 13: 100, 14: 100, 15: 100, ...(p.parcho || {}) }, base: { 10: 0, 11: 0, 12: 0, 13: 0, 14: 0, 15: 0, ...(p.base || {}) } };
+}
+const capitalOf = p => p.capital != null ? p.capital : Math.max(0, (Math.min(200, p.lvl) - 1) * 5);
+function pointsCost(c, v) {
+  v = Math.max(0, Math.floor(v || 0));
+  if (c === 11) return v;
+  if (c === 12) return v * 3;
+  let cost = 0;
+  for (const [from, to, k] of [[0, 100, 1], [100, 200, 2], [200, 300, 3], [300, Infinity, 4]]) if (v > from) cost += (Math.min(v, to) - from) * k;
+  return cost;
+}
+// Stats finales : équipement (jet choisi) + parchemins + points + base du personnage
+function finalStats(b, jet) {
+  const p = persoOf(b), eq = buildStats(b.items).tot;
+  const val = x => !x ? 0 : jet === "min" ? x.lo : jet === "max" ? x.hi : (x.lo + x.hi) / 2;
+  const out = {};
+  for (const [c, x] of Object.entries(eq)) out[c] = val(x);
+  const add = (c, v) => { out[c] = (out[c] || 0) + v; };
+  for (const [c] of PRIM) add(c, (+p.parcho[c] || 0) + (+p.base[c] || 0));
+  add(1, p.lvl >= 100 ? 7 : 6); add(23, 3); add(26, 1);
+  const st = c => out[c] || 0;
+  add(48, 100 + Math.floor(st(13) / 10));
+  add(44, st(10) + st(15) + st(13) + st(14));
+  add(79, Math.floor(st(14) / 10)); add(78, Math.floor(st(14) / 10));
+  for (const c of [82, 83, 27, 28]) add(c, Math.floor(st(12) / 10));
+  out[PV] = 50 + 5 * Math.min(200, p.lvl) + st(11);
+  return out;
+}
+function persoPanel(b, jet) {
+  const p = persoOf(b), cap = capitalOf(p);
+  const used = PRIM.reduce((t, [c]) => t + pointsCost(c, p.base[c]), 0), left = cap - used;
+  const save = patch => { b.perso = { ...persoOf(b), ...patch }; persist("builds"); render(); };
+  const lvlIn = numInput(p.lvl, v => save({ lvl: Math.max(1, Math.min(200, Math.round(+v) || 1)) }), { sm: true, label: "Niveau du personnage", id: "perso-lvl" });
+  const capIn = numInput(p.capital ?? "", v => save({ capital: String(v).trim() === "" ? null : Math.max(0, Math.round(+v) || 0) }), { sm: true, ph: String((Math.min(200, p.lvl) - 1) * 5), label: "Points de capital", id: "perso-cap" });
+  const allParcho = PRIM.every(([c]) => +p.parcho[c] === 100);
+  const fs = finalStats(b, jet);
+  const line = (label, v, sub) => h("div", { class: "fs-row" }, h("span", { text: label }), h("strong", { class: "num", text: fmt.format(Math.round(v)) }), sub ? h("small", { class: "muted", text: sub }) : null);
+  return h("section", { class: "panel" },
+    h("div", { class: "row between" }, h("h2", { text: "Personnage" }),
+      h("div", { class: "row", style: "gap:8px" }, h("span", { class: "label", text: "Niveau" }), lvlIn, h("span", { class: "label", text: "Capital" }), capIn)),
+    h("div", { class: "row between" },
+      h("span", { class: "chip " + (left < 0 ? "warn" : left === 0 ? "job" : "kamas"), text: left < 0 ? "Trop de points dépensés : " + fmt.format(-left) + " en trop" : fmt.format(left) + " point" + (left > 1 ? "s" : "") + " à répartir sur " + fmt.format(cap) }),
+      h("button", { type: "button", class: "btn sm", onclick: () => save({ parcho: Object.fromEntries(PRIM.map(([c]) => [c, allParcho ? 0 : 100])) }) }, allParcho ? "Retirer les parchemins" : "Parchemins 100 partout")),
+    h("div", { class: "tablewrap" }, h("table", { class: "perso-t" },
+      h("thead", {}, h("tr", {}, h("th", { text: "Carac." }), h("th", { class: "n", text: "Parcho" }), h("th", { class: "n", text: "Points" }), h("th", { class: "n", text: "Total" }))),
+      h("tbody", {}, PRIM.map(([c, label]) => h("tr", {},
+        h("td", { text: label }),
+        h("td", { class: "n" }, numInput(p.parcho[c], v => save({ parcho: { ...p.parcho, [c]: Math.max(0, Math.min(100, Math.round(+v) || 0)) } }), { sm: true, label: "Parchemins " + label })),
+        h("td", { class: "n" }, numInput(p.base[c] || "", v => save({ base: { ...p.base, [c]: Math.max(0, Math.round(+v) || 0) } }), { sm: true, ph: "0", label: "Points en " + label }),
+          pointsCost(c, p.base[c]) !== (+p.base[c] || 0) ? h("small", { class: "muted", style: "display:block", text: "coûte " + fmt.format(pointsCost(c, p.base[c])) }) : null),
+        h("td", { class: "n" }, h("strong", { text: fmt.format(Math.round(fs[c] || 0)) }))))))),
+    left > 0 ? h("div", { class: "row" }, h("span", { class: "small muted", text: "Mettre le reste en :" }), PRIM.map(([c, label]) => h("button", { type: "button", class: "chip", onclick: () => {
+      // Ajoute autant de points que possible dans la caractéristique, selon son coût
+      let v = +p.base[c] || 0; while (pointsCost(c, v + 1) - pointsCost(c, +p.base[c] || 0) <= left) v++;
+      save({ base: { ...p.base, [c]: v } });
+    } }, label))) : null,
+    h("h3", { text: "Stats finales (" + ({ min: "jet minimum", mid: "jet moyen", max: "jet maximum" })[jet] + ")" }),
+    h("div", { class: "fs-grid" },
+      line("PA", fs[1] || 0), line("PM", fs[23] || 0), line("Points de vie", fs[PV]), line("Portée", fs[19] || 0),
+      line("Initiative", fs[44] || 0), line("Prospection", fs[48] || 0), line("Invocations", fs[26] || 0), line("Critique (%)", fs[18] || 0),
+      line("Tacle", fs[79] || 0), line("Fuite", fs[78] || 0), line("Retrait PA / PM", fs[82] || 0), line("Esquive PA / PM", fs[27] || 0)),
+    h("p", { class: "note", text: "Hypothèses : 5 points de capital par niveau ; Vitalité 1 pour 1, Sagesse 3 pour 1, autres caractéristiques 1 / 2 / 3 / 4 points par paliers de 100 ; 6 PA (7 dès le niveau 100), 3 PM, PV = 50 + 5 × niveau + Vitalité. Si une règle diffère en jeu, corrige le capital à la main. Sans forgemagie, exos ni bonus de classe." }));
+}
+
+// =====================================================================
 // Comparateur de builds : pièces, statistiques, coût, panoplies
 // =====================================================================
 let CMP = { a: null, b: null, jet: "max" };
@@ -2025,6 +2129,8 @@ function viewComparer() {
     h("button", { type: "button", "aria-pressed": CMP.jet === v ? "true" : "false", onclick: () => { CMP.jet = v; render(); } }, l)));
   const val = x => !x ? 0 : CMP.jet === "min" ? x.lo : CMP.jet === "max" ? x.hi : (x.lo + x.hi) / 2;
   const sA = buildStats(A.items), sB = buildStats(B.items), cA = buildCost(A.items), cB = buildCost(B.items);
+  // Stats finales du personnage (niveau, points, parchemins) ou seulement l'équipement
+  if (CMP.full) { const fA = finalStats(A, CMP.jet), fB = finalStats(B, CMP.jet); sA.tot = {}; sB.tot = {}; for (const [c, v] of Object.entries(fA)) if (+c > 0) sA.tot[c] = { lo: v, hi: v }; for (const [c, v] of Object.entries(fB)) if (+c > 0) sB.tot[c] = { lo: v, hi: v }; }
   // Statistiques : union des caractéristiques, rangées par catégorie
   const chars = [...new Set([...Object.keys(sA.tot), ...Object.keys(sB.tot)])].map(Number).filter(c => D.chars[c] && (val(sA.tot[c]) || val(sB.tot[c])));
   chars.sort((x, y) => D.chars[x][1] - D.chars[y][1] || D.chars[x][2] - D.chars[y][2]);
@@ -2049,7 +2155,7 @@ function viewComparer() {
     const cell = (list, other) => h("td", {}, list.length ? h("div", { style: "display:grid;gap:4px" }, list.map(id => h("div", { class: other.includes(id) ? "cmp-same" : "cmp-diff" }, itemLink(id, "niv. " + item(id)[1], 26)))) : h("span", { class: "muted small", text: "—" }));
     return h("tr", {}, h("td", { class: "label", text: label }), cell(ia, ib), cell(ib, ia));
   }).filter(Boolean);
-  const tot = c => c.missing ? range(c.lo, c.hi) + " k + " + c.missing + " sans prix" : range(c.lo, c.hi) + " k";
+  const tot = c => c.missing ? range(c.lo, c.hi) + " ₭ + " + c.missing + " sans prix" : range(c.lo, c.hi) + " ₭";
   const midA = (cA.lo + cA.hi) / 2, midB = (cB.lo + cB.hi) / 2, dCost = midB - midA;
   const lvl = b => Math.max(0, ...b.items.map(id => item(id)[1]));
   const setsTxt = st => st.setRows.length ? st.setRows.map(r => (D.sets[r.st] || "Panoplie") + " " + r.n + "/" + r.of).join(" · ") : "aucune";
@@ -2067,10 +2173,12 @@ function viewComparer() {
     h("div", { class: "grid2b" },
       h("section", { class: "panel" },
         h("div", { class: "row between" }, h("h2", { text: "Statistiques" }), jetSeg),
+        h("span", { class: "seg", role: "group", "aria-label": "Périmètre" }, [[false, "Équipement seul"], [true, "Stats finales du personnage"]].map(([v, l]) =>
+          h("button", { type: "button", "aria-pressed": !!CMP.full === v ? "true" : "false", onclick: () => { CMP.full = v; render(); } }, l))),
         chars.length ? h("div", { class: "tablewrap" }, h("table", { class: "cmp-table" },
           h("thead", {}, h("tr", {}, h("th", { text: "Caractéristique" }), h("th", { class: "n", text: "A" }), h("th", { class: "n", text: "B" }), h("th", { class: "n", text: "B − A" }))),
           h("tbody", {}, statRows))) : h("p", { class: "muted", text: "Aucune statistique chiffrée pour ces pièces." }),
-        h("p", { class: "note", text: "Effets des pièces et bonus de panoplie, sans points de caractéristiques, parchemins, forgemagie ni exos." })),
+        h("p", { class: "note", text: CMP.full ? "Stats finales : équipement, parchemins, points investis et base du personnage, réglés dans l'onglet Builds (panneau Personnage)." : "Effets des pièces et bonus de panoplie, sans points de caractéristiques, parchemins, forgemagie ni exos." })),
       h("div", { class: "stack" },
         h("section", { class: "panel" }, h("h2", { text: "Pièces" }),
           h("div", { class: "tablewrap" }, h("table", { class: "cmp-table" },

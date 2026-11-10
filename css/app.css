@@ -428,3 +428,11 @@ footer.note { text-align: center; padding-top: 8px; }
 .cmp-table tr.same td { color: var(--muted); }
 .cmp-same { opacity: .5; }
 .cmp-diff { border-left: 3px solid var(--sec); padding-left: 6px; border-radius: 2px; }
+
+/* Personnage : stats finales */
+.fs-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 8px; }
+.fs-row { display: grid; gap: 1px; padding: 9px 12px; border-radius: 12px; background: var(--sunk); }
+.fs-row span { font-size: .74rem; font-weight: 800; color: var(--muted); text-transform: uppercase; letter-spacing: .06em; }
+.fs-row strong { font-size: 1.2rem; }
+.perso-t input.cell.sm { width: 66px; }
+.perso-t td, .perso-t th { padding-left: 5px; padding-right: 5px; }
