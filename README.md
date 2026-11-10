@@ -21,18 +21,15 @@ Application de fans, sans lien avec Ankama. Données du jeu extraites par le pro
 2. **SQL Editor** > **New query** : colle le contenu de [`supabase/schema.sql`](supabase/schema.sql), puis **Run**.
 3. **Authentication** > **Sign In / Providers** > **Email** : désactive **Allow new users to sign up**. Seules les personnes que tu invites pourront entrer.
 4. **Authentication** > **Emails** > modèle **Magic Link** : ajoute la ligne `Ton code de connexion : {{ .Token }}`. Le code permet de se connecter depuis l'appli installée.
-5. **Authentication** > **URL Configuration** : mets l'adresse de l'appli (étape 2) dans **Site URL** et **Redirect URLs**.
+5. **Authentication** > **URL Configuration** : mets `https://myokatoshi.github.io/atelier-dofus/` dans **Site URL** et **Redirect URLs**.
 6. **Project Settings** > **API** : copie **Project URL** et la clé **anon public** dans [`config.js`](config.js).
 
 La clé `anon` est publique par conception : la sécurité repose sur les règles du fichier `schema.sql` (seuls les membres connectés lisent les prix, chacun ne modifie que ses relevés et ses propres données).
 
 ### 2. Mise en ligne sur GitHub Pages
 
-1. Dans le dépôt GitHub : **Settings** > **Pages** > **Source** : **GitHub Actions**.
-2. Chaque push sur `main` met l'appli en ligne via [`.github/workflows/pages.yml`](.github/workflows/pages.yml).
-3. Adresse : `https://<ton-compte>.github.io/<nom-du-dépôt>/`.
-
-GitHub Pages gratuit demande un dépôt **public**. Pour un dépôt privé, utilise Netlify, Vercel ou Cloudflare Pages (gratuits, sans étape de build : dossier racine).
+L'appli est publiée sur **https://myokatoshi.github.io/atelier-dofus/** depuis la branche `gh-pages`.
+Chaque push sur `main` est recopié automatiquement sur `gh-pages` par [`.github/workflows/pages.yml`](.github/workflows/pages.yml) ; la mise en ligne prend une à deux minutes.
 
 ### 3. Inviter le groupe
 
