@@ -90,7 +90,7 @@ create policy "journal personnel" on public.trades for all to authenticated usin
 -- Obtention des objets (identique à supabase/migrations/004_prix_actuel_obtention.sql)
 create table if not exists public.item_obtain (
   item_id integer primary key,
-  minutes numeric not null check (minutes > 0),       -- durée moyenne pour une obtention
+  minutes numeric check (minutes > 0),                -- durée moyenne pour une obtention (facultative)
   qty integer not null default 1 check (qty > 0),     -- quantité obtenue à chaque fois
   inputs jsonb not null default '[]',                 -- objets consommés : [{"item": id, "qty": n}]
   extra bigint not null default 0 check (extra >= 0), -- frais divers en kamas

@@ -240,7 +240,7 @@ function subscribePrices() {
     })
     .on("postgres_changes", { event: "*", schema: "public", table: "item_obtain" }, p => {
       if (p.eventType === "DELETE") delete OBT[p.old.item_id];
-      else { const r = p.new; OBT[r.item_id] = { minutes: +r.minutes, qty: r.qty, inputs: r.inputs || [], extra: +r.extra || 0, by: r.updated_by, t: r.updated_at }; }
+      else { const r = p.new; OBT[r.item_id] = { minutes: r.minutes == null ? null : +r.minutes, qty: r.qty, inputs: r.inputs || [], extra: +r.extra || 0, by: r.updated_by, t: r.updated_at }; }
       lsSaveObt(); softRender();
     })
     .subscribe();
@@ -537,15 +537,14 @@ function quickObs(id, after) {
     const ta = lo.value.trim(), tb = hi.value.trim(), tc = cu.value.trim();
     let a = parseKamas(ta), b = parseKamas(tb); const c = parseKamas(tc);
     if ((ta && a == null) || (tb && b == null) || (tc && c == null)) { toast("Prix illisible : écris par exemple 1200, 1 200, 12k ou 1,5m"); return; }
-    // Seul le prix actuel est saisi : la fourchette reste celle connue
-    if (a == null && b == null && c != null) { const ref = mine || last; if (ref) { a = Math.round(ref.lo); b = Math.round(ref.hi); } else { a = b = c; } }
-    if (a == null && b == null) { lo.focus(); return; }
-    // Une seule case remplie : on garde l'autre borne de ton relevé du jour, sinon du dernier prix connu
+    // Une case laissée vide garde la valeur grisée (ton relevé du jour, sinon le dernier prix connu)
     const ref = mine || last;
-    if (a == null) a = ref ? Math.min(Math.round(ref.lo), b) : b;
-    if (b == null) b = ref ? Math.max(Math.round(ref.hi), a) : a;
-    if (addObs(id, a, b, today(), tc ? c : (mine ? mine.cur : null)) === false) return;
-    toast((mine ? "Relevé modifié : " : "Relevé enregistré : ") + item(id)[0] + " " + range(Math.min(a, b), Math.max(a, b)) + " ₭" + (tc ? " · actuel " + k(c) + " ₭" : ""));
+    if (a == null && ref) a = Math.round(ref.lo);
+    if (b == null && ref) b = Math.round(ref.hi);
+    let cc = c ?? (ref && ref.cur != null ? Math.round(ref.cur) : null);
+    if (a == null || b == null || cc == null) { toast("Indique la moyenne basse, la moyenne haute et le prix actuel"); (a == null ? lo : b == null ? hi : cu).focus(); return; }
+    if (addObs(id, a, b, today(), cc) === false) return;
+    toast((mine ? "Relevé modifié : " : "Relevé enregistré : ") + item(id)[0] + " " + range(Math.min(a, b), Math.max(a, b)) + " ₭ · actuel " + k(cc) + " ₭");
     after ? after() : render();
   };
   [lo, hi, cu].forEach(x => x.addEventListener("keydown", e => { if (e.key === "Enter") go(); }));
@@ -715,7 +714,7 @@ async function renderSheet() {
   const dateIn = h("input", { type: "date", value: obsEditDate || today(), max: today(), "aria-label": "Date du relevé" });
   const loIn = h("input", { class: "cell", inputmode: "decimal", placeholder: "ex. 1 200", id: "obs-lo" });
   const hiIn = h("input", { class: "cell", inputmode: "decimal", placeholder: "ex. 1 500", id: "obs-hi" });
-  const curIn = h("input", { class: "cell", inputmode: "decimal", placeholder: "facultatif", id: "obs-cur" });
+  const curIn = h("input", { class: "cell", inputmode: "decimal", placeholder: "ex. 1 300", id: "obs-cur" });
   const saveBtn = h("button", { type: "button", class: "btn primary" });
   const mineNote = h("p", { class: "small", style: "color:var(--kamas);font-weight:700" });
   // Pré-remplit avec ton relevé de la date choisie : le modifier remplace l'ancien
@@ -730,9 +729,9 @@ async function renderSheet() {
   const save = () => {
     const a = parseKamas(loIn.value), b = parseKamas(hiIn.value), c = parseKamas(curIn.value);
     if ((loIn.value.trim() && a == null) || (hiIn.value.trim() && b == null) || (curIn.value.trim() && c == null)) { toast("Prix illisible : écris par exemple 1200, 1 200, 12k ou 1,5m"); return; }
-    if (a == null && b == null) { loIn.focus(); return; }
+    if (a == null || b == null || c == null) { toast("Indique la moyenne basse, la moyenne haute et le prix actuel"); (a == null ? loIn : b == null ? hiIn : curIn).focus(); return; }
     const was = myObs(id, dateIn.value || today());
-    if (addObs(id, a, b, dateIn.value || today(), curIn.value.trim() ? c : null) === false) return;
+    if (addObs(id, a, b, dateIn.value || today(), c) === false) return;
     toast(was ? "Relevé modifié" : "Relevé enregistré"); obsEditDate = null; renderSheet();
   };
   saveBtn.addEventListener("click", save);
@@ -744,7 +743,7 @@ async function renderSheet() {
     h("div", { class: "form-row" },
       h("label", {}, "Moyenne basse", loIn), h("label", {}, "Moyenne haute", hiIn), h("label", {}, "Prix actuel", curIn), h("label", {}, "Date", dateIn), saveBtn),
     mineNote,
-    h("p", { class: "note", text: "Prix à l'unité, en kamas : 1200, 1 200, 1.200, 12k ou 1,5m. Un relevé par jour et par personne, modifiable à tout moment (choisis sa date ou clique sur « Modifier » dans l'historique)." + (SH ? " Partagé avec tout le groupe : la dernière mise à jour fait foi." : "") }),
+    h("p", { class: "note", text: "Prix à l'unité, en kamas : 1200, 1 200, 1.200, 12k ou 1,5m. Les trois valeurs sont obligatoires. Un relevé par jour et par personne, modifiable à tout moment (choisis sa date ou clique sur « Modifier » dans l'historique)." + (SH ? " Partagé avec tout le groupe : la dernière mise à jour fait foi." : "") }),
     h("div", { class: "row between" }, h("span", { class: "label", text: "Évolution sur 12 " + (chartMode === "week" ? "semaines" : "mois") }), seg),
     chart(id, chartMode),
     o.length ? h("details", {}, h("summary", { class: "note", text: o.length + " relevé" + (o.length > 1 ? "s" : "") + " enregistré" + (o.length > 1 ? "s" : "") }),
@@ -1171,7 +1170,7 @@ function viewPrix() {
           h("td", { class: "n " + (r.varp == null ? "muted" : r.varp >= 0 ? "pos" : "neg"), text: r.varp == null ? "—" : (r.varp >= 0 ? "▲ +" : "▼ ") + Math.round(r.varp) + " %" }),
           h("td", {}, quickObs(r.id))))))) :
         h("div", { class: "empty" }, h("strong", { text: "Aucun prix relevé" }), h("span", { text: "Cherche un objet ci-dessus pour saisir sa moyenne basse et sa moyenne haute à l'HDV. Chaque relevé est daté : c'est ce qui construit les courbes par semaine et par mois." })),
-      h("p", { class: "note", text: "Saisis ou corrige ton relevé du jour directement dans les cases (Entrée pour valider) : une case laissée vide garde la valeur grisée. Pour corriger un relevé d'un autre jour, ouvre la fiche de l'objet. La variation compare le dernier relevé à celui d'au moins 7 jours plus tôt." })));
+      h("p", { class: "note", text: "Saisis ou corrige ton relevé du jour directement dans les cases (Entrée pour valider) : moyenne basse, moyenne haute et prix actuel sont obligatoires ; une case laissée vide garde la valeur grisée. Pour corriger un relevé d'un autre jour, ouvre la fiche de l'objet. La variation compare le dernier relevé à celui d'au moins 7 jours plus tôt." })));
 }
 
 function viewStock() {
@@ -1568,7 +1567,7 @@ function hdvOf(id) {
   return "autre";
 }
 const hdvName = k => (HDV.find(x => x[0] === k) || ["", "Divers"])[1];
-function needsCheck(id, age) { const o = priceAt(id); return !o || ageDays(o.d) >= age; }
+function needsCheck(id, age) { const o = priceAt(id); return !o || o.cur == null || ageDays(o.d) >= age; }
 // Liste des objets à relever, avec la raison (pour l'aperçu)
 function tourCandidates(opt = tourSetup) {
   const why = new Map();
@@ -1633,7 +1632,7 @@ function tourRun() {
   const lo = h("input", { class: "tour-in", id: "tour-lo", inputmode: "decimal", autocomplete: "off", value: TOUR.draft.lo, placeholder: "Basse", "aria-label": "Moyenne basse, prix du lot de " + lot });
   const hi = h("input", { class: "tour-in", id: "tour-hi", inputmode: "decimal", autocomplete: "off", value: TOUR.draft.hi, placeholder: "Haute", "aria-label": "Moyenne haute, prix du lot de " + lot });
   if (TOUR.draft.cur === undefined) TOUR.draft.cur = mine && mine.cur != null ? fmt.format(mine.cur * lot) : "";
-  const cu = h("input", { class: "tour-in", id: "tour-cur", inputmode: "decimal", autocomplete: "off", value: TOUR.draft.cur, placeholder: "Actuel (facultatif)", "aria-label": "Prix actuel, prix du lot de " + lot });
+  const cu = h("input", { class: "tour-in", id: "tour-cur", inputmode: "decimal", autocomplete: "off", value: TOUR.draft.cur, placeholder: "Actuel", "aria-label": "Prix actuel, prix du lot de " + lot });
   const unit = h("p", { class: "tour-unit" });
   const showUnit = () => {
     const a = parseKamas(lo.value), b = parseKamas(hi.value);
@@ -1644,14 +1643,13 @@ function tourRun() {
   showUnit();
   const next = () => { TOUR.i++; TOUR.draft = null; saveTour(); render(); setTimeout(() => document.getElementById("tour-lo")?.focus(), 30); };
   const save = () => {
-    const a = parseKamas(lo.value), b = parseKamas(hi.value);
-    if (a == null && b == null) { lo.focus(); return; }
-    const c = parseKamas(cu.value);
+    const a = parseKamas(lo.value), b = parseKamas(hi.value), c = parseKamas(cu.value);
+    if (a == null || b == null || c == null) { toast("Indique la moyenne basse, la moyenne haute et le prix actuel"); (a == null ? lo : b == null ? hi : cu).focus(); return; }
     if (addObs(id, a == null ? null : Math.round(a / lot), b == null ? null : Math.round(b / lot), today(), c == null ? null : Math.round(c / lot)) === false) return;
     TOUR.saved++; TOUR.draft = null; next();
   };
-  lo.addEventListener("keydown", e => { if (e.key === "Enter") { e.preventDefault(); if (hi.value) save(); else hi.focus(); } });
-  hi.addEventListener("keydown", e => { if (e.key === "Enter") { e.preventDefault(); save(); } });
+  lo.addEventListener("keydown", e => { if (e.key === "Enter") { e.preventDefault(); hi.focus(); } });
+  hi.addEventListener("keydown", e => { if (e.key === "Enter") { e.preventDefault(); cu.focus(); } });
   cu.addEventListener("keydown", e => { if (e.key === "Enter") { e.preventDefault(); save(); } });
   const lots = h("span", { class: "seg", role: "group", "aria-label": "Taille du lot" }, [1, 10, 100, 1000].map(n =>
     h("button", { type: "button", "aria-pressed": lot === n ? "true" : "false", onclick: () => {
@@ -1751,7 +1749,7 @@ function costSuggestion(id, qty, d) {
 function obsFromTrade(id, unit, d) {
   const mine = SH && ME ? ((RAW[id] || {})[ME] || []) : (S.prices[id] || []);
   const cur = mine.find(o => o.d === d);
-  addObs(id, cur ? Math.min(cur.lo, unit) : unit, cur ? Math.max(cur.hi, unit) : unit, d);
+  addObs(id, cur ? Math.min(cur.lo, unit) : unit, cur ? Math.max(cur.hi, unit) : unit, d, unit);
 }
 
 let JF = { kind: "vente", item: null, qty: 1, total: "", fee: "", cost: "", d: "", note: "", stock: true, obs: true, mode: "week", q: "" };
@@ -2257,7 +2255,7 @@ async function loadObtain() {
   const { data, error } = await SB.from("item_obtain").select("item_id,minutes,qty,inputs,extra,updated_by,updated_at");
   if (error) { console.error(error); return; }
   OBT = {};
-  for (const r of data || []) OBT[r.item_id] = { minutes: +r.minutes, qty: r.qty, inputs: r.inputs || [], extra: +r.extra || 0, by: r.updated_by, t: r.updated_at };
+  for (const r of data || []) OBT[r.item_id] = { minutes: r.minutes == null ? null : +r.minutes, qty: r.qty, inputs: r.inputs || [], extra: +r.extra || 0, by: r.updated_by, t: r.updated_at };
   lsSaveObt();
 }
 async function setObtain(id, data) {
@@ -2283,9 +2281,9 @@ function obtainCalc(id) {
   for (const x of ob.inputs || []) { const p = nowPrice(priceAt(x.item)); if (p == null) missing.push(x.item); else invest += p * x.qty; }
   const net = sell == null ? null : sell * ob.qty * (1 - tax);
   const profit = net == null ? null : net - invest;
-  return { ob, sell, net, invest, profit, perHour: profit == null ? null : profit / ob.minutes * 60, missing };
+  return { ob, sell, net, invest, profit, perHour: profit == null || !(ob.minutes > 0) ? null : profit / ob.minutes * 60, missing };
 }
-const fmtDur = m => m >= 60 ? Math.floor(m / 60) + " h" + (Math.round(m % 60) ? " " + String(Math.round(m % 60)).padStart(2, "0") : "") : Math.round(m * 10) / 10 + " min";
+const fmtDur = m => !(m > 0) ? "—" : m >= 60 ? Math.floor(m / 60) + " h" + (Math.round(m % 60) ? " " + String(Math.round(m % 60)).padStart(2, "0") : "") : Math.round(m * 10) / 10 + " min";
 // Panneau « Obtention » de la fiche objet
 let obtainDraft = null;
 function obtainPanel(id) {
@@ -2294,8 +2292,8 @@ function obtainPanel(id) {
   const dr = obtainDraft;
   const inp = (key, ph, label) => { const el = h("input", { class: "cell", id: "ob-" + key, inputmode: "decimal", value: dr[key], placeholder: ph, "aria-label": label }); el.addEventListener("input", () => { dr[key] = el.value; }); return h("label", {}, label, el); };
   const save = () => {
-    const minutes = parseFloat(String(dr.minutes).replace(",", "."));
-    if (!(minutes > 0)) { toast("Indique la durée moyenne en minutes"); document.getElementById("ob-minutes")?.focus(); return; }
+    const tm = String(dr.minutes).trim(), minutes = tm ? parseFloat(tm.replace(",", ".")) : null;
+    if (tm && !(minutes > 0)) { toast("Durée illisible : indique un nombre de minutes, ou laisse vide"); document.getElementById("ob-minutes")?.focus(); return; }
     const qty = Math.max(1, Math.round(+dr.qty || 1));
     const extra = dr.extra.trim() ? parseKamas(dr.extra) : 0;
     if (extra == null) { toast("Frais illisibles : écris par exemple 5000 ou 5k"); return; }
@@ -2304,9 +2302,9 @@ function obtainPanel(id) {
   };
   const c = obtainCalc(id);
   return h("section", { class: "panel", id: "obtain-panel" },
-    h("div", { class: "row between" }, h("h3", { text: "Obtention (farm, capture…)" }), ob ? h("span", { class: "chip", text: "par " + whoName(ob.by) + " · " + fmtDur(ob.minutes) }) : h("span", { class: "chip", text: "facultatif" })),
-    h("p", { class: "note", text: "Combien de temps faut-il pour obtenir cet objet, et que faut-il dépenser (pierres de capture, clés…) ? L'atelier en déduit le bénéfice par heure, visible dans Rentabilité > Farm et captures. Partagé avec le groupe." }),
-    h("div", { class: "form-row" }, inp("minutes", "ex. 15", "Durée moyenne (min)"), inp("qty", "1", "Quantité obtenue"), inp("extra", "0", "Autres frais (₭)")),
+    h("div", { class: "row between" }, h("h3", { text: "Obtention (farm, capture…)" }), ob ? h("span", { class: "chip", text: "par " + whoName(ob.by) + (ob.minutes > 0 ? " · " + fmtDur(ob.minutes) : "") }) : h("span", { class: "chip", text: "facultatif" })),
+    h("p", { class: "note", text: "Que faut-il dépenser pour obtenir cet objet (pierres de capture, clés…), et combien de temps cela prend-il ? La durée est facultative : avec elle, l'atelier calcule aussi le bénéfice par heure (Rentabilité > Farm et captures). Partagé avec le groupe." }),
+    h("div", { class: "form-row" }, inp("minutes", "facultatif", "Durée moyenne (min)"), inp("qty", "1", "Quantité obtenue"), inp("extra", "0", "Autres frais (₭)")),
     h("div", { style: "display:grid;gap:6px" }, h("span", { class: "label", text: "Investissement par obtention" }),
       dr.inputs.length ? h("div", { style: "display:grid;gap:4px" }, dr.inputs.map((x, i) => {
         const q = h("input", { class: "cell sm", inputmode: "numeric", value: x.qty, "aria-label": "Quantité de " + item(x.item)[0] });
@@ -2321,16 +2319,16 @@ function obtainPanel(id) {
     c ? h("div", { class: "econ" },
       h("div", {}, h("span", { class: "label", text: "Valeur nette" }), h("span", { class: "v", text: c.net == null ? "prix inconnu" : k(c.net) + " ₭" }), h("span", { class: "note", text: c.ob.qty + " × " + (c.sell == null ? "?" : k(c.sell)) + " − taxe " + S.settings.tax + " %" })),
       h("div", {}, h("span", { class: "label", text: "Investissement" }), h("span", { class: "v", text: k(c.invest) + " ₭" }), c.missing.filter(x => x !== id).length ? h("span", { class: "chip warn", text: "prix manquants" }) : null),
-      h("div", {}, h("span", { class: "label", text: "Bénéfice par heure" }), h("span", { class: "v " + (c.perHour == null ? "muted" : c.perHour >= 0 ? "pos" : "neg"), text: c.perHour == null ? "—" : (c.perHour >= 0 ? "+" : "") + kk(c.perHour) + " ₭/h" }),
+      h("div", {}, h("span", { class: "label", text: "Bénéfice par heure" }), h("span", { class: "v " + (c.perHour == null ? "muted" : c.perHour >= 0 ? "pos" : "neg"), text: c.perHour == null ? (c.ob.minutes > 0 ? "—" : "durée inconnue") : (c.perHour >= 0 ? "+" : "") + kk(c.perHour) + " ₭/h" }),
         h("span", { class: "note", text: c.profit == null ? "" : (c.profit >= 0 ? "+" : "") + k(c.profit) + " ₭ par obtention" }))) : null);
 }
 // Rentabilité > Farm et captures
 function viewRentaFarm() {
   const rows = Object.keys(OBT).map(Number).map(id => ({ id, c: obtainCalc(id) })).filter(r => r.c)
-    .sort((a, b) => (b.c.perHour ?? -1e15) - (a.c.perHour ?? -1e15));
+    .sort((a, b) => (b.c.perHour ?? -1e15) - (a.c.perHour ?? -1e15) || (b.c.profit ?? -1e15) - (a.c.profit ?? -1e15));
   return h("section", { class: "panel" },
     h("div", { class: "row between" }, h("h2", { text: "Farm et captures : bénéfice par heure" }), h("span", { class: "chip", text: rows.length + " objet" + (rows.length > 1 ? "s" : "") })),
-    h("p", { class: "note", text: "Valeur nette = prix actuel (sinon milieu de la fourchette) × quantité obtenue, moins " + S.settings.tax + " % de taxe HDV. On retire l'investissement (objets consommés au prix du groupe + frais), puis on ramène à l'heure selon la durée moyenne." }),
+    h("p", { class: "note", text: "Valeur nette = prix actuel (sinon milieu de la fourchette) × quantité obtenue, moins " + S.settings.tax + " % de taxe HDV. On retire l'investissement (objets consommés au prix du groupe + frais), puis on ramène à l'heure quand la durée moyenne est renseignée." }),
     searchBox("Ajouter un objet (archimonstre, ressource de boss…)", {}, id => { openSheet(id); setTimeout(() => { const el = document.getElementById("obtain-panel"); el?.scrollIntoView({ block: "start" }); document.getElementById("ob-minutes")?.focus(); }, 400); }, "q-rfarm"),
     rows.length ? h("div", { class: "tablewrap" }, h("table", {},
       h("thead", {}, h("tr", {}, h("th", { text: "Objet" }), h("th", { class: "n", text: "Durée" }), h("th", { class: "n", text: "Valeur nette" }), h("th", { class: "n", text: "Investissement" }), h("th", { class: "n", text: "Bénéfice" }), h("th", { class: "n", text: "Par heure" }))),
