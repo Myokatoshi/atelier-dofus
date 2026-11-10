@@ -513,11 +513,24 @@ function ago(d) {
 const ageDays = d => Math.round((parseD(today()) - parseD(d)) / 86400000);
 // Saisie rapide d'un relevé : basse + haute
 function quickObs(id, after) {
-  const lo = h("input", { class: "cell sm", inputmode: "decimal", placeholder: "basse", "aria-label": "Moyenne basse" });
-  const hi = h("input", { class: "cell sm", inputmode: "decimal", placeholder: "haute", "aria-label": "Moyenne haute" });
-  const go = () => { const a = parseKamas(lo.value), b = parseKamas(hi.value); if (a == null && b == null) { lo.focus(); return; } if (addObs(id, a, b) === false) return; toast("Relevé enregistré pour " + item(id)[0]); after ? after() : render(); };
+  const mine = myObs(id, today()), last = priceAt(id);
+  const lo = h("input", { class: "cell sm", id: "qo-lo-" + id, inputmode: "decimal", value: mine ? fmt.format(mine.lo) : "", placeholder: last ? fmt.format(Math.round(last.lo)) : "basse", "aria-label": "Moyenne basse de " + item(id)[0] });
+  const hi = h("input", { class: "cell sm", id: "qo-hi-" + id, inputmode: "decimal", value: mine ? fmt.format(mine.hi) : "", placeholder: last ? fmt.format(Math.round(last.hi)) : "haute", "aria-label": "Moyenne haute de " + item(id)[0] });
+  const go = () => {
+    const ta = lo.value.trim(), tb = hi.value.trim();
+    let a = parseKamas(ta), b = parseKamas(tb);
+    if ((ta && a == null) || (tb && b == null)) { toast("Prix illisible : écris par exemple 1200, 1 200, 12k ou 1,5m"); return; }
+    if (a == null && b == null) { lo.focus(); return; }
+    // Une seule case remplie : on garde l'autre borne de ton relevé du jour, sinon du dernier prix connu
+    const ref = mine || last;
+    if (a == null) a = ref ? Math.min(Math.round(ref.lo), b) : b;
+    if (b == null) b = ref ? Math.max(Math.round(ref.hi), a) : a;
+    if (addObs(id, a, b) === false) return;
+    toast((mine ? "Relevé modifié : " : "Relevé enregistré : ") + item(id)[0] + " " + range(Math.min(a, b), Math.max(a, b)) + " ₭");
+    after ? after() : render();
+  };
   [lo, hi].forEach(x => x.addEventListener("keydown", e => { if (e.key === "Enter") go(); }));
-  return h("span", { class: "row", style: "gap:6px" }, lo, hi, h("button", { type: "button", class: "btn sm", onclick: go }, "Ajouter"));
+  return h("span", { class: "row", style: "gap:6px;flex-wrap:nowrap" }, lo, hi, h("button", { type: "button", class: "btn sm", onclick: go }, mine ? "Modifier" : "Ajouter"));
 }
 let toastT = null;
 function toast(msg, undo, label = "Annuler") {
@@ -1095,6 +1108,7 @@ document.addEventListener("paste", e => {
   if (f) { e.preventDefault(); importCapture(f); }
 });
 
+let prixSort = "nom";
 function viewPrix() {
   const ids = Object.keys(prices()).map(Number).filter(id => obsOf(id).length);
   const rows = ids.map(id => {
@@ -1102,7 +1116,7 @@ function viewPrix() {
     const prev = [...o].reverse().find(x => ageDays(x.d) >= 7 && x.d < last.d);
     const varp = prev ? (midOf(last) - midOf(prev)) / midOf(prev) * 100 : null;
     return { id, last, n: o.length, varp };
-  }).sort((a, b) => a.last.d < b.last.d ? -1 : a.last.d > b.last.d ? 1 : 0);
+  }).sort(prixSort === "age" ? (a, b) => a.last.d < b.last.d ? -1 : a.last.d > b.last.d ? 1 : item(a.id)[0].localeCompare(item(b.id)[0], "fr") : (a, b) => item(a.id)[0].localeCompare(item(b.id)[0], "fr"));
   const toShare = pendingShare();
   const tourN = tourCandidates().ids.length;
   return h("div", { class: "stack" },
@@ -1114,19 +1128,22 @@ function viewPrix() {
         h("button", { type: "button", class: "btn primary", onclick: shareMine }, "Les partager avec le groupe"))) : null,
     importPanel(),
     h("section", { class: "panel" },
-      h("div", { class: "row between" }, h("h2", { text: SH ? "Prix du groupe à l'HDV" : "Prix relevés à l'HDV" }), h("span", { class: "chip", text: ids.length + " objets suivis" })),
+      h("div", { class: "row between" }, h("h2", { text: SH ? "Prix du groupe à l'HDV" : "Prix relevés à l'HDV" }),
+        h("div", { class: "row", style: "gap:8px" }, h("span", { class: "chip", text: ids.length + " objets suivis" }),
+          h("span", { class: "seg", role: "group", "aria-label": "Tri" }, [["nom", "Par nom"], ["age", "À revérifier d'abord"]].map(([v, l]) =>
+            h("button", { type: "button", "aria-pressed": prixSort === v ? "true" : "false", onclick: () => { prixSort = v; render(); } }, l))))),
       searchBox("Ajouter un relevé pour un objet", {}, id => openSheet(id), "q-prix"),
       rows.length ? h("div", { class: "tablewrap" }, h("table", {},
-        h("thead", {}, h("tr", {}, h("th", { text: "Objet" }), h("th", { class: "n", text: "Dernière fourchette" }), h("th", { text: "Relevé" }), h("th", { text: "12 semaines" }), h("th", { class: "n", text: "Var. 7 j+" }), h("th", { text: "Nouveau relevé" }))),
+        h("thead", {}, h("tr", {}, h("th", { text: "Objet" }), h("th", { class: "n", text: "Dernière fourchette" }), h("th", { text: "Relevé" }), h("th", { text: "12 semaines" }), h("th", { class: "n", text: "Var. 7 j+" }), h("th", { text: "Ton relevé du jour (basse · haute)" }))),
         h("tbody", {}, rows.map(r => h("tr", {},
           h("td", {}, itemLink(r.id, r.n + " relevé" + (r.n > 1 ? "s" : ""), 26)),
-          h("td", { class: "n", text: range(r.last.lo, r.last.hi) }),
+          h("td", { class: "n" }, range(r.last.lo, r.last.hi), r.last.n > 1 ? h("small", { class: "muted", style: "display:block", text: "moyenne de " + r.last.n + " relevés" }) : SH && r.last.by ? h("small", { class: "muted", style: "display:block", text: "par " + whoName(r.last.by[0]) }) : null),
           h("td", {}, h("span", { class: "chip" + (ageDays(r.last.d) >= 7 ? " warn" : ""), text: ago(r.last.d) })),
           h("td", {}, sparkline(r.id)),
           h("td", { class: "n " + (r.varp == null ? "muted" : r.varp >= 0 ? "pos" : "neg"), text: r.varp == null ? "—" : (r.varp >= 0 ? "▲ +" : "▼ ") + Math.round(r.varp) + " %" }),
           h("td", {}, quickObs(r.id))))))) :
         h("div", { class: "empty" }, h("strong", { text: "Aucun prix relevé" }), h("span", { text: "Cherche un objet ci-dessus pour saisir sa moyenne basse et sa moyenne haute à l'HDV. Chaque relevé est daté : c'est ce qui construit les courbes par semaine et par mois." })),
-      h("p", { class: "note", text: "Les relevés les plus anciens apparaissent en premier : ce sont ceux à revérifier. La variation compare le dernier relevé à celui d'au moins 7 jours plus tôt." })));
+      h("p", { class: "note", text: "Saisis ou corrige ton relevé du jour directement dans les cases (Entrée pour valider) : une case laissée vide garde la valeur grisée. Pour corriger un relevé d'un autre jour, ouvre la fiche de l'objet. La variation compare le dernier relevé à celui d'au moins 7 jours plus tôt." })));
 }
 
 function viewStock() {
@@ -1582,25 +1599,33 @@ function tourPrep() {
 function tourRun() {
   const id = TOUR.ids[TOUR.i], g = hdvOf(id), o = priceAt(id), r = recipe(id);
   const lot = TOUR.lots[g] || (g === "res" ? 1 : 1);
-  const lo = h("input", { class: "tour-in", id: "tour-lo", inputmode: "decimal", autocomplete: "off", placeholder: "Basse", "aria-label": "Moyenne basse, prix du lot" });
-  const hi = h("input", { class: "tour-in", id: "tour-hi", inputmode: "decimal", autocomplete: "off", placeholder: "Haute", "aria-label": "Moyenne haute, prix du lot" });
+  // Saisie en cours conservée (changement de lot, retour) ; sinon pré-remplie avec ton relevé du jour
+  const mine = myObs(id, today());
+  if (!TOUR.draft || TOUR.draft.id !== id) TOUR.draft = { id, lo: mine ? fmt.format(mine.lo * lot) : "", hi: mine ? fmt.format(mine.hi * lot) : "", auto: !!mine };
+  const lo = h("input", { class: "tour-in", id: "tour-lo", inputmode: "decimal", autocomplete: "off", value: TOUR.draft.lo, placeholder: "Basse", "aria-label": "Moyenne basse, prix du lot de " + lot });
+  const hi = h("input", { class: "tour-in", id: "tour-hi", inputmode: "decimal", autocomplete: "off", value: TOUR.draft.hi, placeholder: "Haute", "aria-label": "Moyenne haute, prix du lot de " + lot });
   const unit = h("p", { class: "tour-unit" });
   const showUnit = () => {
     const a = parseKamas(lo.value), b = parseKamas(hi.value);
-    unit.textContent = lot > 1 && (a != null || b != null) ? "Soit " + range((a ?? b) / lot, (b ?? a) / lot) + " ₭ à l'unité" : "";
+    unit.textContent = a == null && b == null ? (lot > 1 ? "Saisis le prix affiché pour un lot de " + lot + " : l'appli le divise par " + lot + "." : "")
+      : "Sera enregistré à l'unité : " + range((a ?? b) / lot, (b ?? a) / lot) + " ₭" + (lot > 1 ? " (lot de " + lot + " ÷ " + lot + ")" : "");
   };
-  [lo, hi].forEach(x => x.addEventListener("input", showUnit));
-  const next = () => { TOUR.i++; saveTour(); render(); setTimeout(() => document.getElementById("tour-lo")?.focus(), 30); };
+  [lo, hi].forEach(x => x.addEventListener("input", () => { TOUR.draft = { id, lo: lo.value, hi: hi.value, auto: false }; showUnit(); }));
+  showUnit();
+  const next = () => { TOUR.i++; TOUR.draft = null; saveTour(); render(); setTimeout(() => document.getElementById("tour-lo")?.focus(), 30); };
   const save = () => {
     const a = parseKamas(lo.value), b = parseKamas(hi.value);
     if (a == null && b == null) { lo.focus(); return; }
     if (addObs(id, a == null ? null : Math.round(a / lot), b == null ? null : Math.round(b / lot)) === false) return;
-    TOUR.saved++; next();
+    TOUR.saved++; TOUR.draft = null; next();
   };
   lo.addEventListener("keydown", e => { if (e.key === "Enter") { e.preventDefault(); if (hi.value) save(); else hi.focus(); } });
   hi.addEventListener("keydown", e => { if (e.key === "Enter") { e.preventDefault(); save(); } });
   const lots = h("span", { class: "seg", role: "group", "aria-label": "Taille du lot" }, [1, 10, 100, 1000].map(n =>
-    h("button", { type: "button", "aria-pressed": lot === n ? "true" : "false", onclick: () => { TOUR.lots[g] = n; saveTour(); render(); setTimeout(() => document.getElementById("tour-lo")?.focus(), 30); } }, "×" + n)));
+    h("button", { type: "button", "aria-pressed": lot === n ? "true" : "false", onclick: () => {
+      // Valeurs pré-remplies depuis ton relevé : on les recalcule pour le nouveau lot ; une saisie manuelle reste telle quelle
+      if (TOUR.draft && TOUR.draft.auto && mine) TOUR.draft = { id, lo: fmt.format(mine.lo * n), hi: fmt.format(mine.hi * n), auto: true };
+      TOUR.lots[g] = n; saveTour(); render(); setTimeout(() => document.getElementById("tour-lo")?.focus(), 30); } }, "×" + n)));
   const pct = Math.round(100 * TOUR.i / TOUR.ids.length);
   const prevGroup = TOUR.i > 0 && hdvOf(TOUR.ids[TOUR.i - 1]) !== g;
   const left = TOUR.ids.slice(TOUR.i + 1);
@@ -1613,7 +1638,7 @@ function tourRun() {
       h("div", { style: "display:grid;gap:4px;min-width:0" },
         h("h2", { text: item(id)[0] }),
         h("span", { class: "muted small", text: typeName(id) + " · niveau " + item(id)[1] + (r ? " · " + jobName(r[0]) : "") }),
-        h("span", { class: "chip kamas" }, o ? "Dernier relevé : " + range(o.lo, o.hi) + " ₭ · " + ago(o.d) : "Jamais relevé"))),
+        h("span", { class: "chip kamas" }, mine ? "Ton relevé du jour : " + range(mine.lo, mine.hi) + " ₭ (modifiable)" : o ? "Dernier relevé : " + range(o.lo, o.hi) + " ₭ · " + ago(o.d) : "Jamais relevé"))),
     h("div", { class: "row between" }, h("span", { class: "label", text: "Prix affichés pour un lot de" }), lots),
     h("div", { class: "tour-inputs" }, lo, hi),
     unit,
