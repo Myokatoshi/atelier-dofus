@@ -13,4 +13,4 @@
 - `supabase/migrations/NNN_nom.sql` : changements à appliquer à la base existante. Les appliquer soi-même avec `tools/sql.sh supabase/migrations/NNN_nom.sql` (l'environnement « atelier-dofus » fournit le jeton via le proxy), vérifier, puis reporter le changement dans `schema.sql`.
 - Migrations déjà appliquées : `002_journal.sql` (table `trades`).
 - Ajouter un membre : `python3 tools/add_member.py adresse@exemple.com [pseudo]` (crée le compte confirmé et affiche un mot de passe provisoire à transmettre).
-- Tables : `price_obs` (prix partagés, temps réel), `profiles` (pseudos), `user_state` (stock, plan, builds par membre), `trades` (journal personnel). RLS activé partout.
+- Tables : `price_obs` (prix partagés, temps réel), `profiles` (pseudos), `user_state` (stock, plan + réglages + alertes de prix dans `plan`, builds par membre), `trades` (journal personnel). RLS activé partout.

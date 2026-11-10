@@ -18,6 +18,7 @@ const S = {
   expand: {},                 // ingrédients que l'on fabrique soi-même dans le plan
   farm: {},                   // ressources que l'on farme au lieu de les acheter
   builds: [],                 // [{id, name, items:[ids], at}]
+  alerts: [],                 // [{id, kind:"buy"|"sell"|"craft", item, price, notified}]
   settings: { tax: 2, basis: "mid" },
 };
 
@@ -114,7 +115,7 @@ async function flush() {
     for (const key of [...pending]) {
       pending.delete(key);
       if (key === "state") {
-        const { error } = await SB.from("user_state").upsert({ user_id: ME, stock: S.stock, plan: { targets: S.targets, expand: S.expand, farm: S.farm, settings: S.settings }, builds: S.builds, updated_at: new Date().toISOString() });
+        const { error } = await SB.from("user_state").upsert({ user_id: ME, stock: S.stock, plan: { targets: S.targets, expand: S.expand, farm: S.farm, settings: S.settings, alerts: S.alerts }, builds: S.builds, updated_at: new Date().toISOString() });
         if (error) throw error;
       } else if (key.startsWith("s:")) {
         // Synchronise MES relevés d'un objet : ajoute/modifie, puis supprime les jours retirés
@@ -140,6 +141,7 @@ async function flush() {
 // Convertit les anciens formats (v1 : prix unique {p,t}) vers les fourchettes
 function fromAnyBackup(o) {
   const out = { stock: o.stock || {}, prices: {}, targets: (o.targets || []).map(t => ({ id: +t.id, qty: Math.max(1, +t.qty || 1) })), expand: o.expand || {}, farm: o.farm || {},
+    alerts: Array.isArray(o.alerts) ? o.alerts.filter(a => a && a.item && a.kind && a.price != null) : [],
     builds: Array.isArray(o.builds) ? o.builds.filter(b => b && Array.isArray(b.items)).map(b => ({ id: String(b.id || Math.random().toString(36).slice(2)), name: String(b.name || "Build"), items: b.items.map(Number), at: b.at || Date.now() })) : [],
     settings: { tax: 2, basis: "mid", ...(o.settings || {}) } };
   for (const [id, v] of Object.entries(o.prices || {})) {
@@ -181,7 +183,7 @@ async function startOnline(session) {
       const p = st.plan || {};
       S.stock = st.stock || {};
       S.targets = (p.targets || []).map(x => ({ id: +x.id, qty: +x.qty || 1 }));
-      S.expand = p.expand || {}; S.farm = p.farm || {};
+      S.expand = p.expand || {}; S.farm = p.farm || {}; S.alerts = Array.isArray(p.alerts) ? p.alerts : [];
       S.settings = { tax: 2, basis: "mid", ...(p.settings || {}) };
       S.builds = fromAnyBackup({ builds: st.builds || [] }).builds;
       lsSave();
@@ -513,10 +515,10 @@ function quickObs(id, after) {
   return h("span", { class: "row", style: "gap:6px" }, lo, hi, h("button", { type: "button", class: "btn sm", onclick: go }, "Ajouter"));
 }
 let toastT = null;
-function toast(msg, undo) {
+function toast(msg, undo, label = "Annuler") {
   document.querySelector(".toast")?.remove();
   const el = h("div", { class: "toast", role: "status" }, h("span", { text: msg }),
-    undo ? h("button", { type: "button", onclick: () => { undo(); el.remove(); } }, "Annuler") : null);
+    undo ? h("button", { type: "button", onclick: () => { undo(); el.remove(); } }, label) : null);
   document.body.append(el);
   clearTimeout(toastT); toastT = setTimeout(() => el.remove(), undo ? 7000 : 2600);
 }
@@ -666,6 +668,7 @@ async function renderSheet() {
   const actions = h("div", { class: "row" },
     r ? h("button", { type: "button", class: "btn primary", onclick: () => { addTarget(id); toast(it[0] + " ajouté au plan"); } }, "Ajouter au plan de craft") : null,
     h("button", { type: "button", class: "btn", onclick: () => { JF = { ...JF, kind: "vente", item: id }; sheet.close(); location.hash = "#journal"; } }, "J'ai vendu"),
+    h("button", { type: "button", class: "btn", onclick: () => { AF = { kind: "buy", item: id, price: "" }; sheet.close(); location.hash = "#alertes"; } }, "🔔 Alerte"),
     h("button", { type: "button", class: "btn", onclick: () => { JF = { ...JF, kind: "achat", item: id }; sheet.close(); location.hash = "#journal"; } }, "J'ai acheté"),
     h("label", { class: "row", style: "gap:6px" }, h("span", { class: "label", text: "En stock" }), numInput(S.stock[id] || "", v => setStock(id, v), { ph: "0", label: "Quantité en stock", noRender: true, sm: true })));
 
@@ -826,7 +829,11 @@ function viewAccueil() {
   const recent = [];
   if (SH) for (const [id, by] of Object.entries(RAW)) for (const [u, list] of Object.entries(by)) for (const o of (Array.isArray(list) ? list : [])) recent.push({ id: +id, u, o });
   recent.sort((a, b) => a.o.d < b.o.d ? 1 : a.o.d > b.o.d ? -1 : 0);
+  const fired = triggeredAlerts();
   return h("div", { class: "stack" },
+    fired.length ? h("section", { class: "panel alert-panel" },
+      h("div", { class: "row between" }, h("h2", { text: "🔔 " + fired.length + " alerte" + (fired.length > 1 ? "s" : "") + " déclenchée" + (fired.length > 1 ? "s" : "") }), h("a", { href: "#alertes", class: "small", text: "Toutes les alertes" })),
+      h("div", { style: "display:grid;gap:6px" }, fired.slice(0, 5).map(({ a, st }) => h("div", { class: "row between" }, itemLink(a.item, alertText(a, st), 28), h("span", { class: "verdict good", text: ALERT_KIND[a.kind][0] }))))) : null,
     h("div", { class: "tiles" },
       h("div", { class: "tile kamas" }, h("span", { class: "label", text: "Valeur du stock" }), h("span", { class: "v", text: kk(stockVal) }), h("span", { class: "small muted", text: Object.keys(S.stock).length + " objets, au prix moyen" })),
       h("div", { class: "tile" }, h("span", { class: "label", text: "Prix suivis" }), h("span", { class: "v", text: Object.keys(prices()).length }), h("span", { class: "small muted", text: Object.values(prices()).reduce((t, o) => t + o.reduce((u, x) => u + (x.n || 1), 0), 0) + " relevés" + (SH ? " du groupe" : "") })),
@@ -1146,7 +1153,7 @@ function viewEncyclopedie() {
 function viewSauvegarde() { return h("div", { class: "stack" }, accountPanel(), viewBackup()); }
 function viewBackup() {
   const ta = h("textarea", { id: "io", spellcheck: "false" });
-  ta.value = JSON.stringify({ app: "atelier-dofus3", version: 3, stock: S.stock, prices: prices(), targets: S.targets, expand: S.expand, farm: S.farm, builds: S.builds, settings: S.settings, journal: TR }, null, 1);
+  ta.value = JSON.stringify({ app: "atelier-dofus3", version: 3, stock: S.stock, prices: prices(), targets: S.targets, expand: S.expand, farm: S.farm, builds: S.builds, alerts: S.alerts, settings: S.settings, journal: TR }, null, 1);
   const msg = h("span", { class: "note" });
   return h("section", { class: "panel" },
     h("h2", { text: "Sauvegarde et import" }),
@@ -1877,6 +1884,123 @@ function viewMetiers() {
 }
 
 // =====================================================================
+// Alertes de prix : achat sous un seuil, vente au-dessus, craft rentable
+// =====================================================================
+const ALERT_KIND = {
+  buy: ["Acheter sous", "quand la moyenne basse passe sous"],
+  sell: ["Vendre au-dessus", "quand la moyenne haute dépasse"],
+  craft: ["Craft rentable", "quand la marge nette par craft atteint"],
+};
+// État d'une alerte d'après le dernier prix connu du groupe
+function alertState(a, C) {
+  const o = priceAt(a.item);
+  if (a.kind === "craft") {
+    if (!recipe(a.item)) return { ok: false, cur: null, o };
+    const m = netMargin((C || coster()).craft(a.item), o);
+    return { ok: m != null && m >= a.price, cur: m, o, key: m == null ? null : (o ? o.d : "") + ":" + Math.round(m) };
+  }
+  if (!o) return { ok: false, cur: null, o };
+  const cur = a.kind === "buy" ? o.lo : o.hi;
+  return { ok: a.kind === "buy" ? cur <= a.price : cur >= a.price, cur, o, key: o.d + ":" + Math.round(cur) };
+}
+function alertText(a, st) {
+  const nm = item(a.item)[0];
+  if (a.kind === "craft") return nm + " : marge de " + kk(st.cur) + " par craft (seuil " + kk(a.price) + ")";
+  return nm + (a.kind === "buy" ? " à " + kk(st.cur) + ", sous ton prix d'achat de " : " à " + kk(st.cur) + ", au-dessus de ton prix de vente de ") + kk(a.price);
+}
+// Vérifie les alertes ; prévient une seule fois par nouveau prix déclencheur
+let alertTimer = null;
+function checkAlertsSoon() { clearTimeout(alertTimer); alertTimer = setTimeout(checkAlerts, 300); }
+function checkAlerts() {
+  if (!S.alerts || !S.alerts.length || NEED_LOGIN) return;
+  const C = coster(); let changed = false; const msgs = [];
+  for (const a of S.alerts) {
+    const st = alertState(a, C);
+    if (st.ok && st.key && a.notified !== st.key) {
+      a.notified = st.key; changed = true;
+      const by = st.o && st.o.by && st.o.by.filter(u => u !== ME).map(whoName);
+      const msg = alertText(a, st) + (by && by.length ? " (relevé par " + by.join(", ") + ")" : "");
+      msgs.push(msg);
+      try { if ("Notification" in window && Notification.permission === "granted") navigator.serviceWorker?.ready.then(r => r.showNotification("Alerte de prix", { body: msg, icon: "icons/icon-192.png", tag: "alerte-" + a.id })).catch(() => new Notification("Alerte de prix", { body: msg })); } catch {}
+    }
+    if (!st.ok && a.notified) { a.notified = null; changed = true; }
+  }
+  if (msgs.length === 1) toast("🔔 " + msgs[0]);
+  else if (msgs.length > 1) toast("🔔 " + msgs.length + " alertes déclenchées : " + msgs.map(m => m.split(" : ")[0].split(" à ")[0]).join(", "), () => { location.hash = "#alertes"; }, "Voir");
+  if (changed) { persist("plan"); renderCounts(); }
+}
+const triggeredAlerts = () => { const C = coster(); return (S.alerts || []).map(a => ({ a, st: alertState(a, C) })).filter(x => x.st.ok); };
+
+let AF = { kind: "buy", item: null, price: "" };
+function viewAlertes() {
+  const C = coster();
+  const list = (S.alerts || []).map(a => ({ a, st: alertState(a, C) })).sort((x, y) => (y.st.ok - x.st.ok) || item(x.a.item)[0].localeCompare(item(y.a.item)[0], "fr"));
+  const fired = list.filter(x => x.st.ok);
+  // Valeur actuelle de l'objet choisi, pour proposer un seuil
+  let hint = null, ph = "ex. 1 200";
+  if (AF.item) {
+    const st = alertState({ kind: AF.kind, item: AF.item, price: 0 }, C);
+    if (AF.kind === "craft") { hint = !recipe(AF.item) ? "Cet objet ne se fabrique pas." : st.cur == null ? "Marge inconnue : il manque des prix." : "Marge actuelle : " + k(st.cur) + " k par craft"; ph = "ex. 5k"; }
+    else if (st.o) { hint = "Dernier relevé : " + range(st.o.lo, st.o.hi) + " k (" + ago(st.o.d) + ")"; ph = k(AF.kind === "buy" ? st.o.lo * .9 : st.o.hi * 1.1); }
+    else hint = "Pas encore de prix relevé pour cet objet.";
+  }
+  const priceIn = h("input", { class: "cell", id: "af-price", inputmode: "decimal", value: AF.price, placeholder: ph, "aria-label": "Seuil en kamas", style: "width:100%;text-align:left;font-size:1rem;padding:10px 12px;border-radius:12px" });
+  priceIn.addEventListener("input", () => { AF.price = priceIn.value; });
+  const create = () => {
+    const p = parseKamas(AF.price);
+    if (!AF.item) { toast("Choisis d'abord un objet"); document.getElementById("q-alert")?.focus(); return; }
+    if (AF.kind === "craft" && !recipe(AF.item)) { toast("Cet objet ne se fabrique pas"); return; }
+    if (p == null) { priceIn.focus(); toast("Indique un seuil en kamas"); return; }
+    S.alerts = [...(S.alerts || []), { id: uuid(), kind: AF.kind, item: AF.item, price: p, at: Date.now(), notified: null }];
+    persist("plan"); toast("Alerte créée : " + ALERT_KIND[AF.kind][0].toLowerCase() + " " + kk(p) + " pour " + item(AF.item)[0]);
+    AF = { ...AF, item: null, price: "" }; render(); checkAlertsSoon();
+  };
+  priceIn.addEventListener("keydown", e => { if (e.key === "Enter") create(); });
+  const notifState = "Notification" in window ? Notification.permission : "absent";
+  return h("div", { class: "stack" },
+    h("div", { class: "grid2" },
+      h("section", { class: "panel" },
+        h("div", { class: "row between" }, h("h2", { text: "Nouvelle alerte" }),
+          h("span", { class: "seg", role: "group", "aria-label": "Type d'alerte" }, Object.entries(ALERT_KIND).map(([v, [l]]) =>
+            h("button", { type: "button", "aria-pressed": AF.kind === v ? "true" : "false", onclick: () => { AF.kind = v; AF.price = ""; render(); } }, l)))),
+        h("p", { class: "note", text: "Préviens-moi " + ALERT_KIND[AF.kind][1] + " ce seuil. Les alertes utilisent les prix relevés par tout le groupe." }),
+        AF.item ? h("div", { class: "row between jf-item" }, itemLink(AF.item, typeName(AF.item), 40), h("button", { type: "button", class: "btn sm", onclick: () => { AF.item = null; render(); } }, "Changer")) :
+          searchBox(AF.kind === "craft" ? "Quel objet veux-tu crafter ?" : "Quel objet surveiller ?", { craftOnly: AF.kind === "craft" }, id => { AF.item = id; render(); setTimeout(() => document.getElementById("af-price")?.focus(), 30); }, "q-alert"),
+        h("label", { class: "jf-field" }, h("span", { text: AF.kind === "craft" ? "Marge minimale par craft (kamas)" : "Prix à l'unité (kamas)" }), priceIn, hint ? h("small", { class: "jf-unit", text: hint }) : null),
+        h("button", { type: "button", class: "btn primary big", onclick: create }, "Créer l'alerte")),
+      h("section", { class: "panel" },
+        h("h2", { text: "Notifications" }),
+        h("p", { class: "muted", text: "Quand une alerte se déclenche, l'appli affiche un message. Tu peux aussi recevoir une notification de ton téléphone ou de ton PC, tant que l'appli est ouverte (même en arrière-plan)." }),
+        notifState === "granted" ? h("span", { class: "verdict good", text: "Notifications activées sur cet appareil" }) :
+        notifState === "denied" ? h("p", { class: "note", text: "Les notifications sont bloquées pour ce site : réautorise-les dans les réglages du navigateur." }) :
+        notifState === "absent" ? h("p", { class: "note", text: "Ce navigateur ne gère pas les notifications. Sur iPhone, installe d'abord l'appli sur l'écran d'accueil." }) :
+        h("button", { type: "button", class: "btn primary", onclick: () => Notification.requestPermission().then(() => render()) }, "Activer les notifications"),
+        h("div", { class: "tiles", style: "grid-template-columns:repeat(2,minmax(0,1fr))" },
+          h("div", { class: "tile" }, h("span", { class: "label", text: "Alertes" }), h("span", { class: "v", text: list.length })),
+          h("div", { class: "tile kamas" }, h("span", { class: "label", text: "Déclenchées" }), h("span", { class: "v", text: fired.length }))))),
+    h("section", { class: "panel" },
+      h("h2", { text: "Mes alertes" }),
+      list.length ? h("div", { class: "tablewrap" }, h("table", {},
+        h("thead", {}, h("tr", {}, h("th", { text: "Objet" }), h("th", { text: "Condition" }), h("th", { class: "n", text: "Actuel" }), h("th", { text: "État" }), h("th", {}))),
+        h("tbody", {}, list.map(({ a, st }) => {
+          // Variation de prix qu'il reste pour atteindre le seuil
+          const gap = st.cur != null && st.cur > 0 && a.kind !== "craft" ? Math.round((a.price - st.cur) / st.cur * 100) : null;
+          const act = !st.ok ? null : a.kind === "craft"
+            ? h("button", { type: "button", class: "btn sm", onclick: () => { addTarget(a.item); toast(item(a.item)[0] + " ajouté au plan"); } }, "+ Plan")
+            : h("button", { type: "button", class: "btn sm", onclick: () => { JF = { ...JF, kind: a.kind === "buy" ? "achat" : "vente", item: a.item }; location.hash = "#journal"; } }, a.kind === "buy" ? "J'ai acheté" : "J'ai vendu");
+          return h("tr", {},
+            h("td", {}, itemLink(a.item, typeName(a.item), 28)),
+            h("td", { class: "small", text: ALERT_KIND[a.kind][0] + " " + kk(a.price) }),
+            h("td", { class: "n", text: st.cur == null ? "—" : kk(st.cur) }),
+            h("td", {}, st.ok ? h("span", { class: "verdict good", text: "Déclenchée" + (st.o ? " · " + ago(st.o.d) : "") }) :
+              h("span", { class: "verdict none", text: st.cur == null ? "Pas de prix" : gap != null ? "Il manque " + (gap > 0 ? "+" : "") + gap + " %" : "En attente" })),
+            h("td", {}, h("div", { class: "row", style: "gap:6px;flex-wrap:nowrap" }, act,
+              h("button", { type: "button", class: "x", "aria-label": "Supprimer l'alerte", onclick: () => { const old = S.alerts; S.alerts = S.alerts.filter(x => x.id !== a.id); persist("plan"); render(); toast("Alerte supprimée", () => { S.alerts = old; persist("plan"); render(); }); } }, "×"))));
+        })))) :
+        h("div", { class: "empty" }, h("strong", { text: "Aucune alerte" }), h("span", { text: "Crée une alerte ci-dessus, ou depuis la fiche d'un objet avec le bouton « Alerte »." }))));
+}
+
+// =====================================================================
 // Habillage : icônes, onglets, bandeaux de section
 // =====================================================================
 const IC = {
@@ -1889,6 +2013,7 @@ const IC = {
   bag: "M6 9a6 6 0 0 1 12 0v11H6z M9 9V6a3 3 0 0 1 6 0v3 M6 14h12",
   book: "M4 5a2 2 0 0 1 2-2h13v16H6a2 2 0 0 0-2 2z M4 21V5 M8 7h7 M8 11h5",
   save: "M12 3v12 M7 10l5 5 5-5 M4 17v3h16v-3",
+  bell: "M6 16v-5a6 6 0 1 1 12 0v5l2 2H4z M10 21a2 2 0 0 0 4 0",
   user: "M12 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8z M4 21a8 8 0 0 1 16 0",
   up: "M12 20V5 M6 11l6-6 6 6 M5 20h14",
   ledger: "M6 3h12v18l-3-2-3 2-3-2-3 2z M9 8h6 M9 12h6 M9 16h3",
@@ -1898,13 +2023,13 @@ const IC = {
 const svgI = name => { const el = s("svg", { class: "i", viewBox: "0 0 24 24", "aria-hidden": "true" }); for (const d of IC[name].split(" M")) el.append(s("path", { d: d.startsWith("M") ? d : "M" + d })); return el; };
 const TABS = [
   ["accueil", "Accueil", "home", "--c-home"], ["plan", "Plan de craft", "hammer", "--c-craft", "c-plan"], ["rentabilite", "Rentabilité", "trend", "--c-gold"],
-  ["prix", "Prix HDV", "coins", "--c-gold", "c-prix"], ["tournee", "Tournée HDV", "route", "--c-gold", "c-tour"], ["journal", "Journal", "ledger", "--c-journal"], ["farm", "Farm", "leaf", "--c-farm"], ["metiers", "Métiers", "up", "--c-craft"], ["builds", "Builds", "shield", "--c-build", "c-builds"],
+  ["prix", "Prix HDV", "coins", "--c-gold", "c-prix"], ["tournee", "Tournée HDV", "route", "--c-gold", "c-tour"], ["journal", "Journal", "ledger", "--c-journal"], ["alertes", "Alertes", "bell", "--c-gold", "c-alert"], ["farm", "Farm", "leaf", "--c-farm"], ["metiers", "Métiers", "up", "--c-craft"], ["builds", "Builds", "shield", "--c-build", "c-builds"],
   ["stock", "Inventaire", "bag", "--c-stock", "c-stock"], ["encyclopedie", "Encyclopédie", "book", "--c-ency"], ["compte", "Compte", "user", "--c-save"],
 ];
 // Sections regroupées : menu latéral (bureau), barre du bas + sous-onglets (téléphone)
 const GROUPS = [
   ["accueil", "Accueil", "home", "--c-home", ["accueil"]],
-  ["marche", "Marché", "coins", "--c-gold", ["prix", "tournee", "rentabilite", "journal"]],
+  ["marche", "Marché", "coins", "--c-gold", ["prix", "tournee", "rentabilite", "journal", "alertes"]],
   ["production", "Production", "hammer", "--c-craft", ["plan", "metiers", "farm", "stock"]],
   ["equipement", "Équipement", "shield", "--c-build", ["builds", "encyclopedie"]],
   ["compte", "Compte", "user", "--c-save", ["compte"]],
@@ -1971,6 +2096,7 @@ function heroFor(v) {
     stock: ["Inventaire", "Ce que tu as sous la main, valorisé au prix du groupe.", "bag", Object.keys(S.stock).map(Number)],
     encyclopedie: ["Encyclopédie", fmt.format(INDEX.length) + " objets, " + fmt.format(Object.keys(D.recipes).length) + " recettes, effets, drops et panoplies.", "book", []],
     tournee: ["Tournée HDV", TOUR && TOUR.i < TOUR.ids.length ? "Objet " + (TOUR.i + 1) + " sur " + TOUR.ids.length + " · HDV " + hdvName(hdvOf(TOUR.ids[TOUR.i])) : "Relève à la chaîne les prix qui manquent, rangés par hôtel des ventes.", "route", TOUR && TOUR.i < TOUR.ids.length ? TOUR.ids.slice(TOUR.i, TOUR.i + 8) : tourCandidates().ids],
+    alertes: ["Alertes de prix", "Sois prévenu quand un objet passe sous ton prix d'achat, dépasse ton prix de vente, ou quand un craft devient rentable.", "bell", (S.alerts || []).map(a => a.item)],
     metiers: ["Métiers", "Les recettes à ta portée, leur coût, et le craft le plus rentable pour monter.", "up", Object.entries(D.recipes).filter(([, r]) => r[0] === (+S.settings.job || r[0])).map(([id]) => +id).filter(id => item(id)[1] <= (S.settings.jobs?.[S.settings.job] ?? 200)).sort((a, b) => item(b)[1] - item(a)[1]).slice(0, 8)],
     journal: ["Journal de ventes", "Tes achats et ventes réels, et ce qu'ils t'ont vraiment rapporté.", "ledger", [...new Set(TR.slice().reverse().map(t => t.item_id))]],
     compte: ["Compte", "Ton pseudo, ton mot de passe et la sauvegarde de tes données.", "user", []],
@@ -1991,7 +2117,7 @@ function decorate(root, v) {
 // =====================================================================
 // Rendu et navigation
 // =====================================================================
-const VIEWS = { metiers: viewMetiers, journal: viewJournal, tournee: viewTournee, farm: viewFarm, builds: viewBuilds, accueil: viewAccueil, plan: viewPlan, rentabilite: viewRentabilite, prix: viewPrix, stock: viewStock, encyclopedie: viewEncyclopedie, compte: viewSauvegarde };
+const VIEWS = { alertes: viewAlertes, metiers: viewMetiers, journal: viewJournal, tournee: viewTournee, farm: viewFarm, builds: viewBuilds, accueil: viewAccueil, plan: viewPlan, rentabilite: viewRentabilite, prix: viewPrix, stock: viewStock, encyclopedie: viewEncyclopedie, compte: viewSauvegarde };
 function renderCounts() {
   const set = (id, n) => { const el = document.getElementById(id); if (el) { el.textContent = n; el.dataset.z = n ? "0" : "1"; } };
   set("c-plan", S.targets.length);
@@ -2000,7 +2126,9 @@ function renderCounts() {
   set("c-builds", S.builds.length);
   const tour = TOUR && TOUR.i < TOUR.ids.length ? TOUR.ids.length - TOUR.i : tourCandidates().ids.length;
   set("c-tour", tour);
-  const dot = document.getElementById("dot-marche"); if (dot) { dot.textContent = tour > 99 ? "99+" : tour; dot.hidden = !tour; }
+  const fired = triggeredAlerts().length;
+  set("c-alert", fired);
+  const dot = document.getElementById("dot-marche"); if (dot) { const n = fired || tour; dot.textContent = fired ? "🔔" + fired : (tour > 99 ? "99+" : tour); dot.hidden = !n; }
 }
 function render() {
   if (!D) return;
@@ -2019,6 +2147,7 @@ function render() {
   renderCounts();
   if (focusId && /^(q-|enc-)/.test(focusId)) { const el = document.getElementById(focusId); if (el) { el.focus(); try { if (caret != null) el.setSelectionRange(caret, caret); } catch {} } }
   if (sheet.open) renderSheet();
+  checkAlertsSoon();
 }
 function route() { let v = location.hash.slice(1); if (v === "sauvegarde") v = "compte"; view = VIEWS[v] ? v : "accueil"; render(); window.scrollTo(0, 0); }
 window.addEventListener("hashchange", route);

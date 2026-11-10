@@ -42,7 +42,7 @@ img { max-width: 100%; }
 /* Couleur de la section courante */
 [data-sec] { --sec: var(--c-home); }
 [data-sec="accueil"] { --sec: var(--c-home); } [data-sec="plan"] { --sec: var(--c-craft); }
-[data-sec="rentabilite"] { --sec: var(--c-gold); } [data-sec="tournee"] { --sec: var(--c-gold); } [data-sec="journal"] { --sec: var(--c-journal); } [data-sec="metiers"] { --sec: var(--c-craft); } [data-sec="prix"] { --sec: var(--c-gold); }
+[data-sec="rentabilite"] { --sec: var(--c-gold); } [data-sec="tournee"] { --sec: var(--c-gold); } [data-sec="journal"] { --sec: var(--c-journal); } [data-sec="metiers"] { --sec: var(--c-craft); } [data-sec="alertes"] { --sec: var(--c-gold); } [data-sec="prix"] { --sec: var(--c-gold); }
 [data-sec="farm"] { --sec: var(--c-farm); } [data-sec="builds"] { --sec: var(--c-build); }
 [data-sec="stock"] { --sec: var(--c-stock); } [data-sec="encyclopedie"] { --sec: var(--c-ency); }
 [data-sec="compte"] { --sec: var(--c-save); } [data-sec="alm"] { --sec: var(--c-alm); }
@@ -411,3 +411,10 @@ footer.note { text-align: center; padding-top: 8px; }
   .appbar .save { flex: 0 1 auto; min-width: 0; max-width: none; }
 }
 @media (max-width: 380px) { .brand-m b { font-size: 1.05rem; } }
+
+/* Alertes */
+.alert-panel { border-color: color-mix(in srgb, var(--good) 45%, var(--line)); background: radial-gradient(90% 120% at 0% 0%, var(--good-soft) 0%, var(--surface) 60%); }
+.bottom .dot:not(:empty) { white-space: nowrap; }
+.save-side { flex: none; }
+.sidenav { flex: none; }
+@media (max-width: 979px) { .toast { width: calc(100% - 32px); max-width: 520px; justify-content: space-between; } }
