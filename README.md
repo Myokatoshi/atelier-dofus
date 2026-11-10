@@ -19,10 +19,9 @@ Application de fans, sans lien avec Ankama. Données du jeu extraites par le pro
 
 1. Crée un compte sur [supabase.com](https://supabase.com), puis **New project** (région Europe, mot de passe au choix).
 2. **SQL Editor** > **New query** : colle le contenu de [`supabase/schema.sql`](supabase/schema.sql), puis **Run**.
-3. **Authentication** > **Sign In / Providers** > **Email** : désactive **Allow new users to sign up**. Seules les personnes que tu invites pourront entrer.
-4. **Authentication** > **Emails** > modèle **Magic Link** : ajoute la ligne `Ton code de connexion : {{ .Token }}`. Le code permet de se connecter depuis l'appli installée.
-5. **Authentication** > **URL Configuration** : mets `https://myokatoshi.github.io/atelier-dofus/` dans **Site URL** et **Redirect URLs**.
-6. **Project Settings** > **API** : copie **Project URL** et la clé **anon public** dans [`config.js`](config.js).
+3. **Authentication** > **Sign In / Providers** > **Email** : désactive **Allow new users to sign up**. Seules les personnes que tu ajoutes pourront entrer.
+4. **Authentication** > **URL Configuration** : mets `https://myokatoshi.github.io/atelier-dofus/` dans **Site URL**.
+5. **Project Settings** > **API** : copie **Project URL** et la clé **anon public** dans [`config.js`](config.js).
 
 La clé `anon` est publique par conception : la sécurité repose sur les règles du fichier `schema.sql` (seuls les membres connectés lisent les prix, chacun ne modifie que ses relevés et ses propres données).
 
@@ -31,17 +30,19 @@ La clé `anon` est publique par conception : la sécurité repose sur les règle
 L'appli est publiée sur **https://myokatoshi.github.io/atelier-dofus/** depuis la branche `gh-pages`.
 Chaque push sur `main` est recopié automatiquement sur `gh-pages` par [`.github/workflows/pages.yml`](.github/workflows/pages.yml) ; la mise en ligne prend une à deux minutes.
 
-### 3. Inviter le groupe
+### 3. Ajouter les membres du groupe
 
-Supabase > **Authentication** > **Users** > **Invite user** : saisis l'e-mail de chaque ami.
+Supabase > **Authentication** > **Users** > **Add user** > **Create new user** : saisis l'e-mail et un mot de passe provisoire, coche **Auto Confirm User**, puis transmets ces identifiants à ton ami. Il pourra changer son mot de passe dans l'onglet **Sauvegarde**.
+
+Mot de passe oublié : dans la même page, ouvre le membre puis change son mot de passe.
 
 ## Utilisation (chaque membre)
 
-1. Ouvre l'adresse de l'appli, saisis ton e-mail, puis le code reçu.
+1. Ouvre l'adresse de l'appli et connecte-toi avec ton e-mail et ton mot de passe.
 2. Installe l'appli :
    - **Android / PC (Chrome, Edge)** : bouton **Installer** dans la barre d'adresse ou le menu ;
    - **iPhone (Safari)** : bouton **Partager** > **Sur l'écran d'accueil**.
-3. Choisis ton pseudo dans l'onglet **Sauvegarde**.
+3. Choisis ton pseudo et change ton mot de passe dans l'onglet **Sauvegarde**.
 
 Pour reprendre tes données de la version Claude : onglet **Sauvegarde** de l'ancienne version > **Copier**, puis **Importer** ici. Les prix importés se partagent ensuite avec le bouton de l'onglet **Prix HDV**.
 

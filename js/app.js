@@ -245,43 +245,44 @@ async function setPseudo(v) {
   if (error) { toast("Ce pseudo n'a pas pu être enregistré"); return; }
   NAMES[ME] = v; toast("Pseudo enregistré"); render();
 }
-// Écran de connexion : code reçu par e-mail (fonctionne aussi dans l'appli installée)
-let loginStep = { email: "", sent: false, msg: "" };
+// Écran de connexion : e-mail + mot de passe (comptes créés par l'administrateur du groupe)
+let loginMsg = "";
 function viewLogin() {
-  const email = h("input", { type: "text", inputmode: "email", autocomplete: "email", id: "login-email", placeholder: "ton.adresse@mail.com", value: loginStep.email, style: "width:100%" });
-  const code = h("input", { type: "text", inputmode: "numeric", autocomplete: "one-time-code", id: "login-code", placeholder: "Code à 6 chiffres", style: "width:100%;letter-spacing:.3em;font-family:var(--f-data)" });
-  const send = async () => {
-    loginStep.email = email.value.trim();
-    if (!/^\S+@\S+\.\S+$/.test(loginStep.email)) { loginStep.msg = "Adresse e-mail invalide."; render(); return; }
-    loginStep.msg = "Envoi…"; render();
-    const { error } = await SB.auth.signInWithOtp({ email: loginStep.email, options: { shouldCreateUser: false, emailRedirectTo: location.origin + location.pathname } });
-    loginStep = { ...loginStep, sent: !error, msg: error ? (/not allowed|signups|not found/i.test(error.message) ? "Cette adresse n'est pas invitée dans le groupe. Demande à l'administrateur de t'inviter." : "Envoi impossible : " + error.message) : "" };
-    render();
+  const email = h("input", { type: "text", inputmode: "email", autocomplete: "username", id: "login-email", placeholder: "ton.adresse@mail.com", style: "width:100%" });
+  const pass = h("input", { type: "password", autocomplete: "current-password", id: "login-pass", placeholder: "Mot de passe", style: "width:100%;font:600 1rem var(--f-body);padding:10px 13px;border:1.5px solid var(--line);border-radius:12px;background:var(--bg);color:var(--fg)" });
+  const go = async () => {
+    const e = email.value.trim(), p = pass.value;
+    if (!e || !p) { loginMsg = "Saisis ton adresse e-mail et ton mot de passe."; render(); return; }
+    btn.disabled = true; btn.textContent = "Connexion…";
+    const { error } = await SB.auth.signInWithPassword({ email: e, password: p });
+    if (error) { loginMsg = /invalid/i.test(error.message) ? "Adresse ou mot de passe incorrect." : "Connexion impossible : " + error.message; render(); }
   };
-  const verify = async () => {
-    const { error } = await SB.auth.verifyOtp({ email: loginStep.email, token: code.value.trim(), type: "email" });
-    if (error) { loginStep.msg = "Code incorrect ou expiré."; render(); }
-  };
-  email.addEventListener("keydown", e => { if (e.key === "Enter") send(); });
-  code.addEventListener("keydown", e => { if (e.key === "Enter") verify(); });
+  const btn = h("button", { type: "button", class: "btn primary", onclick: go }, "Se connecter");
+  [email, pass].forEach(x => x.addEventListener("keydown", ev => { if (ev.key === "Enter") go(); }));
   return h("section", { class: "panel", style: "max-width:460px;margin:24px auto;width:100%" },
     h("h2", { text: "Connexion" }),
-    h("p", { class: "muted", text: loginStep.sent ? "Un e-mail vient de partir vers " + loginStep.email + ". Saisis le code qu'il contient, ou clique sur le lien depuis cet appareil." : "L'Atelier est réservé au groupe. Saisis l'adresse e-mail avec laquelle tu as été invité : tu recevras un code de connexion." }),
-    loginStep.sent ? code : email,
-    h("div", { class: "row" },
-      loginStep.sent ? h("button", { type: "button", class: "btn primary", onclick: verify }, "Se connecter") : h("button", { type: "button", class: "btn primary", onclick: send }, "Recevoir mon code"),
-      loginStep.sent ? h("button", { type: "button", class: "btn", onclick: () => { loginStep = { email: loginStep.email, sent: false, msg: "" }; render(); } }, "Changer d'adresse") : null),
-    loginStep.msg ? h("p", { class: "neg small", text: loginStep.msg }) : null);
+    h("p", { class: "muted", text: "L'Atelier est réservé au groupe. Connecte-toi avec l'adresse e-mail et le mot de passe que l'administrateur t'a donnés." }),
+    email, pass, h("div", { class: "row" }, btn),
+    loginMsg ? h("p", { class: "neg small", text: loginMsg }) : null,
+    h("p", { class: "note", text: "Mot de passe oublié : demande à l'administrateur du groupe de le réinitialiser." }));
 }
 function accountPanel() {
   if (!SB) return h("section", { class: "panel" }, h("h2", { text: "Compte" }), h("p", { class: "muted", text: "Mode local : aucun serveur n'est configuré (fichier config.js). Tes données restent dans ce navigateur." }));
   if (!ME) return null;
   const ps = h("input", { type: "text", id: "pseudo", value: NAMES[ME] || "", placeholder: "Ton pseudo en jeu", maxlength: 30 });
+  const np = h("input", { type: "password", id: "new-pass", autocomplete: "new-password", placeholder: "Nouveau mot de passe (8 caractères min.)", style: "font:600 1rem var(--f-body);padding:10px 13px;border:1.5px solid var(--line);border-radius:12px;background:var(--bg);color:var(--fg);min-width:0;flex:1 1 220px" });
+  const changePass = async () => {
+    if (np.value.length < 8) { toast("Le mot de passe doit faire au moins 8 caractères"); return; }
+    const { error } = await SB.auth.updateUser({ password: np.value });
+    np.value = "";
+    toast(error ? "Le mot de passe n'a pas pu être changé" : "Mot de passe changé");
+  };
   return h("section", { class: "panel" },
     h("h2", { text: "Compte" }),
     h("p", { class: "muted", text: "Connecté avec " + EMAIL + ". Ton pseudo s'affiche à côté de tes relevés de prix." }),
-    h("div", { class: "row" }, ps, h("button", { type: "button", class: "btn primary", onclick: () => setPseudo(ps.value) }, "Enregistrer le pseudo"),
-      h("button", { type: "button", class: "btn", onclick: () => SB.auth.signOut() }, "Se déconnecter")));
+    h("div", { class: "row" }, ps, h("button", { type: "button", class: "btn primary", onclick: () => setPseudo(ps.value) }, "Enregistrer le pseudo")),
+    h("div", { class: "row" }, np, h("button", { type: "button", class: "btn", onclick: changePass }, "Changer mon mot de passe")),
+    h("div", { class: "row" }, h("button", { type: "button", class: "btn", onclick: () => SB.auth.signOut() }, "Se déconnecter")));
 }
 
 // =====================================================================
