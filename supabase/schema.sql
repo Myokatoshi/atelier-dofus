@@ -64,7 +64,7 @@ do $$ begin
   alter publication supabase_realtime add table public.price_obs;
 exception when duplicate_object then null; end $$;
 
--- Journal de ventes (identique à supabase/journal.sql)
+-- Journal de ventes (identique à supabase/migrations/002_journal.sql)
 create table if not exists public.trades (
   id uuid primary key default gen_random_uuid(),
   user_id uuid not null default auth.uid() references auth.users(id) on delete cascade,

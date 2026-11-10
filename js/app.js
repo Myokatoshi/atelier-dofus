@@ -1779,7 +1779,7 @@ function viewJournal() {
   const hist = TR.slice().reverse().filter(t => !JF.q || norm(item(t.item_id)[0]).includes(norm(JF.q))).slice(0, 60);
   return h("div", { class: "stack" },
     TR_ERR ? h("section", { class: "panel" }, h("h2", { text: "Une mise à jour du serveur est nécessaire" }),
-      h("p", { class: "muted", text: "Le journal a besoin d'une nouvelle table. L'administrateur du groupe doit exécuter une fois le fichier supabase/journal.sql dans Supabase (SQL Editor > New query > Run). En attendant, tes opérations restent sur cet appareil." })) : null,
+      h("p", { class: "muted", text: "Le journal n'est pas encore disponible sur le serveur. En attendant, tes opérations restent sur cet appareil." })) : null,
     h("div", { class: "grid2" },
       journalForm(),
       h("div", { class: "stack" },

@@ -29,7 +29,7 @@ La clé `anon` est publique par conception : la sécurité repose sur les règle
 
 Quand une nouvelle fonction a besoin d'une table, son fichier SQL est à exécuter une fois (SQL Editor > New query > Run) :
 
-- [`supabase/journal.sql`](supabase/journal.sql) : journal de ventes.
+- [`supabase/migrations/002_journal.sql`](supabase/migrations/002_journal.sql) : journal de ventes (déjà appliqué).
 
 `schema.sql` contient toujours l'ensemble, pour une installation neuve.
 
