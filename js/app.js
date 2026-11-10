@@ -1186,7 +1186,11 @@ function sourcesOf(id) {
   const hv = F.harvest[id], dr = (F.drops[id] || []).filter(d => F.mons[d[0]]);
   return { hv, dr };
 }
-function sourcesEl(id, full) {
+// Chance de drop effective avec la prospection : taux × PP / 100, plafonnée à 100 %
+const ppOf = () => Math.max(1, +S.settings.pp || 100);
+const dropChance = pct => Math.min(1, pct / 100 * ppOf() / 100);
+const killsFor = (qty, pct) => Math.ceil(qty / Math.max(dropChance(pct), 1e-6));
+function sourcesEl(id, full, qty) {
   const src = sourcesOf(id); if (!src) return null;
   const { hv, dr } = src;
   if (!hv && !dr.length) return full ? h("p", { class: "muted", text: recipe(id) ? "Cet objet se fabrique : il ne se récolte pas et n'est lâché par aucun monstre." : "Aucun monstre ne lâche cet objet et il ne se récolte pas (quête, boutique ou échange)." }) : h("span", { class: "muted small", text: recipe(id) ? "se fabrique" : "ni drop ni récolte" });
@@ -1198,7 +1202,7 @@ function sourcesEl(id, full) {
     parts.push(h("div", { style: "display:grid;gap:4px" },
       h("span", { class: "label", text: "Lâché par " + dr.length + " monstre" + (dr.length > 1 ? "s" : "") }),
       h("div", { class: "tablewrap" }, h("table", {},
-        h("thead", {}, h("tr", {}, h("th", { text: "Monstre" }), h("th", { class: "n", text: "Niveau" }), h("th", { class: "n", text: "Taux" }), h("th", { text: "Où" }))),
+        h("thead", {}, h("tr", {}, h("th", { text: "Monstre" }), h("th", { class: "n", text: "Niveau" }), h("th", { class: "n", text: "Taux" }), h("th", { class: "n", text: "Avec " + ppOf() + " PP" }), h("th", { text: "Où" }))),
         h("tbody", {}, dr.map(([mid, a, b]) => {
           const m = F.mons[mid];
           const where = m[3].slice(0, 4).map(subLabel).join(", ") + (m[3].length > 4 ? " +" + (m[3].length - 4) : "");
@@ -1206,6 +1210,7 @@ function sourcesEl(id, full) {
             h("td", {}, h("span", { class: "nm", text: m[0] }), m[4] ? h("span", { class: "chip warn", style: "margin-left:6px", text: "Boss · " + djName(m[4]) }) : null),
             h("td", { class: "n", text: m[1] === m[2] ? m[1] : m[1] + "–" + m[2] }),
             h("td", { class: "n", text: pctTxt(a, b) }),
+            h("td", { class: "n", text: pctTxt(dropChance((a + b) / 2) * 100, dropChance((a + b) / 2) * 100) }),
             h("td", { class: "small", text: where || "—" }));
         }))))));
   } else if (dr.length) {
@@ -1214,6 +1219,12 @@ function sourcesEl(id, full) {
       return m[0] + " (niv. " + m[1] + (m[2] !== m[1] ? "–" + m[2] : "") + ", " + pctTxt(a, b) + (m[4] ? ", boss " + djName(m[4]) : "") + ")";
     });
     parts.push(h("span", { class: "small", text: "Drop : " + bits.join(", ") + (dr.length > 3 ? " + " + (dr.length - 3) + " autres" : "") }));
+    if (qty) {
+      // Le monstre le plus « rentable » : le moins de combats pour la quantité voulue
+      const [mid, a, b] = dr.slice().sort((x, y) => (y[1] + y[2]) - (x[1] + x[2]))[0];
+      const n = killsFor(qty, (a + b) / 2);
+      parts.push(h("span", { class: "chip kamas", text: "≈ " + fmt.format(n) + " " + F.mons[mid][0] + " à vaincre pour " + fmt.format(qty) + " (avec " + ppOf() + " PP)" }));
+    }
   }
   return h("div", { style: "display:grid;gap:8px" }, parts);
 }
@@ -1248,7 +1259,8 @@ function viewFarm() {
   for (const r of farmed) for (const [mid, , pb] of (sourcesOf(r.id)?.dr || [])) { const m = F.mons[mid]; if (m[4] && pb >= 1) { if (!djs.has(m[4])) djs.set(m[4], new Set()); djs.get(m[4]).add(r.id); } }
   return h("div", { class: "stack" },
     h("section", { class: "panel" },
-      h("div", { class: "row between" }, h("h2", { text: "Liste de farm" }), h("div", { class: "row", style: "gap:8px" }, h("span", { class: "label", text: "Pour" }), srcSel)),
+      h("div", { class: "row between" }, h("h2", { text: "Liste de farm" }), h("div", { class: "row", style: "gap:8px" }, h("span", { class: "label", text: "Pour" }), srcSel,
+        h("span", { class: "label", text: "Ta prospection" }), numInput(S.settings.pp || 100, v => { const n = Math.round(+String(v).replace(/\s/g, "")); S.settings.pp = n > 0 ? Math.min(1000, n) : 100; persist("plan"); }, { sm: true, label: "Prospection", id: "farm-pp" }))),
       h("p", { class: "note", text: "Les ressources qu'il te manque (après ton stock), avec pour chacune où la récolter ou quel monstre la lâche. Choisis ce que tu farmes : le reste part dans la liste de courses du plan." }),
       h("div", { class: "tiles" },
         h("div", { class: "tile" }, h("span", { class: "label", text: "À farmer" }), h("span", { class: "v", text: farmed.length }), h("span", { class: "small muted", text: k(farmed.reduce((t, r) => t + r.buy, 0)) + " unités" })),
@@ -1263,7 +1275,7 @@ function viewFarm() {
           h("div", { class: "head" }, itemLink(r.id, "×" + k(r.buy) + " · " + (r.o ? range(r.o.lo, r.o.hi) + " k/u" : "prix inconnu"), 32),
             h("span", { class: "seg", role: "group", "aria-label": "Choix" }, [[false, "Acheter"], [true, "Farmer"]].map(([v, l]) =>
               h("button", { type: "button", "aria-pressed": !!r.farm === v ? "true" : "false", onclick: () => { if (v) S.farm[r.id] = true; else delete S.farm[r.id]; persist("plan"); render(); } }, l)))),
-          sourcesEl(r.id, false))))),
+          sourcesEl(r.id, false, r.buy))))),
       h("div", { class: "stack" },
         h("section", { class: "panel" }, h("h2", { text: "Où farmer" }),
           zones.length ? h("div", { style: "display:grid;gap:10px" }, zones.map(z => { const sb = F.subs[z.sid]; return h("div", { class: "target" },
@@ -1812,6 +1824,59 @@ function viewJournal() {
 }
 
 // =====================================================================
+// Métiers : recettes accessibles, coût par craft et coût par XP
+// =====================================================================
+let metierF = { sort: "lvl", all: false };
+function viewMetiers() {
+  const jobs = [...new Set(Object.values(D.recipes).map(r => r[0]))].sort((a, b) => jobName(a).localeCompare(jobName(b), "fr"));
+  const job = S.settings.job && jobs.includes(+S.settings.job) ? +S.settings.job : jobs[0];
+  const lv = S.settings.jobs?.[job] ?? 1;
+  const xp = S.settings.xp || {};
+  const sel = h("select", { id: "metier-job", "aria-label": "Métier" }, jobs.map(j => h("option", { value: j, selected: j === job }, jobName(j))));
+  sel.addEventListener("change", () => { S.settings.job = +sel.value; persist("plan"); render(); });
+  const lvIn = numInput(lv, v => { const n = Math.max(1, Math.min(200, Math.round(+v) || 1)); S.settings.jobs = { ...(S.settings.jobs || {}), [job]: n }; persist("plan"); }, { sm: true, label: "Niveau du métier", id: "metier-lv" });
+  const C = coster();
+  let rows = Object.entries(D.recipes).filter(([id, r]) => r[0] === job && item(+id)[1] <= lv).map(([id]) => {
+    id = +id; const c = C.craft(id), mid = c.missing ? null : (c.lo + c.hi) / 2, x = +xp[id] || null;
+    return { id, lvl: item(id)[1], c, mid, x, perK: mid != null && x ? mid / x * 1000 : null };
+  });
+  const total = rows.length;
+  if (!metierF.all) rows = rows.filter(r => r.lvl >= lv - 30);
+  const by = { lvl: (a, b) => b.lvl - a.lvl || (a.mid ?? 1e15) - (b.mid ?? 1e15), cost: (a, b) => (a.mid ?? 1e15) - (b.mid ?? 1e15), xp: (a, b) => (a.perK ?? 1e15) - (b.perK ?? 1e15) || b.lvl - a.lvl };
+  rows.sort(by[metierF.sort]);
+  const best = rows.filter(r => r.perK != null).sort(by.xp)[0];
+  const cheapest = rows.filter(r => r.mid != null && r.lvl >= lv - 10).sort(by.cost)[0];
+  const missingIngs = [...new Set(rows.slice(0, 40).flatMap(r => recipe(r.id)[1].map(x => x[0])).filter(i => !priceAt(i)))];
+  const sortSeg = h("span", { class: "seg", role: "group", "aria-label": "Tri" }, [["lvl", "Niveau"], ["cost", "Coût"], ["xp", "Coût / XP"]].map(([v, l]) =>
+    h("button", { type: "button", "aria-pressed": metierF.sort === v ? "true" : "false", onclick: () => { metierF.sort = v; render(); } }, l)));
+  return h("div", { class: "stack" },
+    h("section", { class: "panel" },
+      h("div", { class: "row between" }, h("h2", { text: "Monter un métier" }),
+        h("div", { class: "row", style: "gap:8px" }, sel, h("span", { class: "label", text: "Niveau" }), lvIn)),
+      h("div", { class: "tiles" },
+        h("div", { class: "tile" }, h("span", { class: "label", text: "Recettes accessibles" }), h("span", { class: "v", text: total }), h("span", { class: "small muted", text: "jusqu'au niveau " + lv })),
+        h("div", { class: "tile kamas" }, h("span", { class: "label", text: "Craft le moins cher" }), h("span", { class: "v", text: cheapest ? kk(cheapest.mid) : "—" }), h("span", { class: "small muted", text: cheapest ? item(cheapest.id)[0] + " · niv. " + cheapest.lvl : "parmi les 10 derniers niveaux, prix requis" })),
+        h("div", { class: "tile" }, h("span", { class: "label", text: "Meilleur coût par XP" }), h("span", { class: "v", text: best ? kk(best.perK) : "—" }), h("span", { class: "small muted", text: best ? "pour 1 000 XP · " + item(best.id)[0] : "note l'XP d'un craft pour le calculer" })),
+        h("div", { class: "tile" }, h("span", { class: "label", text: "Ingrédients sans prix" }), h("span", { class: "v", text: missingIngs.length }),
+          missingIngs.length ? h("button", { type: "button", class: "btn sm", onclick: () => { tourSetup.extra = [...new Set([...(tourSetup.extra || []), ...missingIngs])]; saveTour(); location.hash = "#tournee"; } }, "Les ajouter à la tournée") : h("span", { class: "small muted", text: "tout est chiffré" }))),
+      h("p", { class: "note", text: "Dans Dofus, une recette proche de ton niveau rapporte plus d'XP. Le jeu ne publie pas la formule exacte : note l'XP qu'un craft t'a rapportée (visible en jeu après le craft) et l'atelier calcule le coût pour 1 000 XP. Ces notes restent sur ton compte." })),
+    h("section", { class: "panel" },
+      h("div", { class: "row between" }, h("h2", { text: jobName(job) + " · recettes" }),
+        h("div", { class: "row", style: "gap:8px" }, h("label", { class: "check" }, (() => { const c = h("input", { type: "checkbox", id: "metier-all", checked: metierF.all }); c.addEventListener("change", () => { metierF.all = c.checked; render(); }); return c; })(), "Tous les niveaux"), sortSeg)),
+      rows.length ? h("div", { class: "tablewrap" }, h("table", {},
+        h("thead", {}, h("tr", {}, h("th", { text: "Recette" }), h("th", { class: "n", text: "Niv." }), h("th", { class: "n", text: "Coût / craft" }), h("th", { class: "n", text: "XP / craft" }), h("th", { class: "n", text: "Coût / 1 000 XP" }), h("th", {}))),
+        h("tbody", {}, rows.slice(0, 80).map(r => h("tr", {},
+          h("td", {}, itemLink(r.id, r.id === best?.id ? "★ meilleur coût par XP" : r.id === cheapest?.id ? "★ le moins cher près de ton niveau" : recipe(r.id)[1].length + " ingrédients", 28)),
+          h("td", { class: "n", text: r.lvl }),
+          h("td", { class: "n" }, r.c.missing ? h("span", { class: "chip warn", text: r.c.missing + " sans prix" }) : range(r.c.lo, r.c.hi)),
+          h("td", { class: "n" }, numInput(r.x || "", v => { const n = Math.round(+String(v).replace(/\s/g, "")); S.settings.xp = { ...(S.settings.xp || {}) }; if (n > 0) S.settings.xp[r.id] = n; else delete S.settings.xp[r.id]; persist("plan"); }, { sm: true, ph: "XP", label: "XP gagnée par craft" })),
+          h("td", { class: "n " + (r.id === best?.id ? "pos" : ""), text: r.perK != null ? k(r.perK) : "—" }),
+          h("td", {}, h("button", { type: "button", class: "btn sm", onclick: () => { addTarget(r.id); toast(item(r.id)[0] + " ajouté au plan"); } }, "+ Plan")))))),
+        ) : h("div", { class: "empty" }, h("strong", { text: "Aucune recette à ce niveau" }), h("span", { text: "Indique ton niveau dans ce métier, ou coche « Tous les niveaux »." })),
+      rows.length > 80 ? h("p", { class: "note", text: "Seules les 80 premières recettes sont affichées." }) : null));
+}
+
+// =====================================================================
 // Habillage : icônes, onglets, bandeaux de section
 // =====================================================================
 const IC = {
@@ -1824,6 +1889,7 @@ const IC = {
   bag: "M6 9a6 6 0 0 1 12 0v11H6z M9 9V6a3 3 0 0 1 6 0v3 M6 14h12",
   book: "M4 5a2 2 0 0 1 2-2h13v16H6a2 2 0 0 0-2 2z M4 21V5 M8 7h7 M8 11h5",
   save: "M12 3v12 M7 10l5 5 5-5 M4 17v3h16v-3",
+  up: "M12 20V5 M6 11l6-6 6 6 M5 20h14",
   ledger: "M6 3h12v18l-3-2-3 2-3-2-3 2z M9 8h6 M9 12h6 M9 16h3",
   route: "M6 19a2 2 0 1 0 0-4 2 2 0 0 0 0 4z M18 9a2 2 0 1 0 0-4 2 2 0 0 0 0 4z M8 17h7a3 3 0 0 0 0-6H9a3 3 0 0 1 0-6h7",
   sun: "M12 7a5 5 0 1 0 0 10 5 5 0 0 0 0-10z M12 1v2 M12 21v2 M1 12h2 M21 12h2 M4.2 4.2l1.4 1.4 M18.4 18.4l1.4 1.4 M4.2 19.8l1.4-1.4 M18.4 5.6l1.4-1.4",
@@ -1831,7 +1897,7 @@ const IC = {
 const svgI = name => { const el = s("svg", { class: "i", viewBox: "0 0 24 24", "aria-hidden": "true" }); for (const d of IC[name].split(" M")) el.append(s("path", { d: d.startsWith("M") ? d : "M" + d })); return el; };
 const TABS = [
   ["accueil", "Accueil", "home", "--c-home"], ["plan", "Plan de craft", "hammer", "--c-craft", "c-plan"], ["rentabilite", "Rentabilité", "trend", "--c-gold"],
-  ["prix", "Prix HDV", "coins", "--c-gold", "c-prix"], ["tournee", "Tournée HDV", "route", "--c-gold", "c-tour"], ["journal", "Journal", "ledger", "--c-journal"], ["farm", "Farm", "leaf", "--c-farm"], ["builds", "Builds", "shield", "--c-build", "c-builds"],
+  ["prix", "Prix HDV", "coins", "--c-gold", "c-prix"], ["tournee", "Tournée HDV", "route", "--c-gold", "c-tour"], ["journal", "Journal", "ledger", "--c-journal"], ["farm", "Farm", "leaf", "--c-farm"], ["metiers", "Métiers", "up", "--c-craft"], ["builds", "Builds", "shield", "--c-build", "c-builds"],
   ["stock", "Inventaire", "bag", "--c-stock", "c-stock"], ["encyclopedie", "Encyclopédie", "book", "--c-ency"], ["sauvegarde", "Sauvegarde", "save", "--c-save"],
 ];
 function buildTabs() {
@@ -1874,6 +1940,7 @@ function heroFor(v) {
     stock: ["Inventaire", "Ce que tu as sous la main, valorisé au prix du groupe.", "bag", Object.keys(S.stock).map(Number)],
     encyclopedie: ["Encyclopédie", fmt.format(INDEX.length) + " objets, " + fmt.format(Object.keys(D.recipes).length) + " recettes, effets, drops et panoplies.", "book", []],
     tournee: ["Tournée HDV", TOUR && TOUR.i < TOUR.ids.length ? "Objet " + (TOUR.i + 1) + " sur " + TOUR.ids.length + " · HDV " + hdvName(hdvOf(TOUR.ids[TOUR.i])) : "Relève à la chaîne les prix qui manquent, rangés par hôtel des ventes.", "route", TOUR && TOUR.i < TOUR.ids.length ? TOUR.ids.slice(TOUR.i, TOUR.i + 8) : tourCandidates().ids],
+    metiers: ["Métiers", "Les recettes à ta portée, leur coût, et le craft le plus rentable pour monter.", "up", Object.entries(D.recipes).filter(([, r]) => r[0] === (+S.settings.job || r[0])).map(([id]) => +id).filter(id => item(id)[1] <= (S.settings.jobs?.[S.settings.job] ?? 200)).sort((a, b) => item(b)[1] - item(a)[1]).slice(0, 8)],
     journal: ["Journal de ventes", "Tes achats et ventes réels, et ce qu'ils t'ont vraiment rapporté.", "ledger", [...new Set(TR.slice().reverse().map(t => t.item_id))]],
     sauvegarde: ["Sauvegarde", "Exporte ou importe toutes tes données en JSON.", "save", []],
   }[v];
@@ -1893,7 +1960,7 @@ function decorate(root, v) {
 // =====================================================================
 // Rendu et navigation
 // =====================================================================
-const VIEWS = { journal: viewJournal, tournee: viewTournee, farm: viewFarm, builds: viewBuilds, accueil: viewAccueil, plan: viewPlan, rentabilite: viewRentabilite, prix: viewPrix, stock: viewStock, encyclopedie: viewEncyclopedie, sauvegarde: viewSauvegarde };
+const VIEWS = { metiers: viewMetiers, journal: viewJournal, tournee: viewTournee, farm: viewFarm, builds: viewBuilds, accueil: viewAccueil, plan: viewPlan, rentabilite: viewRentabilite, prix: viewPrix, stock: viewStock, encyclopedie: viewEncyclopedie, sauvegarde: viewSauvegarde };
 function renderCounts() {
   document.getElementById("c-plan").textContent = S.targets.length;
   document.getElementById("c-stock").textContent = Object.keys(S.stock).length;
