@@ -124,7 +124,7 @@ async function flush() {
         // Synchronise MES relevés d'un objet : ajoute/modifie, puis supprime les jours retirés
         const id = +key.slice(2), mine = (RAW[id] || {})[ME] || [];
         if (mine.length) {
-          const { error } = await SB.from("price_obs").upsert(mine.map(o => ({ item_id: id, user_id: ME, d: o.d, lo: Math.round(o.lo), hi: Math.round(o.hi), updated_at: o.t || new Date().toISOString() })));
+          const { error } = await SB.from("price_obs").upsert(mine.map(o => ({ item_id: id, user_id: ME, d: o.d, lo: Math.round(o.lo), hi: Math.round(o.hi), cur: o.cur == null ? null : Math.round(o.cur), updated_at: o.t || new Date().toISOString() })));
           if (error) throw error;
         }
         let del = SB.from("price_obs").delete().eq("item_id", id).eq("user_id", ME);
@@ -148,7 +148,7 @@ function fromAnyBackup(o) {
     builds: Array.isArray(o.builds) ? o.builds.filter(b => b && Array.isArray(b.items)).map(b => ({ id: String(b.id || Math.random().toString(36).slice(2)), name: String(b.name || "Build"), items: b.items.map(Number), perso: b.perso && typeof b.perso === "object" ? b.perso : undefined, at: b.at || Date.now() })) : [],
     settings: { tax: 2, basis: "mid", ...(o.settings || {}) } };
   for (const [id, v] of Object.entries(o.prices || {})) {
-    if (Array.isArray(v)) out.prices[id] = v.filter(x => x && x.d && x.lo != null).map(x => ({ d: x.d, lo: +x.lo, hi: +(x.hi ?? x.lo) }));
+    if (Array.isArray(v)) out.prices[id] = v.filter(x => x && x.d && x.lo != null).map(x => ({ d: x.d, lo: +x.lo, hi: +(x.hi ?? x.lo), cur: x.cur == null ? null : +x.cur }));
     else if (v && typeof v.p === "number") out.prices[id] = [{ d: iso(new Date(v.t || Date.now())), lo: v.p, hi: v.p }];
   }
   return out;
@@ -195,6 +195,7 @@ async function startOnline(session) {
     subscribePrices();
     await loadProfiles();
     await loadTrades();
+    await loadObtain();
     saveState("ok", "Synchronisé avec le groupe");
   } catch (e) {
     console.error(e);
@@ -205,7 +206,7 @@ async function startOnline(session) {
 async function loadAllPrices() {
   const rows = [];
   for (let from = 0; ; from += 1000) {
-    const { data, error } = await SB.from("price_obs").select("item_id,user_id,d,lo,hi,updated_at").order("item_id").range(from, from + 999);
+    const { data, error } = await SB.from("price_obs").select("item_id,user_id,d,lo,hi,cur,updated_at").order("item_id").range(from, from + 999);
     if (error) throw error;
     rows.push(...data);
     if (data.length < 1000) break;
@@ -219,7 +220,7 @@ async function loadAllPrices() {
 function addRaw(r) {
   const by = RAW[r.item_id] || (RAW[r.item_id] = {});
   const list = (by[r.user_id] || []).filter(o => o.d !== r.d);
-  list.push({ d: r.d, lo: r.lo, hi: r.hi, t: r.updated_at || "" }); list.sort((a, b) => a.d < b.d ? -1 : 1);
+  list.push({ d: r.d, lo: r.lo, hi: r.hi, cur: r.cur ?? null, t: r.updated_at || "" }); list.sort((a, b) => a.d < b.d ? -1 : 1);
   by[r.user_id] = list;
 }
 function delRaw(r) {
@@ -236,6 +237,11 @@ function subscribePrices() {
       lsSavePrices();
       if (p.new && p.new.user_id && !(p.new.user_id in NAMES)) loadProfiles();
       softRender();
+    })
+    .on("postgres_changes", { event: "*", schema: "public", table: "item_obtain" }, p => {
+      if (p.eventType === "DELETE") delete OBT[p.old.item_id];
+      else { const r = p.new; OBT[r.item_id] = { minutes: +r.minutes, qty: r.qty, inputs: r.inputs || [], extra: +r.extra || 0, by: r.updated_by, t: r.updated_at }; }
+      lsSaveObt(); softRender();
     })
     .subscribe();
 }
@@ -306,12 +312,12 @@ function aggregate(id) {
   const days = new Map();
   for (const [u, list] of Object.entries(RAW[id] || {})) for (const o of (Array.isArray(list) ? list : [])) {
     if (!o || !o.d || o.lo == null) continue;
-    (days.get(o.d) || days.set(o.d, []).get(o.d)).push({ u, lo: +o.lo, hi: +(o.hi ?? o.lo), t: o.t || "" });
+    (days.get(o.d) || days.set(o.d, []).get(o.d)).push({ u, lo: +o.lo, hi: +(o.hi ?? o.lo), cur: o.cur == null ? null : +o.cur, t: o.t || "" });
   }
   const arr = [...days.entries()].map(([d, list]) => {
     list.sort((a, b) => (a.t < b.t ? 1 : a.t > b.t ? -1 : 0));
     const w = list[0];
-    return { d, lo: w.lo, hi: w.hi, n: list.length, by: list.map(x => x.u), others: list.slice(1) };
+    return { d, lo: w.lo, hi: w.hi, cur: w.cur, n: list.length, by: list.map(x => x.u), others: list.slice(1) };
   }).sort((a, b) => a.d < b.d ? -1 : 1);
   if (arr.length) AGG[id] = arr; else delete AGG[id];
 }
@@ -345,24 +351,30 @@ function shareMine() {
 const obsOf = id => prices()[id] || [];
 function priceAt(id, at) { const o = obsOf(id); for (let i = o.length - 1; i >= 0; i--) if (!at || o[i].d <= at) return o[i]; return null; }
 const midOf = o => (o.lo + o.hi) / 2;
-const pick = (o, basis) => !o ? null : basis === "lo" ? o.lo : basis === "hi" ? o.hi : midOf(o);
+const pick = (o, basis) => !o ? null : basis === "lo" ? o.lo : basis === "hi" ? o.hi : basis === "cur" ? (o.cur ?? midOf(o)) : midOf(o);
+// Prix de référence pour vendre ou acheter maintenant : le prix actuel s'il est connu, sinon le milieu de la fourchette
+const nowPrice = o => !o ? null : (o.cur ?? midOf(o));
 function myObs(id, d) { return ((SH && ME ? (RAW[id] || {})[ME] : S.prices[id]) || []).find(o => o.d === d) || null; }
-function addObs(id, lo, hi, d = today()) {
+function addObs(id, lo, hi, d = today(), cur) {
   if (lo == null && hi == null) return false;
   if (CFG.supabaseUrl && SB && !ME) { toast("Connexion au groupe en cours : réessaie dans un instant"); return false; }
   if (lo == null) lo = hi; if (hi == null) hi = lo;
   if (lo > hi) [lo, hi] = [hi, lo];
+  const prev = myObs(id, d);
+  if (cur === undefined) cur = prev ? prev.cur ?? null : null;
+  const entry = { d, lo, hi, cur: cur == null ? null : Math.round(cur), t: new Date().toISOString() };
   if (SH && ME) {
     const mine = [...((RAW[id] || {})[ME] || [])].filter(o => o.d !== d);
-    mine.push({ d, lo, hi, t: new Date().toISOString() }); mine.sort((a, b) => a.d < b.d ? -1 : 1);
+    mine.push(entry); mine.sort((a, b) => a.d < b.d ? -1 : 1);
     RAW[id] = { ...(RAW[id] || {}), [ME]: mine }; aggregate(id);
     persist("s:" + id);
-    return;
+    return true;
   }
   const list = (S.prices[id] || []).filter(o => o.d !== d);
-  list.push({ d, lo, hi }); list.sort((a, b) => a.d < b.d ? -1 : 1);
+  list.push(entry); list.sort((a, b) => a.d < b.d ? -1 : 1);
   S.prices[id] = list;
   persist("p:" + id);
+  return true;
 }
 function delObs(id, d) {
   if (SH && ME) {
@@ -520,21 +532,24 @@ function quickObs(id, after) {
   const mine = myObs(id, today()), last = priceAt(id);
   const lo = h("input", { class: "cell sm", id: "qo-lo-" + id, inputmode: "decimal", value: mine ? fmt.format(mine.lo) : "", placeholder: last ? fmt.format(Math.round(last.lo)) : "basse", "aria-label": "Moyenne basse de " + item(id)[0] });
   const hi = h("input", { class: "cell sm", id: "qo-hi-" + id, inputmode: "decimal", value: mine ? fmt.format(mine.hi) : "", placeholder: last ? fmt.format(Math.round(last.hi)) : "haute", "aria-label": "Moyenne haute de " + item(id)[0] });
+  const cu = h("input", { class: "cell sm", id: "qo-cur-" + id, inputmode: "decimal", value: mine && mine.cur != null ? fmt.format(mine.cur) : "", placeholder: last && last.cur != null ? fmt.format(last.cur) : "actuel", "aria-label": "Prix actuel de " + item(id)[0] });
   const go = () => {
-    const ta = lo.value.trim(), tb = hi.value.trim();
-    let a = parseKamas(ta), b = parseKamas(tb);
-    if ((ta && a == null) || (tb && b == null)) { toast("Prix illisible : écris par exemple 1200, 1 200, 12k ou 1,5m"); return; }
+    const ta = lo.value.trim(), tb = hi.value.trim(), tc = cu.value.trim();
+    let a = parseKamas(ta), b = parseKamas(tb); const c = parseKamas(tc);
+    if ((ta && a == null) || (tb && b == null) || (tc && c == null)) { toast("Prix illisible : écris par exemple 1200, 1 200, 12k ou 1,5m"); return; }
+    // Seul le prix actuel est saisi : la fourchette reste celle connue
+    if (a == null && b == null && c != null) { const ref = mine || last; if (ref) { a = Math.round(ref.lo); b = Math.round(ref.hi); } else { a = b = c; } }
     if (a == null && b == null) { lo.focus(); return; }
     // Une seule case remplie : on garde l'autre borne de ton relevé du jour, sinon du dernier prix connu
     const ref = mine || last;
     if (a == null) a = ref ? Math.min(Math.round(ref.lo), b) : b;
     if (b == null) b = ref ? Math.max(Math.round(ref.hi), a) : a;
-    if (addObs(id, a, b) === false) return;
-    toast((mine ? "Relevé modifié : " : "Relevé enregistré : ") + item(id)[0] + " " + range(Math.min(a, b), Math.max(a, b)) + " ₭");
+    if (addObs(id, a, b, today(), tc ? c : (mine ? mine.cur : null)) === false) return;
+    toast((mine ? "Relevé modifié : " : "Relevé enregistré : ") + item(id)[0] + " " + range(Math.min(a, b), Math.max(a, b)) + " ₭" + (tc ? " · actuel " + k(c) + " ₭" : ""));
     after ? after() : render();
   };
-  [lo, hi].forEach(x => x.addEventListener("keydown", e => { if (e.key === "Enter") go(); }));
-  return h("span", { class: "row", style: "gap:6px;flex-wrap:nowrap" }, lo, hi, h("button", { type: "button", class: "btn sm", onclick: go }, mine ? "Modifier" : "Ajouter"));
+  [lo, hi, cu].forEach(x => x.addEventListener("keydown", e => { if (e.key === "Enter") go(); }));
+  return h("span", { class: "row", style: "gap:6px;flex-wrap:nowrap" }, lo, hi, cu, h("button", { type: "button", class: "btn sm", onclick: go }, mine ? "Modifier" : "Ajouter"));
 }
 let toastT = null;
 function toast(msg, undo, label = "Annuler") {
@@ -667,7 +682,7 @@ async function loadChunk(n) {
 }
 async function loadDet(id) { return (await loadChunk(id % 32))[id] || {}; }
 function openSheet(id, push = true) {
-  obsEditDate = null;
+  obsEditDate = null; obtainDraft = null;
   if (push && sheet.open && sheetStack[sheetStack.length - 1] !== id) sheetStack.push(id);
   else if (!sheet.open) sheetStack = [id];
   renderSheet();
@@ -700,33 +715,34 @@ async function renderSheet() {
   const dateIn = h("input", { type: "date", value: obsEditDate || today(), max: today(), "aria-label": "Date du relevé" });
   const loIn = h("input", { class: "cell", inputmode: "decimal", placeholder: "ex. 1 200", id: "obs-lo" });
   const hiIn = h("input", { class: "cell", inputmode: "decimal", placeholder: "ex. 1 500", id: "obs-hi" });
+  const curIn = h("input", { class: "cell", inputmode: "decimal", placeholder: "facultatif", id: "obs-cur" });
   const saveBtn = h("button", { type: "button", class: "btn primary" });
   const mineNote = h("p", { class: "small", style: "color:var(--kamas);font-weight:700" });
   // Pré-remplit avec ton relevé de la date choisie : le modifier remplace l'ancien
   const fill = () => {
     const m = myObs(id, dateIn.value || today());
-    loIn.value = m ? fmt.format(m.lo) : ""; hiIn.value = m ? fmt.format(m.hi) : "";
+    loIn.value = m ? fmt.format(m.lo) : ""; hiIn.value = m ? fmt.format(m.hi) : ""; curIn.value = m && m.cur != null ? fmt.format(m.cur) : "";
     saveBtn.textContent = m ? "Modifier mon relevé" : "Enregistrer le relevé";
     mineNote.textContent = m ? "Ton relevé du " + parseD(m.d).toLocaleDateString("fr-FR", { day: "numeric", month: "long" }) + " : " + range(m.lo, m.hi) + " ₭. Modifie les valeurs puis enregistre." : "";
   };
   dateIn.addEventListener("change", fill);
   fill();
   const save = () => {
-    const a = parseKamas(loIn.value), b = parseKamas(hiIn.value);
-    if ((loIn.value.trim() && a == null) || (hiIn.value.trim() && b == null)) { toast("Prix illisible : écris par exemple 1200, 1 200, 12k ou 1,5m"); return; }
+    const a = parseKamas(loIn.value), b = parseKamas(hiIn.value), c = parseKamas(curIn.value);
+    if ((loIn.value.trim() && a == null) || (hiIn.value.trim() && b == null) || (curIn.value.trim() && c == null)) { toast("Prix illisible : écris par exemple 1200, 1 200, 12k ou 1,5m"); return; }
     if (a == null && b == null) { loIn.focus(); return; }
     const was = myObs(id, dateIn.value || today());
-    if (addObs(id, a, b, dateIn.value || today()) === false) return;
+    if (addObs(id, a, b, dateIn.value || today(), curIn.value.trim() ? c : null) === false) return;
     toast(was ? "Relevé modifié" : "Relevé enregistré"); obsEditDate = null; renderSheet();
   };
   saveBtn.addEventListener("click", save);
-  [loIn, hiIn].forEach(x => x.addEventListener("keydown", e => { if (e.key === "Enter") save(); }));
+  [loIn, hiIn, curIn].forEach(x => x.addEventListener("keydown", e => { if (e.key === "Enter") save(); }));
   const seg = h("span", { class: "seg", role: "group", "aria-label": "Période" }, ["week", "month"].map(m =>
     h("button", { type: "button", "aria-pressed": chartMode === m ? "true" : "false", onclick: () => { chartMode = m; try { localStorage.setItem(LS + "-chart", m); } catch {} renderSheet(); } }, m === "week" ? "Par semaine" : "Par mois")));
   const prices = h("section", { class: "panel" },
-    h("div", { class: "row between" }, h("h3", { text: "Prix à l'HDV" }), last ? h("span", { class: "chip kamas", text: range(last.lo, last.hi) + " ₭ · " + ago(last.d) + (SH && last.by ? " · par " + whoName(last.by[0]) : "") }) : h("span", { class: "chip", text: "aucun relevé" })),
+    h("div", { class: "row between" }, h("h3", { text: "Prix à l'HDV" }), last ? h("span", { class: "chip kamas", text: range(last.lo, last.hi) + " ₭ · " + ago(last.d) + (last.cur != null ? " · actuel " + k(last.cur) + " ₭" : "") + (SH && last.by ? " · par " + whoName(last.by[0]) : "") }) : h("span", { class: "chip", text: "aucun relevé" })),
     h("div", { class: "form-row" },
-      h("label", {}, "Moyenne basse", loIn), h("label", {}, "Moyenne haute", hiIn), h("label", {}, "Date", dateIn), saveBtn),
+      h("label", {}, "Moyenne basse", loIn), h("label", {}, "Moyenne haute", hiIn), h("label", {}, "Prix actuel", curIn), h("label", {}, "Date", dateIn), saveBtn),
     mineNote,
     h("p", { class: "note", text: "Prix à l'unité, en kamas : 1200, 1 200, 1.200, 12k ou 1,5m. Un relevé par jour et par personne, modifiable à tout moment (choisis sa date ou clique sur « Modifier » dans l'historique)." + (SH ? " Partagé avec tout le groupe : la dernière mise à jour fait foi." : "") }),
     h("div", { class: "row between" }, h("span", { class: "label", text: "Évolution sur 12 " + (chartMode === "week" ? "semaines" : "mois") }), seg),
@@ -734,7 +750,7 @@ async function renderSheet() {
     o.length ? h("details", {}, h("summary", { class: "note", text: o.length + " relevé" + (o.length > 1 ? "s" : "") + " enregistré" + (o.length > 1 ? "s" : "") }),
       h("div", { class: "tablewrap" }, h("table", {}, h("tbody", {}, o.slice().reverse().slice(0, 60).map(x => h("tr", {},
         h("td", { text: parseD(x.d).toLocaleDateString("fr-FR", { day: "numeric", month: "short", year: "numeric" }) }),
-        h("td", { class: "n", text: range(x.lo, x.hi) + " ₭" }),
+        h("td", { class: "n", text: range(x.lo, x.hi) + " ₭" + (x.cur != null ? " · actuel " + k(x.cur) : "") }),
         h("td", { class: "small muted", text: SH && x.by ? "par " + whoName(x.by[0]) : "" }),
         h("td", {}, myObs(id, x.d) ? h("span", { class: "row", style: "gap:4px;flex-wrap:nowrap" },
           h("button", { type: "button", class: "btn sm", title: "Modifier mon relevé de ce jour", onclick: () => { obsEditDate = x.d; renderSheet(); setTimeout(() => { const el = document.getElementById("obs-lo"); el?.scrollIntoView({ block: "center" }); el?.select(); }, 40); } }, "Modifier"),
@@ -785,6 +801,7 @@ async function renderSheet() {
   sheetIn.lastElementChild.replaceWith(enc);
   await ensureFarm();
   if (sheetStack[sheetStack.length - 1] !== id || !F) return;
+  sheetIn.append(obtainPanel(id));
   const src = sourcesEl(id, true);
   if (src) sheetIn.append(h("section", { class: "panel" }, h("h3", { text: "Où l'obtenir" }), src));
 }
@@ -957,7 +974,7 @@ function viewPlan() {
   const cost = toBuy.reduce((t, r) => t + (r.cost || 0), 0), missing = toBuy.filter(r => r.p == null).length;
   const costLo = toBuy.reduce((t, r) => t + (r.o ? r.o.lo * r.buy : 0), 0), costHi = toBuy.reduce((t, r) => t + (r.o ? r.o.hi * r.buy : 0), 0);
   const pct = totalNeed ? Math.round(100 * covered / totalNeed) : 0;
-  const basisSeg = h("span", { class: "seg", role: "group", "aria-label": "Prix utilisé" }, [["lo", "Bas"], ["mid", "Moyen"], ["hi", "Haut"]].map(([v, l]) =>
+  const basisSeg = h("span", { class: "seg", role: "group", "aria-label": "Prix utilisé" }, [["lo", "Bas"], ["mid", "Moyen"], ["hi", "Haut"], ["cur", "Actuel"]].map(([v, l]) =>
     h("button", { type: "button", "aria-pressed": basis === v ? "true" : "false", onclick: () => { S.settings.basis = v; persist("plan"); render(); } }, l)));
   const right = h("section", { class: "panel" },
     h("div", { class: "row between" }, h("h2", { text: "Liste de courses" }),
@@ -979,7 +996,7 @@ function viewPlan() {
       h("td", { class: "n" }, r.buy ? (r.farm ? h("span", { class: "chip job", text: k(r.buy) + " à farmer" }) : k(r.buy)) : "✓"),
       h("td", { class: "n" }, r.o ? h("button", { type: "button", class: "link", title: "Ouvrir la fiche pour ajouter un relevé", onclick: () => openSheet(r.id) }, range(r.o.lo, r.o.hi)) : r.buy ? quickObs(r.id) : "—"),
       h("td", { class: "n", text: r.buy && !r.farm ? (r.p == null ? "?" : k(r.cost)) : "" })))),
-    h("tfoot", {}, h("tr", {}, h("td", { colspan: 5, text: "Total à dépenser (prix " + ({ lo: "bas", mid: "moyen", hi: "haut" })[basis] + ")" }), h("td", { class: "n", text: k(cost) + " ₭" }))))));
+    h("tfoot", {}, h("tr", {}, h("td", { colspan: 5, text: "Total à dépenser (prix " + ({ lo: "bas", mid: "moyen", hi: "haut", cur: "actuel" })[basis] + ")" }), h("td", { class: "n", text: k(cost) + " ₭" }))))));
   right.append(h("p", { class: "note", text: "Le stock est consommé en priorité. Un ingrédient marqué « je fabrique » est remplacé par sa recette ; « ▲ moins cher à crafter » signale qu'il reviendrait moins cher de le fabriquer d'après tes relevés." }));
   return h("div", { class: "grid2" }, left, right);
 }
@@ -990,7 +1007,13 @@ function copyText(txt, btn) {
 }
 
 let rentF = { q: "", job: "", only: "", sort: "m" };
+let rentMode = "craft";
 function viewRentabilite() {
+  const modeSeg = h("span", { class: "seg", role: "group", "aria-label": "Type de rentabilité" }, [["craft", "Crafts"], ["farm", "Farm et captures"]].map(([v, l]) =>
+    h("button", { type: "button", "aria-pressed": rentMode === v ? "true" : "false", onclick: () => { rentMode = v; render(); } }, l)));
+  return h("div", { class: "stack" }, h("div", { class: "row" }, modeSeg), rentMode === "farm" ? viewRentaFarm() : viewRentaCraft());
+}
+function viewRentaCraft() {
   let rows = profitRows();
   const jobs = [...new Set(Object.values(D.recipes).map(r => r[0]))].sort((a, b) => jobName(a).localeCompare(jobName(b), "fr"));
   if (rentF.job) rows = rows.filter(r => recipe(r.id)[0] === +rentF.job);
@@ -1138,10 +1161,11 @@ function viewPrix() {
             h("button", { type: "button", "aria-pressed": prixSort === v ? "true" : "false", onclick: () => { prixSort = v; render(); } }, l))))),
       searchBox("Ajouter un relevé pour un objet", {}, id => openSheet(id), "q-prix"),
       rows.length ? h("div", { class: "tablewrap" }, h("table", {},
-        h("thead", {}, h("tr", {}, h("th", { text: "Objet" }), h("th", { class: "n", text: "Dernière fourchette" }), h("th", { text: "Relevé" }), h("th", { text: "12 semaines" }), h("th", { class: "n", text: "Var. 7 j+" }), h("th", { text: "Ton relevé du jour (basse · haute)" }))),
+        h("thead", {}, h("tr", {}, h("th", { text: "Objet" }), h("th", { class: "n", text: "Dernière fourchette" }), h("th", { class: "n", text: "Prix actuel" }), h("th", { text: "Relevé" }), h("th", { text: "12 semaines" }), h("th", { class: "n", text: "Var. 7 j+" }), h("th", { text: "Ton relevé du jour (basse · haute · actuel)" }))),
         h("tbody", {}, rows.map(r => h("tr", {},
           h("td", {}, itemLink(r.id, r.n + " relevé" + (r.n > 1 ? "s" : ""), 26)),
           h("td", { class: "n" }, range(r.last.lo, r.last.hi), SH && r.last.by ? h("small", { class: "muted", style: "display:block", text: "par " + whoName(r.last.by[0]) }) : null),
+          h("td", { class: "n" }, r.last.cur != null ? h("strong", { style: "color:var(--kamas)", text: k(r.last.cur) }) : h("span", { class: "muted", text: "—" })),
           h("td", {}, h("span", { class: "chip" + (ageDays(r.last.d) >= 7 ? " warn" : ""), text: ago(r.last.d) })),
           h("td", {}, sparkline(r.id)),
           h("td", { class: "n " + (r.varp == null ? "muted" : r.varp >= 0 ? "pos" : "neg"), text: r.varp == null ? "—" : (r.varp >= 0 ? "▲ +" : "▼ ") + Math.round(r.varp) + " %" }),
@@ -1608,27 +1632,31 @@ function tourRun() {
   if (!TOUR.draft || TOUR.draft.id !== id) TOUR.draft = { id, lo: mine ? fmt.format(mine.lo * lot) : "", hi: mine ? fmt.format(mine.hi * lot) : "", auto: !!mine };
   const lo = h("input", { class: "tour-in", id: "tour-lo", inputmode: "decimal", autocomplete: "off", value: TOUR.draft.lo, placeholder: "Basse", "aria-label": "Moyenne basse, prix du lot de " + lot });
   const hi = h("input", { class: "tour-in", id: "tour-hi", inputmode: "decimal", autocomplete: "off", value: TOUR.draft.hi, placeholder: "Haute", "aria-label": "Moyenne haute, prix du lot de " + lot });
+  if (TOUR.draft.cur === undefined) TOUR.draft.cur = mine && mine.cur != null ? fmt.format(mine.cur * lot) : "";
+  const cu = h("input", { class: "tour-in", id: "tour-cur", inputmode: "decimal", autocomplete: "off", value: TOUR.draft.cur, placeholder: "Actuel (facultatif)", "aria-label": "Prix actuel, prix du lot de " + lot });
   const unit = h("p", { class: "tour-unit" });
   const showUnit = () => {
     const a = parseKamas(lo.value), b = parseKamas(hi.value);
     unit.textContent = a == null && b == null ? (lot > 1 ? "Saisis le prix affiché pour un lot de " + lot + " : l'appli le divise par " + lot + "." : "")
       : "Sera enregistré à l'unité : " + range((a ?? b) / lot, (b ?? a) / lot) + " ₭" + (lot > 1 ? " (lot de " + lot + " ÷ " + lot + ")" : "");
   };
-  [lo, hi].forEach(x => x.addEventListener("input", () => { TOUR.draft = { id, lo: lo.value, hi: hi.value, auto: false }; showUnit(); }));
+  [lo, hi, cu].forEach(x => x.addEventListener("input", () => { TOUR.draft = { id, lo: lo.value, hi: hi.value, cur: cu.value, auto: false }; showUnit(); }));
   showUnit();
   const next = () => { TOUR.i++; TOUR.draft = null; saveTour(); render(); setTimeout(() => document.getElementById("tour-lo")?.focus(), 30); };
   const save = () => {
     const a = parseKamas(lo.value), b = parseKamas(hi.value);
     if (a == null && b == null) { lo.focus(); return; }
-    if (addObs(id, a == null ? null : Math.round(a / lot), b == null ? null : Math.round(b / lot)) === false) return;
+    const c = parseKamas(cu.value);
+    if (addObs(id, a == null ? null : Math.round(a / lot), b == null ? null : Math.round(b / lot), today(), c == null ? null : Math.round(c / lot)) === false) return;
     TOUR.saved++; TOUR.draft = null; next();
   };
   lo.addEventListener("keydown", e => { if (e.key === "Enter") { e.preventDefault(); if (hi.value) save(); else hi.focus(); } });
   hi.addEventListener("keydown", e => { if (e.key === "Enter") { e.preventDefault(); save(); } });
+  cu.addEventListener("keydown", e => { if (e.key === "Enter") { e.preventDefault(); save(); } });
   const lots = h("span", { class: "seg", role: "group", "aria-label": "Taille du lot" }, [1, 10, 100, 1000].map(n =>
     h("button", { type: "button", "aria-pressed": lot === n ? "true" : "false", onclick: () => {
       // Valeurs pré-remplies depuis ton relevé : on les recalcule pour le nouveau lot ; une saisie manuelle reste telle quelle
-      if (TOUR.draft && TOUR.draft.auto && mine) TOUR.draft = { id, lo: fmt.format(mine.lo * n), hi: fmt.format(mine.hi * n), auto: true };
+      if (TOUR.draft && TOUR.draft.auto && mine) TOUR.draft = { id, lo: fmt.format(mine.lo * n), hi: fmt.format(mine.hi * n), cur: mine.cur != null ? fmt.format(mine.cur * n) : "", auto: true };
       TOUR.lots[g] = n; saveTour(); render(); setTimeout(() => document.getElementById("tour-lo")?.focus(), 30); } }, "×" + n)));
   const pct = Math.round(100 * TOUR.i / TOUR.ids.length);
   const prevGroup = TOUR.i > 0 && hdvOf(TOUR.ids[TOUR.i - 1]) !== g;
@@ -1644,7 +1672,7 @@ function tourRun() {
         h("span", { class: "muted small", text: typeName(id) + " · niveau " + item(id)[1] + (r ? " · " + jobName(r[0]) : "") }),
         h("span", { class: "chip kamas" }, mine ? "Ton relevé du jour : " + range(mine.lo, mine.hi) + " ₭ (modifiable)" : o ? "Dernier relevé : " + range(o.lo, o.hi) + " ₭ · " + ago(o.d) : "Jamais relevé"))),
     h("div", { class: "row between" }, h("span", { class: "label", text: "Prix affichés pour un lot de" }), lots),
-    h("div", { class: "tour-inputs" }, lo, hi),
+    h("div", { class: "tour-inputs" }, lo, hi, cu),
     unit,
     h("div", { class: "tour-actions" },
       h("button", { type: "button", class: "btn primary big", onclick: save }, "Enregistrer et suivant"),
@@ -2219,6 +2247,105 @@ function viewComparer() {
 }
 
 // =====================================================================
+// Obtention (farm, capture…) : durée, quantité, investissement, bénéfice par heure
+// Partagé par le groupe (table item_obtain) ; en mode local, gardé dans S.obtain
+// =====================================================================
+let OBT = {};
+try { OBT = JSON.parse(localStorage.getItem("atelier-obtention") || "{}"); } catch { OBT = {}; }
+const lsSaveObt = () => { try { localStorage.setItem("atelier-obtention", JSON.stringify(OBT)); } catch {} };
+async function loadObtain() {
+  const { data, error } = await SB.from("item_obtain").select("item_id,minutes,qty,inputs,extra,updated_by,updated_at");
+  if (error) { console.error(error); return; }
+  OBT = {};
+  for (const r of data || []) OBT[r.item_id] = { minutes: +r.minutes, qty: r.qty, inputs: r.inputs || [], extra: +r.extra || 0, by: r.updated_by, t: r.updated_at };
+  lsSaveObt();
+}
+async function setObtain(id, data) {
+  if (data) OBT[id] = { ...data, by: ME, t: new Date().toISOString() }; else delete OBT[id];
+  lsSaveObt();
+  if (SB && ME) {
+    saveState("busy", "Enregistrement…");
+    const { error } = data
+      ? await SB.from("item_obtain").upsert({ item_id: +id, minutes: data.minutes, qty: data.qty, inputs: data.inputs, extra: data.extra, updated_by: ME, updated_at: new Date().toISOString() })
+      : await SB.from("item_obtain").delete().eq("item_id", +id);
+    saveState(error ? "err" : "ok", error ? "Obtention non enregistrée" : "Enregistré pour le groupe");
+    if (error) console.error(error);
+  }
+}
+// Bénéfice d'une obtention : valeur nette de taxe - investissement ; puis ramené à l'heure
+function obtainCalc(id) {
+  const ob = OBT[id]; if (!ob) return null;
+  const tax = (S.settings.tax || 0) / 100;
+  const sell = nowPrice(priceAt(id));
+  const missing = [];
+  if (sell == null) missing.push(id);
+  let invest = ob.extra || 0;
+  for (const x of ob.inputs || []) { const p = nowPrice(priceAt(x.item)); if (p == null) missing.push(x.item); else invest += p * x.qty; }
+  const net = sell == null ? null : sell * ob.qty * (1 - tax);
+  const profit = net == null ? null : net - invest;
+  return { ob, sell, net, invest, profit, perHour: profit == null ? null : profit / ob.minutes * 60, missing };
+}
+const fmtDur = m => m >= 60 ? Math.floor(m / 60) + " h" + (Math.round(m % 60) ? " " + String(Math.round(m % 60)).padStart(2, "0") : "") : Math.round(m * 10) / 10 + " min";
+// Panneau « Obtention » de la fiche objet
+let obtainDraft = null;
+function obtainPanel(id) {
+  const ob = OBT[id];
+  if (!obtainDraft || obtainDraft.id !== id) obtainDraft = { id, minutes: ob ? String(ob.minutes) : "", qty: ob ? String(ob.qty) : "1", extra: ob && ob.extra ? fmt.format(ob.extra) : "", inputs: ob ? (ob.inputs || []).map(x => ({ ...x })) : [] };
+  const dr = obtainDraft;
+  const inp = (key, ph, label) => { const el = h("input", { class: "cell", id: "ob-" + key, inputmode: "decimal", value: dr[key], placeholder: ph, "aria-label": label }); el.addEventListener("input", () => { dr[key] = el.value; }); return h("label", {}, label, el); };
+  const save = () => {
+    const minutes = parseFloat(String(dr.minutes).replace(",", "."));
+    if (!(minutes > 0)) { toast("Indique la durée moyenne en minutes"); document.getElementById("ob-minutes")?.focus(); return; }
+    const qty = Math.max(1, Math.round(+dr.qty || 1));
+    const extra = dr.extra.trim() ? parseKamas(dr.extra) : 0;
+    if (extra == null) { toast("Frais illisibles : écris par exemple 5000 ou 5k"); return; }
+    setObtain(id, { minutes, qty, inputs: dr.inputs.filter(x => x.item && x.qty > 0), extra });
+    toast("Obtention enregistrée pour " + item(id)[0]); renderSheet(); if (view === "rentabilite") render();
+  };
+  const c = obtainCalc(id);
+  return h("section", { class: "panel", id: "obtain-panel" },
+    h("div", { class: "row between" }, h("h3", { text: "Obtention (farm, capture…)" }), ob ? h("span", { class: "chip", text: "par " + whoName(ob.by) + " · " + fmtDur(ob.minutes) }) : h("span", { class: "chip", text: "facultatif" })),
+    h("p", { class: "note", text: "Combien de temps faut-il pour obtenir cet objet, et que faut-il dépenser (pierres de capture, clés…) ? L'atelier en déduit le bénéfice par heure, visible dans Rentabilité > Farm et captures. Partagé avec le groupe." }),
+    h("div", { class: "form-row" }, inp("minutes", "ex. 15", "Durée moyenne (min)"), inp("qty", "1", "Quantité obtenue"), inp("extra", "0", "Autres frais (₭)")),
+    h("div", { style: "display:grid;gap:6px" }, h("span", { class: "label", text: "Investissement par obtention" }),
+      dr.inputs.length ? h("div", { style: "display:grid;gap:4px" }, dr.inputs.map((x, i) => {
+        const q = h("input", { class: "cell sm", inputmode: "numeric", value: x.qty, "aria-label": "Quantité de " + item(x.item)[0] });
+        q.addEventListener("input", () => { x.qty = Math.max(0, Math.round(+q.value || 0)); });
+        const p = nowPrice(priceAt(x.item));
+        return h("div", { class: "row between" }, itemLink(x.item, p == null ? "prix inconnu" : k(p) + " ₭ l'unité", 26),
+          h("span", { class: "row", style: "gap:6px;flex-wrap:nowrap" }, h("span", { class: "small muted", text: "×" }), q, h("button", { type: "button", class: "x", "aria-label": "Retirer", onclick: () => { dr.inputs.splice(i, 1); renderSheet(); } }, "×")));
+      })) : h("p", { class: "small muted", text: "Aucun objet consommé." }),
+      searchBox("Ajouter un objet consommé (ex. Pierre d'âme)", {}, x => { const e = dr.inputs.find(y => y.item === x); if (e) e.qty++; else dr.inputs.push({ item: x, qty: 1 }); renderSheet(); }, "q-obtain")),
+    h("div", { class: "row" }, h("button", { type: "button", class: "btn primary", onclick: save }, ob ? "Mettre à jour" : "Enregistrer"),
+      ob ? h("button", { type: "button", class: "btn", onclick: () => { setObtain(id, null); obtainDraft = null; toast("Obtention retirée"); renderSheet(); } }, "Retirer") : null),
+    c ? h("div", { class: "econ" },
+      h("div", {}, h("span", { class: "label", text: "Valeur nette" }), h("span", { class: "v", text: c.net == null ? "prix inconnu" : k(c.net) + " ₭" }), h("span", { class: "note", text: c.ob.qty + " × " + (c.sell == null ? "?" : k(c.sell)) + " − taxe " + S.settings.tax + " %" })),
+      h("div", {}, h("span", { class: "label", text: "Investissement" }), h("span", { class: "v", text: k(c.invest) + " ₭" }), c.missing.filter(x => x !== id).length ? h("span", { class: "chip warn", text: "prix manquants" }) : null),
+      h("div", {}, h("span", { class: "label", text: "Bénéfice par heure" }), h("span", { class: "v " + (c.perHour == null ? "muted" : c.perHour >= 0 ? "pos" : "neg"), text: c.perHour == null ? "—" : (c.perHour >= 0 ? "+" : "") + kk(c.perHour) + " ₭/h" }),
+        h("span", { class: "note", text: c.profit == null ? "" : (c.profit >= 0 ? "+" : "") + k(c.profit) + " ₭ par obtention" }))) : null);
+}
+// Rentabilité > Farm et captures
+function viewRentaFarm() {
+  const rows = Object.keys(OBT).map(Number).map(id => ({ id, c: obtainCalc(id) })).filter(r => r.c)
+    .sort((a, b) => (b.c.perHour ?? -1e15) - (a.c.perHour ?? -1e15));
+  return h("section", { class: "panel" },
+    h("div", { class: "row between" }, h("h2", { text: "Farm et captures : bénéfice par heure" }), h("span", { class: "chip", text: rows.length + " objet" + (rows.length > 1 ? "s" : "") })),
+    h("p", { class: "note", text: "Valeur nette = prix actuel (sinon milieu de la fourchette) × quantité obtenue, moins " + S.settings.tax + " % de taxe HDV. On retire l'investissement (objets consommés au prix du groupe + frais), puis on ramène à l'heure selon la durée moyenne." }),
+    searchBox("Ajouter un objet (archimonstre, ressource de boss…)", {}, id => { openSheet(id); setTimeout(() => { const el = document.getElementById("obtain-panel"); el?.scrollIntoView({ block: "start" }); document.getElementById("ob-minutes")?.focus(); }, 400); }, "q-rfarm"),
+    rows.length ? h("div", { class: "tablewrap" }, h("table", {},
+      h("thead", {}, h("tr", {}, h("th", { text: "Objet" }), h("th", { class: "n", text: "Durée" }), h("th", { class: "n", text: "Valeur nette" }), h("th", { class: "n", text: "Investissement" }), h("th", { class: "n", text: "Bénéfice" }), h("th", { class: "n", text: "Par heure" }))),
+      h("tbody", {}, rows.map(({ id, c }) => h("tr", {},
+        h("td", {}, itemLink(id, "×" + c.ob.qty + " · " + (c.sell == null ? "prix inconnu" : "à " + k(c.sell) + " ₭"), 28)),
+        h("td", { class: "n", text: fmtDur(c.ob.minutes) }),
+        h("td", { class: "n", text: c.net == null ? "?" : k(c.net) }),
+        h("td", { class: "n" }, k(c.invest), c.missing.filter(x => x !== id).length ? h("span", { class: "chip warn", style: "margin-left:6px", text: "incomplet" }) : null),
+        h("td", { class: "n " + (c.profit == null ? "muted" : c.profit >= 0 ? "pos" : "neg"), text: c.profit == null ? "—" : (c.profit >= 0 ? "+" : "") + k(c.profit) }),
+        h("td", { class: "n" }, c.perHour == null ? h("span", { class: "muted", text: "—" }) : h("span", { class: "verdict " + (c.perHour >= 0 ? "good" : "bad"), text: (c.perHour >= 0 ? "+" : "") + kk(c.perHour) + " /h" }))))))) :
+      h("div", { class: "empty" }, h("strong", { text: "Aucune obtention renseignée" }),
+        h("span", { text: "Cherche un objet ci-dessus (par exemple une âme d'archimonstre), indique le temps moyen pour l'obtenir et ce qu'il faut dépenser (pierres de capture…). Le bénéfice par heure s'affichera ici." })));
+}
+
+// =====================================================================
 // Habillage : icônes, onglets, bandeaux de section
 // =====================================================================
 const IC = {
@@ -2308,7 +2435,7 @@ function heroFor(v) {
   const H = {
     accueil: ["Bienvenue dans l'atelier", n.toLocaleDateString("fr-FR", { weekday: "long", day: "numeric", month: "long" }) + " · " + Object.keys(prices()).length + " prix suivis par le groupe", "home", alm],
     plan: ["Plan de craft", "Ce que tu veux fabriquer, et tout ce qu'il faut réunir pour y arriver.", "hammer", S.targets.flatMap(t => [t.id, ...(recipe(t.id)?.[1] || []).map(x => x[0])])],
-    rentabilite: ["Crafter ou acheter ?", "Compare le coût de chaque craft au prix de l'HDV, marge nette après taxe.", "trend", Object.keys(prices()).map(Number).filter(id => recipe(id))],
+    rentabilite: ["Rentabilité", "Crafter ou acheter, farmer ou capturer : ce qui rapporte vraiment, taxe et investissement déduits.", "trend", Object.keys(prices()).map(Number).filter(id => recipe(id))],
     prix: ["Prix du groupe", SH ? "Chaque relevé est partagé en direct avec tout le groupe." : "Tes relevés de fourchettes de prix à l'HDV.", "coins", Object.keys(prices()).map(Number)],
     farm: ["Liste de farm", "Où récolter, quels monstres taper, quels donjons faire.", "leaf", []],
     comparer: ["Comparer deux builds", "Pièces, statistiques et coût côte à côte, pour choisir la meilleure variante.", "compare", [...new Set(S.builds.flatMap(b => b.items))]],

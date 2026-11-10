@@ -436,3 +436,6 @@ footer.note { text-align: center; padding-top: 8px; }
 .fs-row strong { font-size: 1.2rem; }
 .perso-t input.cell.sm { width: 66px; }
 .perso-t td, .perso-t th { padding-left: 5px; padding-right: 5px; }
+.tour-inputs { grid-template-columns: 1fr 1fr 1fr; }
+.tour-inputs #tour-cur { font-size: 1.1rem; }
+@media (max-width: 480px) { .tour-inputs { grid-template-columns: 1fr 1fr; } .tour-inputs #tour-cur { grid-column: 1 / -1; } }
