@@ -15,6 +15,7 @@ create table if not exists public.price_obs (
   lo integer not null check (lo >= 0),
   hi integer not null check (hi >= lo),
   created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),  -- le relevé le plus récent d'un jour fait foi
   primary key (item_id, user_id, d)
 );
 create index if not exists price_obs_item on public.price_obs (item_id);

@@ -124,7 +124,7 @@ async function flush() {
         // Synchronise MES relevés d'un objet : ajoute/modifie, puis supprime les jours retirés
         const id = +key.slice(2), mine = (RAW[id] || {})[ME] || [];
         if (mine.length) {
-          const { error } = await SB.from("price_obs").upsert(mine.map(o => ({ item_id: id, user_id: ME, d: o.d, lo: Math.round(o.lo), hi: Math.round(o.hi) })));
+          const { error } = await SB.from("price_obs").upsert(mine.map(o => ({ item_id: id, user_id: ME, d: o.d, lo: Math.round(o.lo), hi: Math.round(o.hi), updated_at: o.t || new Date().toISOString() })));
           if (error) throw error;
         }
         let del = SB.from("price_obs").delete().eq("item_id", id).eq("user_id", ME);
@@ -205,7 +205,7 @@ async function startOnline(session) {
 async function loadAllPrices() {
   const rows = [];
   for (let from = 0; ; from += 1000) {
-    const { data, error } = await SB.from("price_obs").select("item_id,user_id,d,lo,hi").order("item_id").range(from, from + 999);
+    const { data, error } = await SB.from("price_obs").select("item_id,user_id,d,lo,hi,updated_at").order("item_id").range(from, from + 999);
     if (error) throw error;
     rows.push(...data);
     if (data.length < 1000) break;
@@ -219,7 +219,7 @@ async function loadAllPrices() {
 function addRaw(r) {
   const by = RAW[r.item_id] || (RAW[r.item_id] = {});
   const list = (by[r.user_id] || []).filter(o => o.d !== r.d);
-  list.push({ d: r.d, lo: r.lo, hi: r.hi }); list.sort((a, b) => a.d < b.d ? -1 : 1);
+  list.push({ d: r.d, lo: r.lo, hi: r.hi, t: r.updated_at || "" }); list.sort((a, b) => a.d < b.d ? -1 : 1);
   by[r.user_id] = list;
 }
 function delRaw(r) {
@@ -301,14 +301,18 @@ let AGG = {};             // vue agrégée : id -> [{d, lo, hi, n, by}]
 const NAMES = {};
 const prices = () => SH ? AGG : S.prices;
 // Moyenne des relevés d'un même jour (plusieurs membres peuvent relever le même objet)
+// Pour un objet et un jour, le relevé le plus récent fait foi ; les autres restent consultables (others)
 function aggregate(id) {
   const days = new Map();
   for (const [u, list] of Object.entries(RAW[id] || {})) for (const o of (Array.isArray(list) ? list : [])) {
     if (!o || !o.d || o.lo == null) continue;
-    const x = days.get(o.d) || { d: o.d, lo: 0, hi: 0, n: 0, by: [] };
-    x.lo += +o.lo; x.hi += +(o.hi ?? o.lo); x.n++; x.by.push(u); days.set(o.d, x);
+    (days.get(o.d) || days.set(o.d, []).get(o.d)).push({ u, lo: +o.lo, hi: +(o.hi ?? o.lo), t: o.t || "" });
   }
-  const arr = [...days.values()].map(x => ({ d: x.d, lo: x.lo / x.n, hi: x.hi / x.n, n: x.n, by: x.by })).sort((a, b) => a.d < b.d ? -1 : 1);
+  const arr = [...days.entries()].map(([d, list]) => {
+    list.sort((a, b) => (a.t < b.t ? 1 : a.t > b.t ? -1 : 0));
+    const w = list[0];
+    return { d, lo: w.lo, hi: w.hi, n: list.length, by: list.map(x => x.u), others: list.slice(1) };
+  }).sort((a, b) => a.d < b.d ? -1 : 1);
   if (arr.length) AGG[id] = arr; else delete AGG[id];
 }
 const whoName = u => u === ME ? "toi" : (NAMES[u] || "un membre");
@@ -350,7 +354,7 @@ function addObs(id, lo, hi, d = today()) {
   if (lo > hi) [lo, hi] = [hi, lo];
   if (SH && ME) {
     const mine = [...((RAW[id] || {})[ME] || [])].filter(o => o.d !== d);
-    mine.push({ d, lo, hi }); mine.sort((a, b) => a.d < b.d ? -1 : 1);
+    mine.push({ d, lo, hi, t: new Date().toISOString() }); mine.sort((a, b) => a.d < b.d ? -1 : 1);
     RAW[id] = { ...(RAW[id] || {}), [ME]: mine }; aggregate(id);
     persist("s:" + id);
     return;
@@ -720,18 +724,18 @@ async function renderSheet() {
   const seg = h("span", { class: "seg", role: "group", "aria-label": "Période" }, ["week", "month"].map(m =>
     h("button", { type: "button", "aria-pressed": chartMode === m ? "true" : "false", onclick: () => { chartMode = m; try { localStorage.setItem(LS + "-chart", m); } catch {} renderSheet(); } }, m === "week" ? "Par semaine" : "Par mois")));
   const prices = h("section", { class: "panel" },
-    h("div", { class: "row between" }, h("h3", { text: "Prix à l'HDV" }), last ? h("span", { class: "chip kamas", text: range(last.lo, last.hi) + " ₭ · " + ago(last.d) + (last.n > 1 ? " · moyenne de " + last.n : "") }) : h("span", { class: "chip", text: "aucun relevé" })),
+    h("div", { class: "row between" }, h("h3", { text: "Prix à l'HDV" }), last ? h("span", { class: "chip kamas", text: range(last.lo, last.hi) + " ₭ · " + ago(last.d) + (SH && last.by ? " · par " + whoName(last.by[0]) : "") }) : h("span", { class: "chip", text: "aucun relevé" })),
     h("div", { class: "form-row" },
       h("label", {}, "Moyenne basse", loIn), h("label", {}, "Moyenne haute", hiIn), h("label", {}, "Date", dateIn), saveBtn),
     mineNote,
-    h("p", { class: "note", text: "Prix à l'unité, en kamas : 1200, 1 200, 1.200, 12k ou 1,5m. Un relevé par jour et par personne, modifiable à tout moment (choisis sa date ou clique sur « Modifier » dans l'historique)." + (SH ? " Partagé avec tout le groupe ; si plusieurs membres relèvent le même jour, l'atelier prend la moyenne." : "") }),
+    h("p", { class: "note", text: "Prix à l'unité, en kamas : 1200, 1 200, 1.200, 12k ou 1,5m. Un relevé par jour et par personne, modifiable à tout moment (choisis sa date ou clique sur « Modifier » dans l'historique)." + (SH ? " Partagé avec tout le groupe ; si plusieurs membres relèvent le même jour, le relevé le plus récent fait foi." : "") }),
     h("div", { class: "row between" }, h("span", { class: "label", text: "Évolution sur 12 " + (chartMode === "week" ? "semaines" : "mois") }), seg),
     chart(id, chartMode),
     o.length ? h("details", {}, h("summary", { class: "note", text: o.length + " relevé" + (o.length > 1 ? "s" : "") + " enregistré" + (o.length > 1 ? "s" : "") }),
       h("div", { class: "tablewrap" }, h("table", {}, h("tbody", {}, o.slice().reverse().slice(0, 60).map(x => h("tr", {},
         h("td", { text: parseD(x.d).toLocaleDateString("fr-FR", { day: "numeric", month: "short", year: "numeric" }) }),
         h("td", { class: "n", text: range(x.lo, x.hi) + " ₭" }),
-        h("td", { class: "small muted", text: SH && x.by ? (x.n > 1 ? "moyenne de " + x.n + " : " : "par ") + x.by.map(whoName).join(", ") : "" }),
+        h("td", { class: "small muted", text: SH && x.by ? "par " + whoName(x.by[0]) + (x.others && x.others.length ? " · plus ancien" + (x.others.length > 1 ? "s" : "") + " : " + x.others.map(o => whoName(o.u) + " " + range(o.lo, o.hi)).join(", ") : "") : "" }),
         h("td", {}, myObs(id, x.d) ? h("span", { class: "row", style: "gap:4px;flex-wrap:nowrap" },
           h("button", { type: "button", class: "btn sm", title: "Modifier mon relevé de ce jour", onclick: () => { obsEditDate = x.d; renderSheet(); setTimeout(() => { const el = document.getElementById("obs-lo"); el?.scrollIntoView({ block: "center" }); el?.select(); }, 40); } }, "Modifier"),
           h("button", { type: "button", class: "x", "aria-label": "Supprimer mon relevé", title: "Supprimer mon relevé de ce jour", onclick: () => { delObs(id, x.d); renderSheet(); } }, "×")) : null))))))) : null);
@@ -1137,7 +1141,7 @@ function viewPrix() {
         h("thead", {}, h("tr", {}, h("th", { text: "Objet" }), h("th", { class: "n", text: "Dernière fourchette" }), h("th", { text: "Relevé" }), h("th", { text: "12 semaines" }), h("th", { class: "n", text: "Var. 7 j+" }), h("th", { text: "Ton relevé du jour (basse · haute)" }))),
         h("tbody", {}, rows.map(r => h("tr", {},
           h("td", {}, itemLink(r.id, r.n + " relevé" + (r.n > 1 ? "s" : ""), 26)),
-          h("td", { class: "n" }, range(r.last.lo, r.last.hi), r.last.n > 1 ? h("small", { class: "muted", style: "display:block", text: "moyenne de " + r.last.n + " relevés" }) : SH && r.last.by ? h("small", { class: "muted", style: "display:block", text: "par " + whoName(r.last.by[0]) }) : null),
+          h("td", { class: "n" }, range(r.last.lo, r.last.hi), SH && r.last.by ? h("small", { class: "muted", style: "display:block", text: "par " + whoName(r.last.by[0]) + (r.last.others && r.last.others.length ? " · aussi " + r.last.others.map(x => whoName(x.u) + " " + range(x.lo, x.hi)).join(", ") : "") }) : null),
           h("td", {}, h("span", { class: "chip" + (ageDays(r.last.d) >= 7 ? " warn" : ""), text: ago(r.last.d) })),
           h("td", {}, sparkline(r.id)),
           h("td", { class: "n " + (r.varp == null ? "muted" : r.varp >= 0 ? "pos" : "neg"), text: r.varp == null ? "—" : (r.varp >= 0 ? "▲ +" : "▼ ") + Math.round(r.varp) + " %" }),
