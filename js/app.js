@@ -1444,6 +1444,8 @@ function viewBuilds() {
       h("div", { class: "stack" },
         h("section", { class: "panel" },
           h("div", { class: "row" }, rename,
+            h("button", { type: "button", class: "btn sm", title: "Créer une variante de ce build", onclick: () => { const nb = { id: Math.random().toString(36).slice(2, 10), name: b.name + " (variante)", items: [...b.items], at: Date.now() }; S.builds.push(nb); buildSel = nb.id; CMP = { ...CMP, a: b.id, b: nb.id }; persist("builds"); render(); toast("Variante créée : modifie-la puis compare-la dans « Comparer »"); } }, "Dupliquer"),
+            S.builds.length > 1 ? h("button", { type: "button", class: "btn sm", onclick: () => { CMP = { ...CMP, a: b.id, b: (S.builds.find(x => x.id !== b.id) || {}).id }; location.hash = "#comparer"; } }, "Comparer") : null,
             h("button", { type: "button", class: "btn sm", onclick: () => { const i = S.builds.indexOf(b), copy = { ...b, items: [...b.items] }; S.builds = S.builds.filter(x => x !== b); buildSel = null; persist("builds"); render(); toast("Build supprimé", () => { S.builds.splice(i, 0, copy); buildSel = copy.id; persist("builds"); render(); }); } }, "Supprimer")),
           over.length ? h("p", { class: "neg small", text: "Trop de pièces pour : " + over.join(", ") + "." }) : null,
           searchBox("Ajouter une pièce (équipement, dofus, familier…)", {}, id => { if (!isEquip(id)) { toast(item(id)[0] + " n'est pas un équipement"); return; } if (!b.items.includes(id)) { b.items.push(id); b.items.sort(slotSort); persist("builds"); } render(); }, "q-build"),
@@ -2001,6 +2003,85 @@ function viewAlertes() {
 }
 
 // =====================================================================
+// Comparateur de builds : pièces, statistiques, coût, panoplies
+// =====================================================================
+let CMP = { a: null, b: null, jet: "max" };
+function viewComparer() {
+  if (S.builds.length < 2) return h("div", { class: "empty" }, h("strong", { text: "Il faut au moins deux builds" }),
+    h("span", { text: "Crée ou importe un deuxième build dans l'onglet Builds. Astuce : le bouton « Dupliquer » crée une variante d'un build existant, idéale pour tester un changement de pièce." }),
+    h("a", { href: "#builds", class: "btn primary", style: "text-decoration:none" }, "Aller aux builds"));
+  const ids = S.builds.map(b => b.id);
+  if (!ids.includes(CMP.a)) CMP.a = S.builds[S.builds.length - 2].id;
+  if (!ids.includes(CMP.b) || CMP.b === CMP.a) CMP.b = S.builds.find(b => b.id !== CMP.a).id;
+  const A = S.builds.find(b => b.id === CMP.a), B = S.builds.find(b => b.id === CMP.b);
+  const missing = [...A.items, ...B.items].filter(id => !DET[id % 32]);
+  if (missing.length) { ensureDets(missing).then(() => { if (view === "comparer") render(); }); return h("div", { class: "loading", text: "Chargement des effets…" }); }
+  const pick = (key, other) => {
+    const el = h("select", { id: "cmp-" + key, "aria-label": "Build " + key.toUpperCase() }, S.builds.map(b => h("option", { value: b.id, selected: b.id === CMP[key], disabled: b.id === CMP[other] }, b.name)));
+    el.addEventListener("change", () => { CMP[key] = el.value; render(); });
+    return el;
+  };
+  const jetSeg = h("span", { class: "seg", role: "group", "aria-label": "Jet comparé" }, [["min", "Jet minimum"], ["mid", "Jet moyen"], ["max", "Jet maximum"]].map(([v, l]) =>
+    h("button", { type: "button", "aria-pressed": CMP.jet === v ? "true" : "false", onclick: () => { CMP.jet = v; render(); } }, l)));
+  const val = x => !x ? 0 : CMP.jet === "min" ? x.lo : CMP.jet === "max" ? x.hi : (x.lo + x.hi) / 2;
+  const sA = buildStats(A.items), sB = buildStats(B.items), cA = buildCost(A.items), cB = buildCost(B.items);
+  // Statistiques : union des caractéristiques, rangées par catégorie
+  const chars = [...new Set([...Object.keys(sA.tot), ...Object.keys(sB.tot)])].map(Number).filter(c => D.chars[c] && (val(sA.tot[c]) || val(sB.tot[c])));
+  chars.sort((x, y) => D.chars[x][1] - D.chars[y][1] || D.chars[x][2] - D.chars[y][2]);
+  const groups = { 0: "Caractéristiques", 1: "Résistances", 2: "Dommages et soins" };
+  // Nom lisible d'une caractéristique, d'après le texte de l'effet (« 0% Résistance Terre » → « Résistance Terre (%) »)
+  const isPct = c => /^0\s*%/.test(fxText(D.chars[c][0], 0, 0));
+  const statName = c => { const n = fxText(D.chars[c][0], 2, 2).replace(/^2\s*%?\s*/, "").trim() || D.chars[c][3]; return isPct(c) ? n + " (%)" : n; };
+  const fmtV = (c, v) => (Number.isInteger(v) ? fmt.format(v) : v.toLocaleString("fr-FR", { maximumFractionDigits: 1 })) + (isPct(c) ? " %" : "");
+  let curCat = null;
+  const statRows = [];
+  for (const c of chars) {
+    if (D.chars[c][1] !== curCat) { curCat = D.chars[c][1]; statRows.push(h("tr", { class: "cmp-cat" }, h("td", { colspan: 4, text: groups[curCat] || "Autres" }))); }
+    const a = val(sA.tot[c]), b = val(sB.tot[c]), d = b - a;
+    statRows.push(h("tr", { class: d ? "" : "same" },
+      h("td", { text: statName(c) }), h("td", { class: "n", text: fmtV(c, a) }), h("td", { class: "n", text: fmtV(c, b) }),
+      h("td", { class: "n " + (d > 0 ? "pos" : d < 0 ? "neg" : "muted"), text: d ? (d > 0 ? "▲ +" : "▼ −") + fmtV(c, Math.abs(d)) : "=" })));
+  }
+  // Pièces par emplacement
+  const slotRows = Object.entries(SLOTS).sort((x, y) => x[1][1] - y[1][1]).map(([sp, [label]]) => {
+    const ia = A.items.filter(id => superOf(id) === +sp), ib = B.items.filter(id => superOf(id) === +sp);
+    if (!ia.length && !ib.length) return null;
+    const cell = (list, other) => h("td", {}, list.length ? h("div", { style: "display:grid;gap:4px" }, list.map(id => h("div", { class: other.includes(id) ? "cmp-same" : "cmp-diff" }, itemLink(id, "niv. " + item(id)[1], 26)))) : h("span", { class: "muted small", text: "—" }));
+    return h("tr", {}, h("td", { class: "label", text: label }), cell(ia, ib), cell(ib, ia));
+  }).filter(Boolean);
+  const tot = c => c.missing ? range(c.lo, c.hi) + " k + " + c.missing + " sans prix" : range(c.lo, c.hi) + " k";
+  const midA = (cA.lo + cA.hi) / 2, midB = (cB.lo + cB.hi) / 2, dCost = midB - midA;
+  const lvl = b => Math.max(0, ...b.items.map(id => item(id)[1]));
+  const setsTxt = st => st.setRows.length ? st.setRows.map(r => (D.sets[r.st] || "Panoplie") + " " + r.n + "/" + r.of).join(" · ") : "aucune";
+  return h("div", { class: "stack" },
+    h("section", { class: "panel" },
+      h("div", { class: "cmp-head" },
+        h("label", { class: "jf-field cmp-a" }, h("span", { text: "Build A" }), pick("a", "b")),
+        h("button", { type: "button", class: "btn sm", title: "Inverser", onclick: () => { [CMP.a, CMP.b] = [CMP.b, CMP.a]; render(); } }, "⇄"),
+        h("label", { class: "jf-field cmp-b" }, h("span", { text: "Build B" }), pick("b", "a"))),
+      h("div", { class: "tiles" },
+        h("div", { class: "tile kamas" }, h("span", { class: "label", text: "Coût A" }), h("span", { class: "v", text: kk(midA) }), h("span", { class: "small muted", text: tot(cA) })),
+        h("div", { class: "tile kamas" }, h("span", { class: "label", text: "Coût B" }), h("span", { class: "v", text: kk(midB) }), h("span", { class: "small muted", text: tot(cB) })),
+        h("div", { class: "tile" }, h("span", { class: "label", text: "Écart de coût" }), h("span", { class: "v " + (dCost > 0 ? "neg" : dCost < 0 ? "pos" : ""), text: (dCost > 0 ? "+" : dCost < 0 ? "−" : "") + kk(Math.abs(dCost)) }), h("span", { class: "small muted", text: dCost > 0 ? "B coûte plus cher" : dCost < 0 ? "B coûte moins cher" : "même coût" })),
+        h("div", { class: "tile" }, h("span", { class: "label", text: "Niveau requis" }), h("span", { class: "v", text: lvl(A) + " → " + lvl(B) }), h("span", { class: "small muted", text: A.items.length + " → " + B.items.length + " pièces" })))),
+    h("div", { class: "grid2b" },
+      h("section", { class: "panel" },
+        h("div", { class: "row between" }, h("h2", { text: "Statistiques" }), jetSeg),
+        chars.length ? h("div", { class: "tablewrap" }, h("table", { class: "cmp-table" },
+          h("thead", {}, h("tr", {}, h("th", { text: "Caractéristique" }), h("th", { class: "n", text: "A" }), h("th", { class: "n", text: "B" }), h("th", { class: "n", text: "B − A" }))),
+          h("tbody", {}, statRows))) : h("p", { class: "muted", text: "Aucune statistique chiffrée pour ces pièces." }),
+        h("p", { class: "note", text: "Effets des pièces et bonus de panoplie, sans points de caractéristiques, parchemins, forgemagie ni exos." })),
+      h("div", { class: "stack" },
+        h("section", { class: "panel" }, h("h2", { text: "Pièces" }),
+          h("div", { class: "tablewrap" }, h("table", { class: "cmp-table" },
+            h("thead", {}, h("tr", {}, h("th", { text: "Emplacement" }), h("th", { text: A.name }), h("th", { text: B.name }))),
+            h("tbody", {}, slotRows))),
+          h("p", { class: "note", text: "Les pièces communes aux deux builds sont grisées." })),
+        h("section", { class: "panel" }, h("h2", { text: "Panoplies" }),
+          h("p", {}, h("strong", { text: "A : " }), setsTxt(sA)), h("p", {}, h("strong", { text: "B : " }), setsTxt(sB))))));
+}
+
+// =====================================================================
 // Habillage : icônes, onglets, bandeaux de section
 // =====================================================================
 const IC = {
@@ -2013,6 +2094,7 @@ const IC = {
   bag: "M6 9a6 6 0 0 1 12 0v11H6z M9 9V6a3 3 0 0 1 6 0v3 M6 14h12",
   book: "M4 5a2 2 0 0 1 2-2h13v16H6a2 2 0 0 0-2 2z M4 21V5 M8 7h7 M8 11h5",
   save: "M12 3v12 M7 10l5 5 5-5 M4 17v3h16v-3",
+  compare: "M8 3v18 M16 3v18 M3 8h5 M16 16h5 M3 3h18v18H3z",
   bell: "M6 16v-5a6 6 0 1 1 12 0v5l2 2H4z M10 21a2 2 0 0 0 4 0",
   user: "M12 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8z M4 21a8 8 0 0 1 16 0",
   up: "M12 20V5 M6 11l6-6 6 6 M5 20h14",
@@ -2023,7 +2105,7 @@ const IC = {
 const svgI = name => { const el = s("svg", { class: "i", viewBox: "0 0 24 24", "aria-hidden": "true" }); for (const d of IC[name].split(" M")) el.append(s("path", { d: d.startsWith("M") ? d : "M" + d })); return el; };
 const TABS = [
   ["accueil", "Accueil", "home", "--c-home"], ["plan", "Plan de craft", "hammer", "--c-craft", "c-plan"], ["rentabilite", "Rentabilité", "trend", "--c-gold"],
-  ["prix", "Prix HDV", "coins", "--c-gold", "c-prix"], ["tournee", "Tournée HDV", "route", "--c-gold", "c-tour"], ["journal", "Journal", "ledger", "--c-journal"], ["alertes", "Alertes", "bell", "--c-gold", "c-alert"], ["farm", "Farm", "leaf", "--c-farm"], ["metiers", "Métiers", "up", "--c-craft"], ["builds", "Builds", "shield", "--c-build", "c-builds"],
+  ["prix", "Prix HDV", "coins", "--c-gold", "c-prix"], ["tournee", "Tournée HDV", "route", "--c-gold", "c-tour"], ["journal", "Journal", "ledger", "--c-journal"], ["alertes", "Alertes", "bell", "--c-gold", "c-alert"], ["farm", "Farm", "leaf", "--c-farm"], ["metiers", "Métiers", "up", "--c-craft"], ["builds", "Builds", "shield", "--c-build", "c-builds"], ["comparer", "Comparer", "compare", "--c-build"],
   ["stock", "Inventaire", "bag", "--c-stock", "c-stock"], ["encyclopedie", "Encyclopédie", "book", "--c-ency"], ["compte", "Compte", "user", "--c-save"],
 ];
 // Sections regroupées : menu latéral (bureau), barre du bas + sous-onglets (téléphone)
@@ -2031,7 +2113,7 @@ const GROUPS = [
   ["accueil", "Accueil", "home", "--c-home", ["accueil"]],
   ["marche", "Marché", "coins", "--c-gold", ["prix", "tournee", "rentabilite", "journal", "alertes"]],
   ["production", "Production", "hammer", "--c-craft", ["plan", "metiers", "farm", "stock"]],
-  ["equipement", "Équipement", "shield", "--c-build", ["builds", "encyclopedie"]],
+  ["equipement", "Équipement", "shield", "--c-build", ["builds", "comparer", "encyclopedie"]],
   ["compte", "Compte", "user", "--c-save", ["compte"]],
 ];
 const tabOf = v => TABS.find(t => t[0] === v);
@@ -2092,6 +2174,7 @@ function heroFor(v) {
     rentabilite: ["Crafter ou acheter ?", "Compare le coût de chaque craft au prix de l'HDV, marge nette après taxe.", "trend", Object.keys(prices()).map(Number).filter(id => recipe(id))],
     prix: ["Prix du groupe", SH ? "Chaque relevé est partagé en direct avec tout le groupe." : "Tes relevés de fourchettes de prix à l'HDV.", "coins", Object.keys(prices()).map(Number)],
     farm: ["Liste de farm", "Où récolter, quels monstres taper, quels donjons faire.", "leaf", []],
+    comparer: ["Comparer deux builds", "Pièces, statistiques et coût côte à côte, pour choisir la meilleure variante.", "compare", [...new Set(S.builds.flatMap(b => b.items))]],
     builds: ["Builds", "Importe un build, vois ses stats, son coût et ce qu'il faut farmer.", "shield", bsel ? bsel.items : []],
     stock: ["Inventaire", "Ce que tu as sous la main, valorisé au prix du groupe.", "bag", Object.keys(S.stock).map(Number)],
     encyclopedie: ["Encyclopédie", fmt.format(INDEX.length) + " objets, " + fmt.format(Object.keys(D.recipes).length) + " recettes, effets, drops et panoplies.", "book", []],
@@ -2117,7 +2200,7 @@ function decorate(root, v) {
 // =====================================================================
 // Rendu et navigation
 // =====================================================================
-const VIEWS = { alertes: viewAlertes, metiers: viewMetiers, journal: viewJournal, tournee: viewTournee, farm: viewFarm, builds: viewBuilds, accueil: viewAccueil, plan: viewPlan, rentabilite: viewRentabilite, prix: viewPrix, stock: viewStock, encyclopedie: viewEncyclopedie, compte: viewSauvegarde };
+const VIEWS = { comparer: viewComparer, alertes: viewAlertes, metiers: viewMetiers, journal: viewJournal, tournee: viewTournee, farm: viewFarm, builds: viewBuilds, accueil: viewAccueil, plan: viewPlan, rentabilite: viewRentabilite, prix: viewPrix, stock: viewStock, encyclopedie: viewEncyclopedie, compte: viewSauvegarde };
 function renderCounts() {
   const set = (id, n) => { const el = document.getElementById(id); if (el) { el.textContent = n; el.dataset.z = n ? "0" : "1"; } };
   set("c-plan", S.targets.length);

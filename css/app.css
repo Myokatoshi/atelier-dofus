@@ -42,7 +42,7 @@ img { max-width: 100%; }
 /* Couleur de la section courante */
 [data-sec] { --sec: var(--c-home); }
 [data-sec="accueil"] { --sec: var(--c-home); } [data-sec="plan"] { --sec: var(--c-craft); }
-[data-sec="rentabilite"] { --sec: var(--c-gold); } [data-sec="tournee"] { --sec: var(--c-gold); } [data-sec="journal"] { --sec: var(--c-journal); } [data-sec="metiers"] { --sec: var(--c-craft); } [data-sec="alertes"] { --sec: var(--c-gold); } [data-sec="prix"] { --sec: var(--c-gold); }
+[data-sec="rentabilite"] { --sec: var(--c-gold); } [data-sec="tournee"] { --sec: var(--c-gold); } [data-sec="journal"] { --sec: var(--c-journal); } [data-sec="metiers"] { --sec: var(--c-craft); } [data-sec="alertes"] { --sec: var(--c-gold); } [data-sec="comparer"] { --sec: var(--c-build); } [data-sec="prix"] { --sec: var(--c-gold); }
 [data-sec="farm"] { --sec: var(--c-farm); } [data-sec="builds"] { --sec: var(--c-build); }
 [data-sec="stock"] { --sec: var(--c-stock); } [data-sec="encyclopedie"] { --sec: var(--c-ency); }
 [data-sec="compte"] { --sec: var(--c-save); } [data-sec="alm"] { --sec: var(--c-alm); }
@@ -418,3 +418,13 @@ footer.note { text-align: center; padding-top: 8px; }
 .save-side { flex: none; }
 .sidenav { flex: none; }
 @media (max-width: 979px) { .toast { width: calc(100% - 32px); max-width: 520px; justify-content: space-between; } }
+
+/* Comparateur de builds */
+.cmp-head { display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr); gap: 10px; align-items: end; }
+.cmp-head select { width: 100%; }
+.cmp-a span::before, .cmp-b span::before { content: ""; display: inline-block; width: 10px; height: 10px; border-radius: 3px; margin-right: 6px; vertical-align: -1px; }
+.cmp-a span::before { background: var(--c-build); } .cmp-b span::before { background: var(--c-gold); }
+.cmp-table tr.cmp-cat td { font: 800 .68rem var(--f-body); letter-spacing: .09em; text-transform: uppercase; color: var(--sec); padding-top: 14px; border-bottom: 1.5px solid var(--line); }
+.cmp-table tr.same td { color: var(--muted); }
+.cmp-same { opacity: .5; }
+.cmp-diff { border-left: 3px solid var(--sec); padding-left: 6px; border-radius: 2px; }
