@@ -12,7 +12,7 @@ img { max-width: 100%; }
   --accent: #0f8a6a; --on-accent: #ffffff;
   /* Couleurs des sections */
   --c-home: #0f8a6a; --c-alm: #7c4ddb; --c-craft: #d9601e; --c-gold: #b07a00; --c-farm: #2e8f3e;
-  --c-build: #2f63d0; --c-ency: #c23a66; --c-stock: #8a5a2b; --c-save: #4f6470;
+  --c-build: #2f63d0; --c-ency: #c23a66; --c-stock: #8a5a2b; --c-save: #4f6470; --c-journal: #1f8fb0;
   /* Catégories d'objets */
   --k-equip: #2f63d0; --k-rare: #7c4ddb; --k-res: #2e8f3e; --k-cons: #d9601e; --k-other: #6b7d78;
   --kamas: #9a6a00; --kamas-soft: #fbefcf;
@@ -32,7 +32,7 @@ img { max-width: 100%; }
   --bg: #0f1517; --surface: #172024; --sunk: #1f2a2f; --line: #2c3a40; --fg: #e6efec; --muted: #98aaa5;
   --accent: #3fc79c; --on-accent: #0b1512;
   --c-home: #3fc79c; --c-alm: #a888f0; --c-craft: #f08a4b; --c-gold: #e2b54a; --c-farm: #6cc77a;
-  --c-build: #79a2f2; --c-ency: #ee7aa0; --c-stock: #d4a473; --c-save: #9db2bd;
+  --c-build: #79a2f2; --c-ency: #ee7aa0; --c-stock: #d4a473; --c-save: #9db2bd; --c-journal: #5cc2e0;
   --k-equip: #79a2f2; --k-rare: #a888f0; --k-res: #6cc77a; --k-cons: #f08a4b; --k-other: #98aaa5;
   --kamas: #e2b54a; --kamas-soft: #3a2f16; --good: #7ccf80; --good-soft: #1d3522; --bad: #f08a62; --bad-soft: #40251b;
   --s-hdv: #2f9d7a; --s-craft: #b8862a; --hero-ink: #ffffff; --hm1: 52%; --hm2: 28%;
@@ -42,7 +42,7 @@ img { max-width: 100%; }
 /* Couleur de la section courante */
 [data-sec] { --sec: var(--c-home); }
 [data-sec="accueil"] { --sec: var(--c-home); } [data-sec="plan"] { --sec: var(--c-craft); }
-[data-sec="rentabilite"] { --sec: var(--c-gold); } [data-sec="tournee"] { --sec: var(--c-gold); } [data-sec="prix"] { --sec: var(--c-gold); }
+[data-sec="rentabilite"] { --sec: var(--c-gold); } [data-sec="tournee"] { --sec: var(--c-gold); } [data-sec="journal"] { --sec: var(--c-journal); } [data-sec="prix"] { --sec: var(--c-gold); }
 [data-sec="farm"] { --sec: var(--c-farm); } [data-sec="builds"] { --sec: var(--c-build); }
 [data-sec="stock"] { --sec: var(--c-stock); } [data-sec="encyclopedie"] { --sec: var(--c-ency); }
 [data-sec="sauvegarde"] { --sec: var(--c-save); } [data-sec="alm"] { --sec: var(--c-alm); }
@@ -328,3 +328,18 @@ footer.note { text-align: center; padding-top: 8px; }
 @media (max-width: 480px) { .tour-actions { grid-template-columns: 1fr 1fr; } .tour-actions .big { grid-column: 1 / -1; } }
 .grid2.tour-grid { grid-template-columns: minmax(0, 7fr) minmax(0, 5fr); }
 @media (max-width: 900px) { .grid2.tour-grid { grid-template-columns: minmax(0, 1fr); } }
+
+/* Journal de ventes */
+.jf-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; }
+.jf-field { display: grid; gap: 4px; font-size: .76rem; font-weight: 800; color: var(--muted); align-content: start; }
+.jf-field input.cell { text-align: left; font-size: 1rem; padding: 10px 12px; border-radius: 12px; }
+.jf-field input[type="date"] { width: 100%; }
+.jf-unit { color: var(--kamas); font-weight: 700; min-height: 1.2em; }
+.jf-item { padding: 8px 10px; border-radius: 14px; background: var(--sunk); }
+.chart .b-sell { fill: var(--s-hdv); }
+.chart .b-buy { fill: var(--s-craft); }
+.chart .l-solde { stroke: var(--fg); stroke-width: 2; fill: none; stroke-linejoin: round; }
+.chart .m-solde { fill: var(--fg); stroke: var(--surface); stroke-width: 2; }
+.legend .lsell::before { border-color: var(--s-hdv); border-top-width: 8px; border-radius: 2px; }
+.legend .lbuy::before { border-color: var(--s-craft); border-top-width: 8px; border-radius: 2px; }
+.legend .lsolde::before { border-color: var(--fg); }

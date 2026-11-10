@@ -162,7 +162,7 @@ async function connect() {
   SB = window.supabase.createClient(CFG.supabaseUrl, CFG.supabaseAnonKey, { auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true } });
   SB.auth.onAuthStateChange((ev, session) => {
     if (session && !ME) startOnline(session);
-    if (ev === "SIGNED_OUT") { try { localStorage.removeItem(LS); localStorage.removeItem(LS_PRICES); } catch {} location.hash = ""; location.reload(); }
+    if (ev === "SIGNED_OUT") { try { localStorage.removeItem(LS); localStorage.removeItem(LS_PRICES); localStorage.removeItem("atelier-journal"); } catch {} location.hash = ""; location.reload(); }
   });
   const { data } = await SB.auth.getSession();
   if (data && data.session) startOnline(data.session);
@@ -189,6 +189,7 @@ async function startOnline(session) {
     await loadAllPrices();
     subscribePrices();
     await loadProfiles();
+    await loadTrades();
     saveState("ok", "Synchronisé avec le groupe");
   } catch (e) {
     console.error(e);
@@ -664,6 +665,8 @@ async function renderSheet() {
 
   const actions = h("div", { class: "row" },
     r ? h("button", { type: "button", class: "btn primary", onclick: () => { addTarget(id); toast(it[0] + " ajouté au plan"); } }, "Ajouter au plan de craft") : null,
+    h("button", { type: "button", class: "btn", onclick: () => { JF = { ...JF, kind: "vente", item: id }; sheet.close(); location.hash = "#journal"; } }, "J'ai vendu"),
+    h("button", { type: "button", class: "btn", onclick: () => { JF = { ...JF, kind: "achat", item: id }; sheet.close(); location.hash = "#journal"; } }, "J'ai acheté"),
     h("label", { class: "row", style: "gap:6px" }, h("span", { class: "label", text: "En stock" }), numInput(S.stock[id] || "", v => setStock(id, v), { ph: "0", label: "Quantité en stock", noRender: true, sm: true })));
 
   // Prix
@@ -1143,7 +1146,7 @@ function viewEncyclopedie() {
 function viewSauvegarde() { return h("div", { class: "stack" }, accountPanel(), viewBackup()); }
 function viewBackup() {
   const ta = h("textarea", { id: "io", spellcheck: "false" });
-  ta.value = JSON.stringify({ app: "atelier-dofus3", version: 3, stock: S.stock, prices: prices(), targets: S.targets, expand: S.expand, farm: S.farm, builds: S.builds, settings: S.settings }, null, 1);
+  ta.value = JSON.stringify({ app: "atelier-dofus3", version: 3, stock: S.stock, prices: prices(), targets: S.targets, expand: S.expand, farm: S.farm, builds: S.builds, settings: S.settings, journal: TR }, null, 1);
   const msg = h("span", { class: "note" });
   return h("section", { class: "panel" },
     h("h2", { text: "Sauvegarde et import" }),
@@ -1157,6 +1160,7 @@ function viewBackup() {
           const old = Object.keys(S.prices);
           Object.assign(S, fromAnyBackup(o));
           S.targets = S.targets.filter(t => recipe(t.id));
+          if (Array.isArray(o.journal)) { const have = new Set(TR.map(t => t.id)); for (const t of o.journal) if (t && t.id && !have.has(t.id) && t.item_id && t.qty && t.total != null) addTrade({ id: t.id, d: t.d, kind: t.kind === "achat" ? "achat" : "vente", item_id: +t.item_id, qty: +t.qty, total: +t.total, fee: +t.fee || 0, cost: t.cost == null ? null : +t.cost, note: String(t.note || "").slice(0, 200) }); }
           persist("inventaire", "plan", "builds", ...new Set([...old, ...Object.keys(S.prices)].map(id => "p:" + id)));
           msg.textContent = "Importé."; renderCounts();
         } catch { msg.textContent = "Ce texte n'est pas un JSON valide de l'atelier."; }
@@ -1597,6 +1601,217 @@ function tourEnd() {
 }
 
 // =====================================================================
+// Journal de ventes : achats et ventes réels, bilan par semaine ou par mois
+// =====================================================================
+let TR = [];               // opérations : {id, d, kind:"vente"|"achat", item_id, qty, total, fee, cost, note}
+let TR_ERR = false;        // table absente côté serveur (migration à exécuter)
+const LS_TR = "atelier-journal";
+try { TR = JSON.parse(localStorage.getItem(LS_TR) || "[]"); } catch { TR = []; }
+const lsSaveTr = () => { try { localStorage.setItem(LS_TR, JSON.stringify(TR)); } catch {} };
+const uuid = () => (crypto.randomUUID ? crypto.randomUUID() : "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, c => { const r = Math.random() * 16 | 0; return (c === "x" ? r : (r & 3 | 8)).toString(16); }));
+async function loadTrades() {
+  const rows = [];
+  for (let from = 0; ; from += 1000) {
+    const { data, error } = await SB.from("trades").select("id,d,kind,item_id,qty,total,fee,cost,note").order("d").range(from, from + 999);
+    if (error) { TR_ERR = /trades|relation|schema cache|PGRST205|42P01/i.test((error.code || "") + " " + (error.message || "")); if (!TR_ERR) console.error(error); return; }
+    rows.push(...data);
+    if (data.length < 1000) break;
+  }
+  TR = rows.map(r => ({ ...r, total: +r.total, fee: +r.fee, cost: r.cost == null ? null : +r.cost }));
+  TR_ERR = false; lsSaveTr();
+}
+async function addTrade(t) {
+  TR.push(t); TR.sort((a, b) => a.d < b.d ? -1 : 1); lsSaveTr();
+  if (SB && ME) {
+    saveState("busy", "Enregistrement…");
+    const { error } = await SB.from("trades").insert({ ...t, user_id: ME });
+    saveState(error ? "err" : "ok", error ? "Opération non enregistrée sur le serveur" : "Enregistré");
+    if (error) console.error(error);
+  }
+}
+async function delTrade(id) {
+  const old = TR.find(t => t.id === id);
+  TR = TR.filter(t => t.id !== id); lsSaveTr(); render();
+  if (SB && ME) { const { error } = await SB.from("trades").delete().eq("id", id); if (error) { toast("Suppression impossible"); TR.push(old); lsSaveTr(); render(); return; } }
+  toast("Opération supprimée", () => addTrade(old).then(render));
+}
+// Coût de revient proposé pour une vente
+function costSuggestion(id, qty, d) {
+  if (recipe(id)) { const c = coster(d).craft(id); if (!c.missing) return { v: Math.round((c.lo + c.hi) / 2 * qty), how: "coût du craft aux prix du groupe" }; }
+  const buys = TR.filter(t => t.kind === "achat" && t.item_id === id && t.d <= d);
+  const q = buys.reduce((s, t) => s + t.qty, 0);
+  if (q) return { v: Math.round(buys.reduce((s, t) => s + t.total, 0) / q * qty), how: "prix moyen de tes achats" };
+  return null;
+}
+// Ajoute le prix d'une transaction aux relevés, sans écraser le relevé du jour (on élargit la fourchette)
+function obsFromTrade(id, unit, d) {
+  const mine = SH && ME ? ((RAW[id] || {})[ME] || []) : (S.prices[id] || []);
+  const cur = mine.find(o => o.d === d);
+  addObs(id, cur ? Math.min(cur.lo, unit) : unit, cur ? Math.max(cur.hi, unit) : unit, d);
+}
+
+let JF = { kind: "vente", item: null, qty: 1, total: "", fee: "", cost: "", d: "", note: "", stock: true, obs: true, mode: "week", q: "" };
+function journalForm() {
+  const isV = JF.kind === "vente";
+  const calc = () => {
+    const total = parseKamas(JF.total), qty = Math.max(1, +JF.qty || 1);
+    return { total, qty, autoFee: total != null ? Math.round(total * (S.settings.tax || 0) / 100) : null, sug: isV && JF.item ? costSuggestion(JF.item, qty, JF.d || today()) : null };
+  };
+  const field = (key, label, extra) => {
+    const el = h("input", { class: "cell", id: "jf-" + key, inputmode: "decimal", value: JF[key], "aria-label": label, style: "width:100%" });
+    el.addEventListener("input", () => { JF[key] = el.value; refresh(); });
+    return [h("label", { class: "jf-field" }, h("span", { text: label }), el, extra || null), el];
+  };
+  const unitEl = h("small", { class: "jf-unit" }), sugEl = h("small", { class: "muted" });
+  const [totalField, totalIn] = field("total", "Prix total (kamas)", unitEl);
+  const [feeField, feeIn] = field("fee", "Taxe HDV");
+  const [costField, costIn] = field("cost", "Coût de revient", sugEl);
+  totalIn.placeholder = "ex. 150k";
+  // Aides calculées en direct, sans redessiner le formulaire (la saisie en cours reste intacte)
+  function refresh() {
+    const c = calc();
+    unitEl.textContent = c.total != null ? "Soit " + k(c.total / c.qty) + " k à l'unité" : "";
+    feeIn.placeholder = c.autoFee != null ? k(c.autoFee) + " (" + S.settings.tax + " %)" : S.settings.tax + " % du prix";
+    costIn.placeholder = c.sug ? k(c.sug.v) : "inconnu";
+    sugEl.textContent = c.sug ? "Proposé : " + c.sug.how : "Laisse vide si tu ne le connais pas";
+  }
+  const qtyIn = h("input", { class: "cell", id: "jf-qty", inputmode: "numeric", value: JF.qty, "aria-label": "Quantité", style: "width:100%" });
+  qtyIn.addEventListener("input", () => { JF.qty = qtyIn.value; refresh(); });
+  const dateIn = h("input", { type: "date", id: "jf-d", value: JF.d || today(), max: today(), "aria-label": "Date" });
+  dateIn.addEventListener("change", () => { JF.d = dateIn.value; refresh(); });
+  refresh();
+  const chk = (key, label) => { const el = h("input", { type: "checkbox", id: "jf-" + key, checked: JF[key] }); el.addEventListener("change", () => { JF[key] = el.checked; }); return h("label", { class: "check" }, el, label); };
+  const save = async () => {
+    const t = parseKamas(JF.total), q = Math.max(1, Math.floor(+JF.qty || 1)), d = JF.d || today();
+    if (!JF.item) { toast("Choisis d'abord un objet"); document.getElementById("q-journal")?.focus(); return; }
+    if (t == null) { document.getElementById("jf-total")?.focus(); toast("Indique le prix total"); return; }
+    const { autoFee, sug } = calc();
+    const fee = isV ? (JF.fee !== "" ? parseKamas(JF.fee) || 0 : autoFee || 0) : 0;
+    const cost = isV ? (JF.cost !== "" ? parseKamas(JF.cost) : (sug ? sug.v : null)) : null;
+    await addTrade({ id: uuid(), d, kind: JF.kind, item_id: JF.item, qty: q, total: t, fee, cost, note: JF.note.slice(0, 200) });
+    if (JF.stock) { if (isV) setStock(JF.item, Math.max(0, (S.stock[JF.item] || 0) - q)); else setStock(JF.item, (S.stock[JF.item] || 0) + q); }
+    if (JF.obs) obsFromTrade(JF.item, Math.round(t / q), d);
+    toast((isV ? "Vente" : "Achat") + " enregistré" + (isV ? "e" : "") + " : " + q + " × " + item(JF.item)[0]);
+    JF = { ...JF, item: null, qty: 1, total: "", fee: "", cost: "", note: "" };
+    render();
+  };
+  return h("section", { class: "panel jf", "data-kind": JF.kind },
+    h("div", { class: "row between" }, h("h2", { text: "Nouvelle opération" }),
+      h("span", { class: "seg", role: "group", "aria-label": "Type" }, [["vente", "Vente"], ["achat", "Achat"]].map(([v, l]) =>
+        h("button", { type: "button", "aria-pressed": JF.kind === v ? "true" : "false", onclick: () => { JF.kind = v; JF.fee = ""; JF.cost = ""; render(); } }, l)))),
+    JF.item ? h("div", { class: "row between jf-item" }, itemLink(JF.item, typeName(JF.item) + " · en stock : " + (S.stock[JF.item] || 0), 40),
+      h("button", { type: "button", class: "btn sm", onclick: () => { JF.item = null; render(); } }, "Changer")) :
+      searchBox(isV ? "Quel objet as-tu vendu ?" : "Quel objet as-tu acheté ?", {}, id => { JF.item = id; render(); setTimeout(() => document.getElementById("jf-qty")?.select(), 30); }, "q-journal"),
+    h("div", { class: "jf-grid" },
+      h("label", { class: "jf-field" }, h("span", { text: "Quantité" }), qtyIn),
+      totalField,
+      h("label", { class: "jf-field" }, h("span", { text: "Date" }), dateIn)),
+    isV ? h("div", { class: "jf-grid" }, feeField, costField) : null,
+    h("div", { class: "row" }, chk("stock", isV ? "Retirer de mon stock" : "Ajouter à mon stock"), chk("obs", "Ajouter ce prix aux relevés du groupe")),
+    h("button", { type: "button", class: "btn primary big", onclick: save }, isV ? "Enregistrer la vente" : "Enregistrer l'achat"));
+}
+// Totaux d'une période
+function periodSums(list) {
+  const v = list.filter(t => t.kind === "vente"), a = list.filter(t => t.kind === "achat");
+  const net = v.reduce((s, t) => s + t.total - (t.fee || 0), 0), buy = a.reduce((s, t) => s + t.total, 0);
+  const withCost = v.filter(t => t.cost != null);
+  return { net, buy, solde: net - buy, marge: withCost.length ? withCost.reduce((s, t) => s + t.total - (t.fee || 0) - t.cost, 0) : null, nV: v.length, nA: a.length, noCost: v.length - withCost.length };
+}
+function journalChart(mode) {
+  const bs = buckets(mode, 12).map(p => ({ ...p, ...periodSums(TR.filter(t => t.d >= p.s && t.d <= p.e)) }));
+  if (!TR.length) return h("div", { class: "empty" }, h("strong", { text: "Pas encore de bilan" }), h("span", { text: "Enregistre ta première vente ou ton premier achat : le graphique montrera tes ventes, tes achats et ton solde par " + (mode === "week" ? "semaine" : "mois") + "." }));
+  const W = 640, H = 240, L = 56, R = 12, T = 12, B = 28;
+  const top = niceMax(Math.max(1, ...bs.map(b => Math.max(b.net, b.solde)))), bot = niceMax(Math.max(1, ...bs.map(b => Math.max(b.buy, -b.solde))));
+  const span = top + bot;
+  const y = v => T + (top - v) / span * (H - T - B);
+  const bw = (W - L - R) / bs.length, x = i => L + (i + .5) * bw;
+  const svg = s("svg", { viewBox: `0 0 ${W} ${H}`, role: "img", "aria-label": "Ventes, achats et solde par " + (mode === "week" ? "semaine" : "mois") });
+  for (const v of [top, top / 2, 0, -bot / 2, -bot]) svg.append(s("line", { class: "grid", x1: L, x2: W - R, y1: y(v), y2: y(v), style: v === 0 ? "stroke:var(--muted);stroke-width:1.2" : null }), s("text", { class: "axis", x: L - 6, y: y(v) + 4, "text-anchor": "end" }, (v < 0 ? "−" : "") + kk(Math.abs(v))));
+  bs.forEach((b, i) => {
+    const w = Math.min(26, bw * .55);
+    if (b.net > 0) svg.append(s("path", { class: "b-sell", d: roundTop(x(i) - w / 2, y(b.net), w, y(0) - y(b.net)) }));
+    if (b.buy > 0) svg.append(s("path", { class: "b-buy", d: roundBottom(x(i) - w / 2, y(0) + 1, w, y(-b.buy) - y(0) - 1) }));
+    if ((bs.length - 1 - i) % 2 === 0) svg.append(s("text", { class: "axis", x: x(i), y: H - 8, "text-anchor": "middle" }, b.label));
+  });
+  const pts = bs.map((b, i) => (b.nV || b.nA) ? [x(i), y(b.solde)] : null);
+  let d = "", prev = false; pts.forEach(p => { if (p) { d += (prev ? "L" : "M") + p[0] + " " + p[1]; prev = true; } else prev = false; });
+  svg.append(s("path", { class: "l-solde", d }));
+  pts.forEach(p => { if (p) svg.append(s("circle", { class: "m-solde", cx: p[0], cy: p[1], r: 4 })); });
+  const tip = h("div", { class: "tip", hidden: true }), cross = s("line", { class: "cross", y1: T, y2: H - B, visibility: "hidden" });
+  svg.append(cross);
+  bs.forEach((b, i) => {
+    const hit = s("rect", { x: x(i) - bw / 2, y: 0, width: bw, height: H, fill: "transparent" });
+    const show = () => {
+      cross.setAttribute("x1", x(i)); cross.setAttribute("x2", x(i)); cross.setAttribute("visibility", "visible");
+      tip.replaceChildren(h("strong", { text: b.long }),
+        h("span", {}, h("i", { class: "k", style: "background:var(--s-hdv)" }), "Ventes nettes : " + k(b.net) + " k (" + b.nV + ")"),
+        h("span", {}, h("i", { class: "k", style: "background:var(--s-craft)" }), "Achats : " + k(b.buy) + " k (" + b.nA + ")"),
+        h("span", {}, h("i", { class: "k", style: "background:var(--fg)" }), "Solde : " + (b.solde >= 0 ? "+" : "") + k(b.solde) + " k"));
+      tip.hidden = false; const pct = x(i) / W * 100;
+      tip.style.left = pct > 60 ? "auto" : `calc(${pct}% + 12px)`; tip.style.right = pct > 60 ? `calc(${100 - pct}% + 12px)` : "auto";
+    };
+    hit.addEventListener("mouseenter", show); hit.addEventListener("click", show); svg.append(hit);
+  });
+  svg.addEventListener("mouseleave", () => { tip.hidden = true; cross.setAttribute("visibility", "hidden"); });
+  return h("div", { style: "display:grid;gap:8px" },
+    h("div", { class: "legend" }, h("span", { class: "lsell", text: "Ventes nettes de taxe" }), h("span", { class: "lbuy", text: "Achats" }), h("span", { class: "lsolde", text: "Solde" })),
+    h("div", { class: "chart" }, svg, tip),
+    h("details", {}, h("summary", { class: "note", text: "Voir les valeurs en tableau" }), h("div", { class: "tablewrap" }, h("table", {},
+      h("thead", {}, h("tr", {}, h("th", { text: mode === "week" ? "Semaine" : "Mois" }), h("th", { class: "n", text: "Ventes nettes" }), h("th", { class: "n", text: "Achats" }), h("th", { class: "n", text: "Solde" }))),
+      h("tbody", {}, bs.map(b => h("tr", {}, h("td", { text: b.long }), h("td", { class: "n", text: k(b.net) }), h("td", { class: "n", text: k(b.buy) }), h("td", { class: "n " + (b.solde >= 0 ? "pos" : "neg"), text: k(b.solde) }))))))));
+}
+const roundTop = (x0, y0, w, hh) => { const r = Math.min(4, hh, w / 2); return `M${x0} ${y0 + hh}V${y0 + r}Q${x0} ${y0} ${x0 + r} ${y0}H${x0 + w - r}Q${x0 + w} ${y0} ${x0 + w} ${y0 + r}V${y0 + hh}Z`; };
+const roundBottom = (x0, y0, w, hh) => { const r = Math.min(4, hh, w / 2); return `M${x0} ${y0}V${y0 + hh - r}Q${x0} ${y0 + hh} ${x0 + r} ${y0 + hh}H${x0 + w - r}Q${x0 + w} ${y0 + hh} ${x0 + w} ${y0 + hh - r}V${y0}Z`; };
+
+function viewJournal() {
+  const mode = JF.mode;
+  const [cur, prev] = buckets(mode, 2).reverse();
+  const sc = periodSums(TR.filter(t => t.d >= cur.s && t.d <= cur.e)), sp = periodSums(TR.filter(t => t.d >= prev.s && t.d <= prev.e));
+  const delta = (a, b) => b ? h("span", { class: "small " + (a >= b ? "pos" : "neg"), text: (a >= b ? "▲ " : "▼ ") + k(Math.abs(a - b)) + " vs " + (mode === "week" ? "sem. passée" : "mois dernier") }) : h("span", { class: "small muted", text: "période précédente : 0" });
+  const seg = h("span", { class: "seg", role: "group", "aria-label": "Période" }, [["week", "Par semaine"], ["month", "Par mois"]].map(([v, l]) =>
+    h("button", { type: "button", "aria-pressed": mode === v ? "true" : "false", onclick: () => { JF.mode = v; render(); } }, l)));
+  // Objets les plus rentables (ventes avec coût connu)
+  const by = new Map();
+  for (const t of TR) { if (t.kind !== "vente") continue; const x = by.get(t.item_id) || { id: t.item_id, qty: 0, net: 0, marge: 0, known: true }; x.qty += t.qty; x.net += t.total - (t.fee || 0); if (t.cost == null) x.known = false; else x.marge += t.total - (t.fee || 0) - t.cost; by.set(t.item_id, x); }
+  const best = [...by.values()].sort((a, b) => b.marge - a.marge || b.net - a.net).slice(0, 8);
+  const q = h("input", { type: "search", id: "q-jhist", placeholder: "Filtrer l'historique", value: JF.q, "aria-label": "Filtrer l'historique" });
+  q.addEventListener("input", () => { JF.q = q.value; clearTimeout(q._t); q._t = setTimeout(render, 200); });
+  const hist = TR.slice().reverse().filter(t => !JF.q || norm(item(t.item_id)[0]).includes(norm(JF.q))).slice(0, 60);
+  return h("div", { class: "stack" },
+    TR_ERR ? h("section", { class: "panel" }, h("h2", { text: "Une mise à jour du serveur est nécessaire" }),
+      h("p", { class: "muted", text: "Le journal a besoin d'une nouvelle table. L'administrateur du groupe doit exécuter une fois le fichier supabase/journal.sql dans Supabase (SQL Editor > New query > Run). En attendant, tes opérations restent sur cet appareil." })) : null,
+    h("div", { class: "grid2" },
+      journalForm(),
+      h("div", { class: "stack" },
+        h("section", { class: "panel" },
+          h("div", { class: "row between" }, h("h2", { text: mode === "week" ? "Cette semaine" : "Ce mois-ci" }), seg),
+          h("div", { class: "tiles", style: "grid-template-columns:repeat(2,minmax(0,1fr))" },
+            h("div", { class: "tile" }, h("span", { class: "label", text: "Ventes nettes" }), h("span", { class: "v", text: kk(sc.net) }), delta(sc.net, sp.net)),
+            h("div", { class: "tile kamas" }, h("span", { class: "label", text: "Achats" }), h("span", { class: "v", text: kk(sc.buy) }), h("span", { class: "small muted", text: sc.nA + " achat" + (sc.nA > 1 ? "s" : "") })),
+            h("div", { class: "tile" }, h("span", { class: "label", text: "Solde" }), h("span", { class: "v " + (sc.solde >= 0 ? "pos" : "neg"), text: (sc.solde >= 0 ? "+" : "") + kk(sc.solde) }), delta(sc.solde, sp.solde)),
+            h("div", { class: "tile" }, h("span", { class: "label", text: "Marge sur les ventes" }), h("span", { class: "v " + (sc.marge == null ? "" : sc.marge >= 0 ? "pos" : "neg"), text: sc.marge == null ? "—" : (sc.marge >= 0 ? "+" : "") + kk(sc.marge) }),
+              h("span", { class: "small muted", text: sc.noCost ? sc.noCost + " vente(s) sans coût de revient" : "après coût de revient et taxe" })))),
+        h("section", { class: "panel" }, h("h2", { text: "Évolution sur 12 " + (mode === "week" ? "semaines" : "mois") }), journalChart(mode)))),
+    h("div", { class: "grid2b" },
+      h("section", { class: "panel" }, h("h2", { text: "Ce qui t'a le plus rapporté" }),
+        best.length ? h("div", { class: "tablewrap" }, h("table", {},
+          h("thead", {}, h("tr", {}, h("th", { text: "Objet" }), h("th", { class: "n", text: "Vendus" }), h("th", { class: "n", text: "Ventes nettes" }), h("th", { class: "n", text: "Marge" }))),
+          h("tbody", {}, best.map(b => h("tr", {}, h("td", {}, itemLink(b.id, typeName(b.id), 26)), h("td", { class: "n", text: k(b.qty) }), h("td", { class: "n", text: k(b.net) }),
+            h("td", { class: "n " + (b.marge >= 0 ? "pos" : "neg"), text: (b.marge >= 0 ? "+" : "") + k(b.marge) + (b.known ? "" : " *") })))))) :
+          h("div", { class: "empty" }, h("strong", { text: "Aucune vente pour l'instant" }), h("span", { text: "Tes objets les plus rentables apparaîtront ici." })),
+        best.some(b => !b.known) ? h("p", { class: "note", text: "* certaines ventes n'ont pas de coût de revient : leur marge n'est pas comptée." }) : null),
+      h("section", { class: "panel" },
+        h("div", { class: "row between" }, h("h2", { text: "Historique" }), h("span", { class: "chip", text: TR.length + " opération" + (TR.length > 1 ? "s" : "") })),
+        TR.length ? h("div", { class: "search" }, q) : null,
+        hist.length ? h("div", { class: "tablewrap" }, h("table", {}, h("tbody", {}, hist.map(t => h("tr", {},
+          h("td", {}, h("span", { class: "chip " + (t.kind === "vente" ? "job" : "kamas"), text: t.kind === "vente" ? "Vente" : "Achat" })),
+          h("td", {}, itemLink(t.item_id, t.qty + " × · " + parseD(t.d).toLocaleDateString("fr-FR", { day: "numeric", month: "short" }), 26)),
+          h("td", { class: "n " + (t.kind === "vente" ? "pos" : ""), text: (t.kind === "vente" ? "+" : "−") + k(t.kind === "vente" ? t.total - (t.fee || 0) : t.total) }),
+          h("td", {}, h("button", { type: "button", class: "x", "aria-label": "Supprimer cette opération", onclick: () => delTrade(t.id) }, "×"))))))) :
+          h("p", { class: "muted", text: TR.length ? "Aucune opération ne correspond." : "Tes ventes et achats apparaîtront ici." }))));
+}
+
+// =====================================================================
 // Habillage : icônes, onglets, bandeaux de section
 // =====================================================================
 const IC = {
@@ -1609,13 +1824,14 @@ const IC = {
   bag: "M6 9a6 6 0 0 1 12 0v11H6z M9 9V6a3 3 0 0 1 6 0v3 M6 14h12",
   book: "M4 5a2 2 0 0 1 2-2h13v16H6a2 2 0 0 0-2 2z M4 21V5 M8 7h7 M8 11h5",
   save: "M12 3v12 M7 10l5 5 5-5 M4 17v3h16v-3",
+  ledger: "M6 3h12v18l-3-2-3 2-3-2-3 2z M9 8h6 M9 12h6 M9 16h3",
   route: "M6 19a2 2 0 1 0 0-4 2 2 0 0 0 0 4z M18 9a2 2 0 1 0 0-4 2 2 0 0 0 0 4z M8 17h7a3 3 0 0 0 0-6H9a3 3 0 0 1 0-6h7",
   sun: "M12 7a5 5 0 1 0 0 10 5 5 0 0 0 0-10z M12 1v2 M12 21v2 M1 12h2 M21 12h2 M4.2 4.2l1.4 1.4 M18.4 18.4l1.4 1.4 M4.2 19.8l1.4-1.4 M18.4 5.6l1.4-1.4",
 };
 const svgI = name => { const el = s("svg", { class: "i", viewBox: "0 0 24 24", "aria-hidden": "true" }); for (const d of IC[name].split(" M")) el.append(s("path", { d: d.startsWith("M") ? d : "M" + d })); return el; };
 const TABS = [
   ["accueil", "Accueil", "home", "--c-home"], ["plan", "Plan de craft", "hammer", "--c-craft", "c-plan"], ["rentabilite", "Rentabilité", "trend", "--c-gold"],
-  ["prix", "Prix HDV", "coins", "--c-gold", "c-prix"], ["tournee", "Tournée HDV", "route", "--c-gold", "c-tour"], ["farm", "Farm", "leaf", "--c-farm"], ["builds", "Builds", "shield", "--c-build", "c-builds"],
+  ["prix", "Prix HDV", "coins", "--c-gold", "c-prix"], ["tournee", "Tournée HDV", "route", "--c-gold", "c-tour"], ["journal", "Journal", "ledger", "--c-journal"], ["farm", "Farm", "leaf", "--c-farm"], ["builds", "Builds", "shield", "--c-build", "c-builds"],
   ["stock", "Inventaire", "bag", "--c-stock", "c-stock"], ["encyclopedie", "Encyclopédie", "book", "--c-ency"], ["sauvegarde", "Sauvegarde", "save", "--c-save"],
 ];
 function buildTabs() {
@@ -1658,6 +1874,7 @@ function heroFor(v) {
     stock: ["Inventaire", "Ce que tu as sous la main, valorisé au prix du groupe.", "bag", Object.keys(S.stock).map(Number)],
     encyclopedie: ["Encyclopédie", fmt.format(INDEX.length) + " objets, " + fmt.format(Object.keys(D.recipes).length) + " recettes, effets, drops et panoplies.", "book", []],
     tournee: ["Tournée HDV", TOUR && TOUR.i < TOUR.ids.length ? "Objet " + (TOUR.i + 1) + " sur " + TOUR.ids.length + " · HDV " + hdvName(hdvOf(TOUR.ids[TOUR.i])) : "Relève à la chaîne les prix qui manquent, rangés par hôtel des ventes.", "route", TOUR && TOUR.i < TOUR.ids.length ? TOUR.ids.slice(TOUR.i, TOUR.i + 8) : tourCandidates().ids],
+    journal: ["Journal de ventes", "Tes achats et ventes réels, et ce qu'ils t'ont vraiment rapporté.", "ledger", [...new Set(TR.slice().reverse().map(t => t.item_id))]],
     sauvegarde: ["Sauvegarde", "Exporte ou importe toutes tes données en JSON.", "save", []],
   }[v];
   const fill = { farm: e => supOfE(e) === 9, builds: e => [1, 3, 10, 11].includes(supOfE(e)), encyclopedie: e => supOfE(e) === 13 || supOfE(e) === 12, sauvegarde: e => supOfE(e) === 13 };
@@ -1676,7 +1893,7 @@ function decorate(root, v) {
 // =====================================================================
 // Rendu et navigation
 // =====================================================================
-const VIEWS = { tournee: viewTournee, farm: viewFarm, builds: viewBuilds, accueil: viewAccueil, plan: viewPlan, rentabilite: viewRentabilite, prix: viewPrix, stock: viewStock, encyclopedie: viewEncyclopedie, sauvegarde: viewSauvegarde };
+const VIEWS = { journal: viewJournal, tournee: viewTournee, farm: viewFarm, builds: viewBuilds, accueil: viewAccueil, plan: viewPlan, rentabilite: viewRentabilite, prix: viewPrix, stock: viewStock, encyclopedie: viewEncyclopedie, sauvegarde: viewSauvegarde };
 function renderCounts() {
   document.getElementById("c-plan").textContent = S.targets.length;
   document.getElementById("c-stock").textContent = Object.keys(S.stock).length;

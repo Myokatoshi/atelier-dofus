@@ -25,6 +25,14 @@ Application de fans, sans lien avec Ankama. Données du jeu extraites par le pro
 
 La clé `anon` est publique par conception : la sécurité repose sur les règles du fichier `schema.sql` (seuls les membres connectés lisent les prix, chacun ne modifie que ses relevés et ses propres données).
 
+### Mises à jour du serveur
+
+Quand une nouvelle fonction a besoin d'une table, son fichier SQL est à exécuter une fois (SQL Editor > New query > Run) :
+
+- [`supabase/journal.sql`](supabase/journal.sql) : journal de ventes.
+
+`schema.sql` contient toujours l'ensemble, pour une installation neuve.
+
 ### 2. Mise en ligne sur GitHub Pages
 
 L'appli est publiée sur **https://myokatoshi.github.io/atelier-dofus/** depuis la branche `gh-pages`.

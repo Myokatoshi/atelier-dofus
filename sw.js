@@ -1,11 +1,11 @@
 // Service worker : rend l'appli installable et utilisable hors connexion.
 // Pense à changer VERSION à chaque mise en ligne pour que tout le monde reçoive la mise à jour.
-const VERSION = "atelier-v4";
+const VERSION = "atelier-v6";
 const SHELL = ["./", "index.html", "css/app.css", "js/app.js", "config.js", "vendor/supabase.js", "manifest.webmanifest",
   "icons/icon.svg", "icons/icon-192.png", "data/core.json", "data/farm.json"];
 
 self.addEventListener("install", e => {
-  e.waitUntil(caches.open(VERSION).then(c => c.addAll(SHELL)).then(() => self.skipWaiting()));
+  e.waitUntil(caches.open(VERSION).then(c => c.addAll(SHELL.map(u => new Request(u, { cache: "reload" })))).then(() => self.skipWaiting()));
 });
 self.addEventListener("activate", e => {
   e.waitUntil(caches.keys().then(keys => Promise.all(keys.filter(k => k !== VERSION).map(k => caches.delete(k)))).then(() => self.clients.claim()));
@@ -26,7 +26,7 @@ self.addEventListener("fetch", e => {
   // Reste de l'appli et polices : réponse du cache tout de suite, mise à jour en arrière-plan
   e.respondWith(caches.open(VERSION).then(async c => {
     const hit = await c.match(e.request, { ignoreSearch: true });
-    const net = fetch(e.request).then(r => { if (r.ok || r.type === "opaque") c.put(e.request, r.clone()); return r; }).catch(() => hit);
+    const net = fetch(e.request, sameOrigin ? { cache: "no-cache" } : undefined).then(r => { if (r.ok || r.type === "opaque") c.put(e.request, r.clone()); return r; }).catch(() => hit);
     return hit || net;
   }));
 });
