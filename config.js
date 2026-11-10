@@ -3,5 +3,5 @@
 // Laisse-les vides pour utiliser l'appli en mode local (données dans le navigateur uniquement).
 window.ATELIER_CONFIG = {
   supabaseUrl: "https://jvzwoialynhvhwkccgba.supabase.co",
-  supabaseAnonKey: "",
+  supabaseAnonKey: "sb_publishable_gSJS6PEl2YYA5yg_4hleGQ_lfwn-Ggv",
 };
