@@ -94,6 +94,7 @@ create table if not exists public.item_obtain (
   qty integer not null default 1 check (qty > 0),     -- quantité obtenue à chaque fois
   inputs jsonb not null default '[]',                 -- objets consommés : [{"item": id, "qty": n}]
   extra bigint not null default 0 check (extra >= 0), -- frais divers en kamas
+  auto_stone boolean not null default true,          -- captures : pierre d'âme déduite automatiquement
   updated_by uuid default auth.uid() references auth.users(id) on delete set null,
   updated_at timestamptz not null default now()
 );

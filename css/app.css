@@ -439,3 +439,4 @@ footer.note { text-align: center; padding-top: 8px; }
 .tour-inputs { grid-template-columns: 1fr 1fr 1fr; }
 .tour-inputs #tour-cur { font-size: 1.1rem; }
 @media (max-width: 480px) { .tour-inputs { grid-template-columns: 1fr 1fr; } .tour-inputs #tour-cur { grid-column: 1 / -1; } }
+.stone-box { display: grid; gap: 8px; padding: 10px 12px; border: 1.5px solid var(--sec-line, var(--line)); border-radius: 12px; background: var(--sunk); }

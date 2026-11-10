@@ -178,7 +178,13 @@ def main():
             version = urllib.request.urlopen(urllib.request.Request(BASE.replace("/download/", ""), method="HEAD")).geturl().rsplit("/", 1)[-1]
         except Exception:
             version = "3.x"
-    core = {"v": version, "items": core_items, "recipes": recipes, "types": types, "supers": supers, "jobs": jobs,
+    # Âmes capturées (niveau du monstre) et pierres de capture (niveau maximal)
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    from souls import compute as souls_compute
+    monsters_all = [x["data"] for x in refs("monsters.json") if x["type"]["class"] == "MonsterData"]
+    souls, stones = souls_compute(L, monsters_all, {str(k): v for k, v in core_items.items()}, {str(k): v for k, v in types.items()},
+                                  lambda i: det[i % CHUNKS].get(i, {}))
+    core = {"v": version, "souls": souls, "stones": stones, "items": core_items, "recipes": recipes, "types": types, "supers": supers, "jobs": jobs,
             "sets": sets, "setfx": setfx, "chars": chars, "almanax": alm, "icons": {"size": ICON, "cols": cols, "per": PER_SHEET, "count": len(icon_ids)}}
     json.dump(core, open(OUT / "core.json", "w", encoding="utf-8"), ensure_ascii=False, separators=(",", ":"))
     # ---- Farm : drops des monstres, zones, donjons, récolte ----

@@ -240,7 +240,7 @@ function subscribePrices() {
     })
     .on("postgres_changes", { event: "*", schema: "public", table: "item_obtain" }, p => {
       if (p.eventType === "DELETE") delete OBT[p.old.item_id];
-      else { const r = p.new; OBT[r.item_id] = { minutes: r.minutes == null ? null : +r.minutes, qty: r.qty, inputs: r.inputs || [], extra: +r.extra || 0, by: r.updated_by, t: r.updated_at }; }
+      else { const r = p.new; OBT[r.item_id] = { minutes: r.minutes == null ? null : +r.minutes, qty: r.qty, inputs: r.inputs || [], extra: +r.extra || 0, autoStone: r.auto_stone !== false, by: r.updated_by, t: r.updated_at }; }
       lsSaveObt(); softRender();
     })
     .subscribe();
@@ -1579,13 +1579,14 @@ function tourCandidates(opt = tourSetup) {
   if (opt.alm) { const n = new Date(); for (let i = 0; i < 7; i++) { const d = new Date(n); d.setDate(n.getDate() + i); const a = almanaxFor(d); if (a) add(a[1], "almanax"); } }
   if (opt.builds) for (const b of S.builds) for (const id of b.items) add(id, "build");
   if (opt.stale) for (const id of Object.keys(prices())) add(id, "suivi");
+  if (Object.keys(prices()).some(id => soulOf(+id)) || Object.keys(OBT).some(id => soulOf(+id))) for (const [sid] of D.stones || []) add(sid, "pierre");
   const ids = [...why.keys()].filter(id => needsCheck(id, opt.age));
   for (const id of opt.extra || []) if (!ids.includes(+id)) { ids.push(+id); if (!why.has(+id)) why.set(+id, new Set(["ajout"])); }
   const order = Object.fromEntries(HDV.map(([k], i) => [k, i]));
   ids.sort((a, b) => order[hdvOf(a)] - order[hdvOf(b)] || typeName(a).localeCompare(typeName(b), "fr") || item(a)[0].localeCompare(item(b)[0], "fr"));
   return { ids, why };
 }
-const WHY = { plan: "à acheter pour le plan", vente: "à revendre", almanax: "Almanax", build: "build", suivi: "prix suivi", ajout: "ajouté" };
+const WHY = { pierre: "pierre de capture", plan: "à acheter pour le plan", vente: "à revendre", almanax: "Almanax", build: "build", suivi: "prix suivi", ajout: "ajouté" };
 
 function viewTournee() {
   if (TOUR && TOUR.i < TOUR.ids.length) return tourRun();
@@ -2252,10 +2253,10 @@ let OBT = {};
 try { OBT = JSON.parse(localStorage.getItem("atelier-obtention") || "{}"); } catch { OBT = {}; }
 const lsSaveObt = () => { try { localStorage.setItem("atelier-obtention", JSON.stringify(OBT)); } catch {} };
 async function loadObtain() {
-  const { data, error } = await SB.from("item_obtain").select("item_id,minutes,qty,inputs,extra,updated_by,updated_at");
+  const { data, error } = await SB.from("item_obtain").select("item_id,minutes,qty,inputs,extra,auto_stone,updated_by,updated_at");
   if (error) { console.error(error); return; }
   OBT = {};
-  for (const r of data || []) OBT[r.item_id] = { minutes: r.minutes == null ? null : +r.minutes, qty: r.qty, inputs: r.inputs || [], extra: +r.extra || 0, by: r.updated_by, t: r.updated_at };
+  for (const r of data || []) OBT[r.item_id] = { minutes: r.minutes == null ? null : +r.minutes, qty: r.qty, inputs: r.inputs || [], extra: +r.extra || 0, autoStone: r.auto_stone !== false, by: r.updated_by, t: r.updated_at };
   lsSaveObt();
 }
 async function setObtain(id, data) {
@@ -2264,31 +2265,46 @@ async function setObtain(id, data) {
   if (SB && ME) {
     saveState("busy", "Enregistrement…");
     const { error } = data
-      ? await SB.from("item_obtain").upsert({ item_id: +id, minutes: data.minutes, qty: data.qty, inputs: data.inputs, extra: data.extra, updated_by: ME, updated_at: new Date().toISOString() })
+      ? await SB.from("item_obtain").upsert({ item_id: +id, minutes: data.minutes, qty: data.qty, inputs: data.inputs, extra: data.extra, auto_stone: data.autoStone !== false, updated_by: ME, updated_at: new Date().toISOString() })
       : await SB.from("item_obtain").delete().eq("item_id", +id);
     saveState(error ? "err" : "ok", error ? "Obtention non enregistrée" : "Enregistré pour le groupe");
     if (error) console.error(error);
   }
 }
+// Pierre de capture adaptée à une âme : la moins chère parmi celles qui capturent jusqu'au niveau du monstre
+const soulOf = id => (D.souls || {})[id] || null;
+const isStone = id => (D.stones || []).some(([s]) => s === +id);
+function stoneFor(id) {
+  const so = soulOf(id); if (!so || !(D.stones || []).length) return null;
+  let cands = D.stones.filter(([, max]) => max >= so[0]);
+  if (!cands.length) cands = [D.stones[D.stones.length - 1]];
+  const priced = cands.map(([sid, max]) => ({ id: sid, max, p: nowPrice(priceAt(sid)) })).filter(x => x.p != null).sort((a, b) => a.p - b.p);
+  return { level: so[0], kind: so[1], ...(priced[0] || { id: cands[0][0], max: cands[0][1], p: null }) };
+}
 // Bénéfice d'une obtention : valeur nette de taxe - investissement ; puis ramené à l'heure
+// Une âme sans fiche d'obtention est quand même évaluée (1 capture, pierre automatique)
 function obtainCalc(id) {
-  const ob = OBT[id]; if (!ob) return null;
+  const ob = OBT[id] || (soulOf(id) ? { minutes: null, qty: 1, inputs: [], extra: 0, autoStone: true, virtual: true } : null);
+  if (!ob) return null;
   const tax = (S.settings.tax || 0) / 100;
   const sell = nowPrice(priceAt(id));
   const missing = [];
   if (sell == null) missing.push(id);
   let invest = ob.extra || 0;
   for (const x of ob.inputs || []) { const p = nowPrice(priceAt(x.item)); if (p == null) missing.push(x.item); else invest += p * x.qty; }
+  // Capture : pierre d'âme du bon niveau, sauf si une pierre est déjà saisie à la main ou si l'option est coupée
+  const stone = ob.autoStone !== false && !(ob.inputs || []).some(x => isStone(x.item)) ? stoneFor(id) : null;
+  if (stone) { if (stone.p == null) missing.push(stone.id); else invest += stone.p; }
   const net = sell == null ? null : sell * ob.qty * (1 - tax);
   const profit = net == null ? null : net - invest;
-  return { ob, sell, net, invest, profit, perHour: profit == null || !(ob.minutes > 0) ? null : profit / ob.minutes * 60, missing };
+  return { ob, sell, net, invest, profit, stone, perHour: profit == null || !(ob.minutes > 0) ? null : profit / ob.minutes * 60, missing };
 }
 const fmtDur = m => !(m > 0) ? "—" : m >= 60 ? Math.floor(m / 60) + " h" + (Math.round(m % 60) ? " " + String(Math.round(m % 60)).padStart(2, "0") : "") : Math.round(m * 10) / 10 + " min";
 // Panneau « Obtention » de la fiche objet
 let obtainDraft = null;
 function obtainPanel(id) {
   const ob = OBT[id];
-  if (!obtainDraft || obtainDraft.id !== id) obtainDraft = { id, minutes: ob ? String(ob.minutes) : "", qty: ob ? String(ob.qty) : "1", extra: ob && ob.extra ? fmt.format(ob.extra) : "", inputs: ob ? (ob.inputs || []).map(x => ({ ...x })) : [] };
+  if (!obtainDraft || obtainDraft.id !== id) obtainDraft = { id, minutes: ob && ob.minutes > 0 ? String(ob.minutes) : "", qty: ob ? String(ob.qty) : "1", extra: ob && ob.extra ? fmt.format(ob.extra) : "", inputs: ob ? (ob.inputs || []).map(x => ({ ...x })) : [], autoStone: ob ? ob.autoStone !== false : true };
   const dr = obtainDraft;
   const inp = (key, ph, label) => { const el = h("input", { class: "cell", id: "ob-" + key, inputmode: "decimal", value: dr[key], placeholder: ph, "aria-label": label }); el.addEventListener("input", () => { dr[key] = el.value; }); return h("label", {}, label, el); };
   const save = () => {
@@ -2297,7 +2313,7 @@ function obtainPanel(id) {
     const qty = Math.max(1, Math.round(+dr.qty || 1));
     const extra = dr.extra.trim() ? parseKamas(dr.extra) : 0;
     if (extra == null) { toast("Frais illisibles : écris par exemple 5000 ou 5k"); return; }
-    setObtain(id, { minutes, qty, inputs: dr.inputs.filter(x => x.item && x.qty > 0), extra });
+    setObtain(id, { minutes, qty, inputs: dr.inputs.filter(x => x.item && x.qty > 0), extra, autoStone: dr.autoStone });
     toast("Obtention enregistrée pour " + item(id)[0]); renderSheet(); if (view === "rentabilite") render();
   };
   const c = obtainCalc(id);
@@ -2305,7 +2321,18 @@ function obtainPanel(id) {
     h("div", { class: "row between" }, h("h3", { text: "Obtention (farm, capture…)" }), ob ? h("span", { class: "chip", text: "par " + whoName(ob.by) + (ob.minutes > 0 ? " · " + fmtDur(ob.minutes) : "") }) : h("span", { class: "chip", text: "facultatif" })),
     h("p", { class: "note", text: "Que faut-il dépenser pour obtenir cet objet (pierres de capture, clés…), et combien de temps cela prend-il ? La durée est facultative : avec elle, l'atelier calcule aussi le bénéfice par heure (Rentabilité > Farm et captures). Partagé avec le groupe." }),
     h("div", { class: "form-row" }, inp("minutes", "facultatif", "Durée moyenne (min)"), inp("qty", "1", "Quantité obtenue"), inp("extra", "0", "Autres frais (₭)")),
-    h("div", { style: "display:grid;gap:6px" }, h("span", { class: "label", text: "Investissement par obtention" }),
+    soulOf(id) ? (() => {
+      const so = soulOf(id), st = stoneFor(id), manual = dr.inputs.some(x => isStone(x.item));
+      const cb = h("input", { type: "checkbox", id: "ob-auto", checked: dr.autoStone && !manual, disabled: manual });
+      cb.addEventListener("change", () => { dr.autoStone = cb.checked; renderSheet(); });
+      return h("div", { class: "stone-box" },
+        h("label", { class: "check" }, cb, h("span", {}, h("strong", { text: "Pierre de capture automatique" }),
+          h("small", { class: "muted", style: "display:block", text: (so[1] === "archi" ? "Archimonstre" : "Boss") + " niveau " + so[0] + (manual ? " · une pierre est déjà saisie à la main ci-dessous" : "") }))),
+        st ? h("div", { class: "row between" }, itemLink(st.id, "capture jusqu'au niveau " + (st.max >= 1000 ? "illimité" : st.max), 28),
+          h("span", { class: "chip " + (st.p == null ? "warn" : "kamas"), text: st.p == null ? "prix à relever" : k(st.p) + " ₭" })) : null,
+        st && st.p == null ? h("p", { class: "note", text: "Relève le prix de cette pierre dans Prix HDV (basse, haute, actuel) : l'atelier la déduira automatiquement de toutes les captures de ce niveau." }) : null);
+    })() : null,
+    h("div", { style: "display:grid;gap:6px" }, h("span", { class: "label", text: soulOf(id) ? "Autres objets consommés" : "Investissement par obtention" }),
       dr.inputs.length ? h("div", { style: "display:grid;gap:4px" }, dr.inputs.map((x, i) => {
         const q = h("input", { class: "cell sm", inputmode: "numeric", value: x.qty, "aria-label": "Quantité de " + item(x.item)[0] });
         q.addEventListener("input", () => { x.qty = Math.max(0, Math.round(+q.value || 0)); });
@@ -2323,24 +2350,40 @@ function obtainPanel(id) {
         h("span", { class: "note", text: c.profit == null ? "" : (c.profit >= 0 ? "+" : "") + k(c.profit) + " ₭ par obtention" }))) : null);
 }
 // Rentabilité > Farm et captures
-function viewRentaFarm() {
-  const rows = Object.keys(OBT).map(Number).map(id => ({ id, c: obtainCalc(id) })).filter(r => r.c)
-    .sort((a, b) => (b.c.perHour ?? -1e15) - (a.c.perHour ?? -1e15) || (b.c.profit ?? -1e15) - (a.c.profit ?? -1e15));
+// Prix des pierres de capture, à relever pour que les captures soient chiffrées
+function stonesPanel() {
+  const st = D.stones || []; if (!st.length) return null;
   return h("section", { class: "panel" },
+    h("div", { class: "row between" }, h("h2", { text: "Pierres de capture" }), h("span", { class: "chip", text: st.filter(([id]) => priceAt(id)).length + " / " + st.length + " chiffrées" })),
+    h("p", { class: "note", text: "Relève ici le prix de chaque pierre (basse, haute, actuel). Pour chaque âme, l'atelier déduit automatiquement la pierre la moins chère capable de capturer le monstre, selon son niveau." }),
+    h("div", { class: "tablewrap" }, h("table", {},
+      h("thead", {}, h("tr", {}, h("th", { text: "Pierre" }), h("th", { class: "n", text: "Capture jusqu'au niv." }), h("th", { class: "n", text: "Prix actuel" }), h("th", { text: "Ton relevé du jour (basse · haute · actuel)" }))),
+      h("tbody", {}, st.map(([id, max]) => { const o = priceAt(id); return h("tr", {},
+        h("td", {}, itemLink(id, o ? ago(o.d) : "jamais relevé", 26)),
+        h("td", { class: "n", text: max >= 1000 ? "illimité" : max }),
+        h("td", { class: "n" }, o && o.cur != null ? h("strong", { style: "color:var(--kamas)", text: k(o.cur) }) : h("span", { class: "muted", text: "—" })),
+        h("td", {}, quickObs(id))); })))));
+}
+function viewRentaFarm() {
+  const ids = new Set([...Object.keys(OBT).map(Number), ...Object.keys(D.souls || {}).map(Number).filter(id => priceAt(id))]);
+  const rows = [...ids].map(id => ({ id, c: obtainCalc(id) })).filter(r => r.c)
+    .sort((a, b) => (b.c.perHour ?? -1e15) - (a.c.perHour ?? -1e15) || (b.c.profit ?? -1e15) - (a.c.profit ?? -1e15));
+  return h("div", { class: "stack" }, h("section", { class: "panel" },
     h("div", { class: "row between" }, h("h2", { text: "Farm et captures : bénéfice par heure" }), h("span", { class: "chip", text: rows.length + " objet" + (rows.length > 1 ? "s" : "") })),
-    h("p", { class: "note", text: "Valeur nette = prix actuel (sinon milieu de la fourchette) × quantité obtenue, moins " + S.settings.tax + " % de taxe HDV. On retire l'investissement (objets consommés au prix du groupe + frais), puis on ramène à l'heure quand la durée moyenne est renseignée." }),
+    h("p", { class: "note", text: "Valeur nette = prix actuel (sinon milieu de la fourchette) × quantité obtenue, moins " + S.settings.tax + " % de taxe HDV. On retire l'investissement : pour une âme, la pierre de capture adaptée au niveau du monstre (automatique), plus les objets consommés et les frais saisis ; puis on ramène à l'heure quand la durée moyenne est renseignée." }),
     searchBox("Ajouter un objet (archimonstre, ressource de boss…)", {}, id => { openSheet(id); setTimeout(() => { const el = document.getElementById("obtain-panel"); el?.scrollIntoView({ block: "start" }); document.getElementById("ob-minutes")?.focus(); }, 400); }, "q-rfarm"),
     rows.length ? h("div", { class: "tablewrap" }, h("table", {},
       h("thead", {}, h("tr", {}, h("th", { text: "Objet" }), h("th", { class: "n", text: "Durée" }), h("th", { class: "n", text: "Valeur nette" }), h("th", { class: "n", text: "Investissement" }), h("th", { class: "n", text: "Bénéfice" }), h("th", { class: "n", text: "Par heure" }))),
       h("tbody", {}, rows.map(({ id, c }) => h("tr", {},
-        h("td", {}, itemLink(id, "×" + c.ob.qty + " · " + (c.sell == null ? "prix inconnu" : "à " + k(c.sell) + " ₭"), 28)),
+        h("td", {}, itemLink(id, "×" + c.ob.qty + " · " + (c.sell == null ? "prix inconnu" : "à " + k(c.sell) + " ₭") + (c.stone ? " · " + item(c.stone.id)[0].replace(" pierre d'âme", "") + " (niv. " + c.stone.level + ")" : ""), 28)),
         h("td", { class: "n", text: fmtDur(c.ob.minutes) }),
         h("td", { class: "n", text: c.net == null ? "?" : k(c.net) }),
         h("td", { class: "n" }, k(c.invest), c.missing.filter(x => x !== id).length ? h("span", { class: "chip warn", style: "margin-left:6px", text: "incomplet" }) : null),
         h("td", { class: "n " + (c.profit == null ? "muted" : c.profit >= 0 ? "pos" : "neg"), text: c.profit == null ? "—" : (c.profit >= 0 ? "+" : "") + k(c.profit) }),
         h("td", { class: "n" }, c.perHour == null ? h("span", { class: "muted", text: "—" }) : h("span", { class: "verdict " + (c.perHour >= 0 ? "good" : "bad"), text: (c.perHour >= 0 ? "+" : "") + kk(c.perHour) + " /h" }))))))) :
       h("div", { class: "empty" }, h("strong", { text: "Aucune obtention renseignée" }),
-        h("span", { text: "Cherche un objet ci-dessus (par exemple une âme d'archimonstre), indique le temps moyen pour l'obtenir et ce qu'il faut dépenser (pierres de capture…). Le bénéfice par heure s'affichera ici." })));
+        h("span", { text: "Relève le prix d'une âme (archimonstre ou boss) dans Prix HDV : elle apparaît ici avec sa pierre de capture déduite. Pour un autre objet, cherche-le ci-dessus et indique ce qu'il faut dépenser pour l'obtenir." }))),
+    stonesPanel());
 }
 
 // =====================================================================
