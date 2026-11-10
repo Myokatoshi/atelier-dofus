@@ -1,4 +1,4 @@
-/* Atelier Dofus 3 : feuille de style unique. */
+/* Atelier Dofus 3 : feuille de style unique, thème sombre. */
 html, body { margin: 0; }
 [hidden] { display: none !important; }
 :root { padding-top: env(safe-area-inset-top, 0px); }
@@ -24,19 +24,11 @@ img { max-width: 100%; }
   --f-body: "Nunito", "Segoe UI", system-ui, sans-serif;
   --f-data: "IBM Plex Mono", ui-monospace, "SFMono-Regular", Menlo, monospace;
   --r: 16px;
-  color-scheme: light;
+  color-scheme: dark;
 }
-@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
-  --bg: #0f1517; --surface: #172024; --sunk: #1f2a2f; --line: #2c3a40; --fg: #e6efec; --muted: #98aaa5;
-  --accent: #3fc79c; --on-accent: #0b1512;
-  --c-home: #3fc79c; --c-alm: #a888f0; --c-craft: #f08a4b; --c-gold: #e2b54a; --c-farm: #6cc77a;
-  --c-build: #79a2f2; --c-ency: #ee7aa0; --c-stock: #d4a473; --c-save: #9db2bd;
-  --k-equip: #79a2f2; --k-rare: #a888f0; --k-res: #6cc77a; --k-cons: #f08a4b; --k-other: #98aaa5;
-  --kamas: #e2b54a; --kamas-soft: #3a2f16; --good: #7ccf80; --good-soft: #1d3522; --bad: #f08a62; --bad-soft: #40251b;
-  --s-hdv: #2f9d7a; --s-craft: #b8862a; --hero-ink: #ffffff; --hm1: 52%; --hm2: 28%;
-  --shadow: 0 1px 2px rgb(0 0 0 / .3), 0 8px 24px rgb(0 0 0 / .25);
-  color-scheme: dark; } }
-:root[data-theme="dark"] {
+
+/* Thème unique : sombre */
+:root {
   --bg: #0f1517; --surface: #172024; --sunk: #1f2a2f; --line: #2c3a40; --fg: #e6efec; --muted: #98aaa5;
   --accent: #3fc79c; --on-accent: #0b1512;
   --c-home: #3fc79c; --c-alm: #a888f0; --c-craft: #f08a4b; --c-gold: #e2b54a; --c-farm: #6cc77a;
@@ -50,7 +42,7 @@ img { max-width: 100%; }
 /* Couleur de la section courante */
 [data-sec] { --sec: var(--c-home); }
 [data-sec="accueil"] { --sec: var(--c-home); } [data-sec="plan"] { --sec: var(--c-craft); }
-[data-sec="rentabilite"] { --sec: var(--c-gold); } [data-sec="prix"] { --sec: var(--c-gold); }
+[data-sec="rentabilite"] { --sec: var(--c-gold); } [data-sec="tournee"] { --sec: var(--c-gold); } [data-sec="prix"] { --sec: var(--c-gold); }
 [data-sec="farm"] { --sec: var(--c-farm); } [data-sec="builds"] { --sec: var(--c-build); }
 [data-sec="stock"] { --sec: var(--c-stock); } [data-sec="encyclopedie"] { --sec: var(--c-ency); }
 [data-sec="sauvegarde"] { --sec: var(--c-save); } [data-sec="alm"] { --sec: var(--c-alm); }
@@ -314,3 +306,25 @@ footer.note { text-align: center; padding-top: 8px; }
   .toast { bottom: calc(84px + env(safe-area-inset-bottom, 0px)); }
 }
 @media (prefers-reduced-motion: reduce) { *, *::before { animation: none !important; transition: none !important; } }
+
+/* Tournée HDV */
+.btn.big { padding: 13px 18px; font-size: 1rem; border-radius: 14px; }
+.tour-opts { display: grid; gap: 8px; }
+.tour-opt { display: flex; gap: 12px; align-items: center; padding: 10px 12px; border: 1.5px solid var(--line); border-radius: 14px; cursor: pointer; background: var(--bg); }
+.tour-opt:has(input:checked) { border-color: var(--sec-line); background: var(--sec-soft); }
+.tour-opt input { width: 20px; height: 20px; accent-color: var(--sec); flex: none; }
+.tour-opt span { display: grid; } .tour-opt small { color: var(--muted); font-weight: 600; }
+.tour-list { display: grid; gap: 2px; }
+.tour-li { display: flex; justify-content: space-between; align-items: center; gap: 10px; padding: 6px 8px; border-radius: 10px; width: 100%; }
+.tour-li:hover { background: var(--sunk); }
+.tour-card { border-color: var(--sec-line); background: radial-gradient(90% 100% at 0% 0%, var(--sec-soft) 0%, var(--surface) 55%); }
+.tour-item { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 16px; align-items: center; }
+.tour-item .big { width: 72px; height: 72px; border-radius: 20px; }
+.tour-item h2 { font-size: 1.5rem; }
+.tour-inputs { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.tour-in { width: 100%; min-width: 0; font: 600 1.35rem var(--f-data); text-align: center; padding: 14px 10px; border: 2px solid var(--line); border-radius: 14px; background: var(--bg); color: var(--fg); }
+.tour-unit { min-height: 1.2em; color: var(--kamas); font-weight: 700; font-size: .9rem; }
+.tour-actions { display: grid; grid-template-columns: 1fr auto auto; gap: 8px; }
+@media (max-width: 480px) { .tour-actions { grid-template-columns: 1fr 1fr; } .tour-actions .big { grid-column: 1 / -1; } }
+.grid2.tour-grid { grid-template-columns: minmax(0, 7fr) minmax(0, 5fr); }
+@media (max-width: 900px) { .grid2.tour-grid { grid-template-columns: minmax(0, 1fr); } }

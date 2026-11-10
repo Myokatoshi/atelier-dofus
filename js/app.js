@@ -1071,7 +1071,11 @@ function viewPrix() {
     return { id, last, n: o.length, varp };
   }).sort((a, b) => a.last.d < b.last.d ? -1 : a.last.d > b.last.d ? 1 : 0);
   const toShare = pendingShare();
+  const tourN = tourCandidates().ids.length;
   return h("div", { class: "stack" },
+    tourN ? h("section", { class: "panel" }, h("div", { class: "row between" },
+      h("span", { text: tourN + " prix à relever pour ton plan, tes builds et l'Almanax." }),
+      h("a", { href: "#tournee", class: "btn primary", style: "text-decoration:none" }, "Lancer la tournée HDV"))) : null,
     SH && toShare.length ? h("section", { class: "panel" },
       h("div", { class: "row between" }, h("span", { text: "Tu as des relevés personnels sur " + toShare.length + " objet" + (toShare.length > 1 ? "s" : "") + " qui ne sont pas encore dans les prix du groupe." }),
         h("button", { type: "button", class: "btn primary", onclick: shareMine }, "Les partager avec le groupe"))) : null,
@@ -1449,6 +1453,150 @@ function viewBuilds() {
 }
 
 // =====================================================================
+// Tournée HDV : relever à la chaîne les prix qui manquent ou qui ont vieilli
+// =====================================================================
+const TOUR_LS = "atelier-tournee";
+let TOUR = null;      // {ids, i, saved, skipped:[], lots:{}, started}
+let tourSetup = { plan: true, alm: true, builds: true, stale: true, age: 3, extra: [] };
+try { const t = JSON.parse(localStorage.getItem(TOUR_LS) || "null"); if (t) { TOUR = t.tour || null; tourSetup = { ...tourSetup, ...(t.setup || {}) }; } } catch {}
+function saveTour() { try { localStorage.setItem(TOUR_LS, JSON.stringify({ tour: TOUR, setup: tourSetup })); } catch {} }
+// Hôtel des ventes où chercher l'objet, dans l'ordre de passage conseillé
+const HDV = [["res", "Ressources"], ["cons", "Consommables"], ["equip", "Équipements"], ["arme", "Armes"], ["rare", "Dofus, familiers et montures"], ["autre", "Divers"]];
+function hdvOf(id) {
+  const sp = (D.types[item(id)[2]] || [0, 0])[1];
+  if (sp === 9) return "res";
+  if ([6, 16, 17, 18].includes(sp)) return "cons";
+  if (sp === 2) return "arme";
+  if ([1, 3, 4, 5, 7, 10, 11].includes(sp)) return "equip";
+  if ([12, 13, 22, 23, 25].includes(sp)) return "rare";
+  return "autre";
+}
+const hdvName = k => (HDV.find(x => x[0] === k) || ["", "Divers"])[1];
+function needsCheck(id, age) { const o = priceAt(id); return !o || ageDays(o.d) >= age; }
+// Liste des objets à relever, avec la raison (pour l'aperçu)
+function tourCandidates(opt = tourSetup) {
+  const why = new Map();
+  const add = (id, r) => { id = +id; if (!D.items[id]) return; if (!why.has(id)) why.set(id, new Set()); why.get(id).add(r); };
+  if (opt.plan) {
+    for (const r of computePlan().rows) if (r.buy > 0 && !r.farm) add(r.id, "plan");
+    for (const t of S.targets) add(t.id, "vente");
+  }
+  if (opt.alm) { const n = new Date(); for (let i = 0; i < 7; i++) { const d = new Date(n); d.setDate(n.getDate() + i); const a = almanaxFor(d); if (a) add(a[1], "almanax"); } }
+  if (opt.builds) for (const b of S.builds) for (const id of b.items) add(id, "build");
+  if (opt.stale) for (const id of Object.keys(prices())) add(id, "suivi");
+  const ids = [...why.keys()].filter(id => needsCheck(id, opt.age));
+  for (const id of opt.extra || []) if (!ids.includes(+id)) { ids.push(+id); if (!why.has(+id)) why.set(+id, new Set(["ajout"])); }
+  const order = Object.fromEntries(HDV.map(([k], i) => [k, i]));
+  ids.sort((a, b) => order[hdvOf(a)] - order[hdvOf(b)] || typeName(a).localeCompare(typeName(b), "fr") || item(a)[0].localeCompare(item(b)[0], "fr"));
+  return { ids, why };
+}
+const WHY = { plan: "à acheter pour le plan", vente: "à revendre", almanax: "Almanax", build: "build", suivi: "prix suivi", ajout: "ajouté" };
+
+function viewTournee() {
+  if (TOUR && TOUR.i < TOUR.ids.length) return tourRun();
+  if (TOUR && TOUR.i >= TOUR.ids.length) return tourEnd();
+  return tourPrep();
+}
+function tourPrep() {
+  const { ids, why } = tourCandidates();
+  const cb = (key, label, sub) => {
+    const el = h("input", { type: "checkbox", id: "tour-" + key, checked: tourSetup[key] });
+    el.addEventListener("change", () => { tourSetup[key] = el.checked; saveTour(); render(); });
+    return h("label", { class: "tour-opt" }, el, h("span", {}, h("strong", { text: label }), h("small", { text: sub })));
+  };
+  const age = h("span", { class: "seg", role: "group", "aria-label": "Ancienneté" }, [[1, "Pas relevé aujourd'hui"], [3, "Plus de 3 jours"], [7, "Plus de 7 jours"]].map(([v, l]) =>
+    h("button", { type: "button", "aria-pressed": tourSetup.age === v ? "true" : "false", onclick: () => { tourSetup.age = v; saveTour(); render(); } }, l)));
+  const groups = HDV.map(([k, label]) => [label, ids.filter(id => hdvOf(id) === k)]).filter(g => g[1].length);
+  return h("div", { class: "grid2" },
+    h("section", { class: "panel" },
+      h("h2", { text: "Préparer la tournée" }),
+      h("p", { class: "note", text: "Choisis ce qu'il faut relever. L'atelier garde les objets sans prix ou dont le dernier relevé est trop ancien, puis les range par hôtel des ventes pour t'éviter les allers-retours." }),
+      h("div", { class: "tour-opts" },
+        cb("plan", "Plan de craft", "ingrédients à acheter et objets à revendre"),
+        cb("alm", "Almanax", "offrandes des 7 prochains jours"),
+        cb("builds", "Builds", "toutes les pièces de tes builds"),
+        cb("stale", "Prix suivis", "tous les objets déjà relevés par le groupe")),
+      h("div", { style: "display:grid;gap:6px" }, h("span", { class: "label", text: "Relever les prix" }), age),
+      searchBox("Ajouter un objet à la tournée", {}, id => { if (!tourSetup.extra.includes(id)) tourSetup.extra.push(id); saveTour(); render(); }, "q-tour"),
+      tourSetup.extra.length ? h("div", { class: "chips" }, tourSetup.extra.map(id => h("button", { type: "button", class: "chip", title: "Retirer", onclick: () => { tourSetup.extra = tourSetup.extra.filter(x => x !== id); saveTour(); render(); } }, item(id)[0] + " ×"))) : null,
+      h("button", { type: "button", class: "btn primary big", disabled: !ids.length, onclick: () => { TOUR = { ids, i: 0, saved: 0, skipped: [], lots: {}, started: Date.now() }; saveTour(); render(); } },
+        ids.length ? "Démarrer la tournée · " + ids.length + " objet" + (ids.length > 1 ? "s" : "") : "Rien à relever")),
+    h("section", { class: "panel" },
+      h("div", { class: "row between" }, h("h2", { text: "Ordre de passage" }), h("span", { class: "chip job", text: ids.length + " objets" })),
+      groups.length ? h("div", { style: "display:grid;gap:14px" }, groups.map(([label, list]) => h("div", { style: "display:grid;gap:6px" },
+        h("div", { class: "row between" }, h("span", { class: "label", text: "HDV " + label }), h("span", { class: "small muted", text: list.length + " objet" + (list.length > 1 ? "s" : "") })),
+        h("div", { class: "tour-list" }, list.map(id => { const o = priceAt(id); return h("div", { class: "tour-li" }, itemLink(id, [...why.get(id)].map(r => WHY[r]).join(", "), 28), h("span", { class: "small muted", text: o ? ago(o.d) : "jamais relevé" })); }))))) :
+        h("div", { class: "empty" }, h("strong", { text: "Tout est à jour" }), h("span", { text: "Aucun objet de ta sélection n'a besoin d'un nouveau relevé. Élargis la sélection ou ajoute un objet à la main." }))));
+}
+function tourRun() {
+  const id = TOUR.ids[TOUR.i], g = hdvOf(id), o = priceAt(id), r = recipe(id);
+  const lot = TOUR.lots[g] || (g === "res" ? 1 : 1);
+  const lo = h("input", { class: "tour-in", id: "tour-lo", inputmode: "decimal", autocomplete: "off", placeholder: "Basse", "aria-label": "Moyenne basse, prix du lot" });
+  const hi = h("input", { class: "tour-in", id: "tour-hi", inputmode: "decimal", autocomplete: "off", placeholder: "Haute", "aria-label": "Moyenne haute, prix du lot" });
+  const unit = h("p", { class: "tour-unit" });
+  const showUnit = () => {
+    const a = parseKamas(lo.value), b = parseKamas(hi.value);
+    unit.textContent = lot > 1 && (a != null || b != null) ? "Soit " + range((a ?? b) / lot, (b ?? a) / lot) + " k à l'unité" : "";
+  };
+  [lo, hi].forEach(x => x.addEventListener("input", showUnit));
+  const next = () => { TOUR.i++; saveTour(); render(); setTimeout(() => document.getElementById("tour-lo")?.focus(), 30); };
+  const save = () => {
+    const a = parseKamas(lo.value), b = parseKamas(hi.value);
+    if (a == null && b == null) { lo.focus(); return; }
+    addObs(id, a == null ? null : Math.round(a / lot), b == null ? null : Math.round(b / lot));
+    TOUR.saved++; next();
+  };
+  lo.addEventListener("keydown", e => { if (e.key === "Enter") { e.preventDefault(); if (hi.value) save(); else hi.focus(); } });
+  hi.addEventListener("keydown", e => { if (e.key === "Enter") { e.preventDefault(); save(); } });
+  const lots = h("span", { class: "seg", role: "group", "aria-label": "Taille du lot" }, [1, 10, 100, 1000].map(n =>
+    h("button", { type: "button", "aria-pressed": lot === n ? "true" : "false", onclick: () => { TOUR.lots[g] = n; saveTour(); render(); setTimeout(() => document.getElementById("tour-lo")?.focus(), 30); } }, "×" + n)));
+  const pct = Math.round(100 * TOUR.i / TOUR.ids.length);
+  const prevGroup = TOUR.i > 0 && hdvOf(TOUR.ids[TOUR.i - 1]) !== g;
+  const left = TOUR.ids.slice(TOUR.i + 1);
+  const card = h("section", { class: "panel tour-card" },
+    h("div", { class: "row between" },
+      h("span", { class: "chip job", text: "HDV " + hdvName(g) + (prevGroup ? " · nouvel HDV" : "") }),
+      h("span", { class: "small muted num", text: (TOUR.i + 1) + " / " + TOUR.ids.length })),
+    h("div", { class: "bar" }, h("span", { style: "width:" + pct + "%" })),
+    h("div", { class: "tour-item" }, icon(id, 72, "big"),
+      h("div", { style: "display:grid;gap:4px;min-width:0" },
+        h("h2", { text: item(id)[0] }),
+        h("span", { class: "muted small", text: typeName(id) + " · niveau " + item(id)[1] + (r ? " · " + jobName(r[0]) : "") }),
+        h("span", { class: "chip kamas" }, o ? "Dernier relevé : " + range(o.lo, o.hi) + " k · " + ago(o.d) : "Jamais relevé"))),
+    h("div", { class: "row between" }, h("span", { class: "label", text: "Prix affichés pour un lot de" }), lots),
+    h("div", { class: "tour-inputs" }, lo, hi),
+    unit,
+    h("div", { class: "tour-actions" },
+      h("button", { type: "button", class: "btn primary big", onclick: save }, "Enregistrer et suivant"),
+      h("button", { type: "button", class: "btn", onclick: () => { TOUR.skipped.push(id); next(); } }, "Pas en vente"),
+      h("button", { type: "button", class: "btn", onclick: next }, "Passer")),
+    h("div", { class: "row between" },
+      TOUR.i > 0 ? h("button", { type: "button", class: "btn sm", onclick: () => { TOUR.i--; saveTour(); render(); } }, "← Précédent") : h("span"),
+      h("button", { type: "button", class: "btn sm", onclick: () => { TOUR.ids = TOUR.ids.slice(0, TOUR.i); saveTour(); render(); } }, "Terminer la tournée")));
+  setTimeout(() => { const el = document.getElementById("tour-lo"); if (el && document.activeElement === document.body && matchMedia("(pointer:fine)").matches) el.focus(); }, 30);
+  return h("div", { class: "grid2 tour-grid" }, card,
+    h("section", { class: "panel" },
+      h("div", { class: "row between" }, h("h2", { text: "Ensuite" }), h("span", { class: "small muted", text: TOUR.saved + " relevé" + (TOUR.saved > 1 ? "s" : "") + " enregistré" + (TOUR.saved > 1 ? "s" : "") })),
+      left.length ? h("div", { class: "tour-list" }, left.slice(0, 12).map((x, j) => h("button", { type: "button", class: "tour-li link", onclick: () => { TOUR.i = TOUR.i + 1 + j; saveTour(); render(); } },
+        h("span", { class: "itemline" }, icon(x, 28), h("span", { class: "t" }, h("span", { class: "nm", text: item(x)[0] }), h("small", { text: "HDV " + hdvName(hdvOf(x)) })))))) :
+        h("p", { class: "muted", text: "C'est le dernier objet de la tournée." }),
+      left.length > 12 ? h("p", { class: "note", text: "+ " + (left.length - 12) + " autres" }) : null));
+}
+function tourEnd() {
+  const skipped = TOUR.skipped || [];
+  return h("section", { class: "panel", style: "max-width:640px;margin:0 auto;width:100%" },
+    h("h2", { text: "Tournée terminée" }),
+    h("div", { class: "tiles", style: "grid-template-columns:repeat(2,minmax(0,1fr))" },
+      h("div", { class: "tile" }, h("span", { class: "label", text: "Relevés enregistrés" }), h("span", { class: "v", text: TOUR.saved })),
+      h("div", { class: "tile" }, h("span", { class: "label", text: "Durée" }), h("span", { class: "v", text: Math.max(1, Math.round((Date.now() - TOUR.started) / 60000)) + " min" }))),
+    skipped.length ? h("div", { style: "display:grid;gap:6px" }, h("span", { class: "label", text: "Pas en vente" }), h("div", { class: "chips" }, skipped.map(x => h("button", { type: "button", class: "chip", onclick: () => openSheet(x) }, item(x)[0])))) : null,
+    h("p", { class: "muted", text: SH && ME ? "Tes relevés sont déjà visibles par tout le groupe." : "Tes relevés sont enregistrés." }),
+    h("div", { class: "row" },
+      h("button", { type: "button", class: "btn primary", onclick: () => { TOUR = null; saveTour(); location.hash = "#rentabilite"; } }, "Voir la rentabilité"),
+      h("button", { type: "button", class: "btn", onclick: () => { TOUR = null; saveTour(); render(); } }, "Nouvelle tournée")));
+}
+
+// =====================================================================
 // Habillage : icônes, onglets, bandeaux de section
 // =====================================================================
 const IC = {
@@ -1461,12 +1609,13 @@ const IC = {
   bag: "M6 9a6 6 0 0 1 12 0v11H6z M9 9V6a3 3 0 0 1 6 0v3 M6 14h12",
   book: "M4 5a2 2 0 0 1 2-2h13v16H6a2 2 0 0 0-2 2z M4 21V5 M8 7h7 M8 11h5",
   save: "M12 3v12 M7 10l5 5 5-5 M4 17v3h16v-3",
+  route: "M6 19a2 2 0 1 0 0-4 2 2 0 0 0 0 4z M18 9a2 2 0 1 0 0-4 2 2 0 0 0 0 4z M8 17h7a3 3 0 0 0 0-6H9a3 3 0 0 1 0-6h7",
   sun: "M12 7a5 5 0 1 0 0 10 5 5 0 0 0 0-10z M12 1v2 M12 21v2 M1 12h2 M21 12h2 M4.2 4.2l1.4 1.4 M18.4 18.4l1.4 1.4 M4.2 19.8l1.4-1.4 M18.4 5.6l1.4-1.4",
 };
 const svgI = name => { const el = s("svg", { class: "i", viewBox: "0 0 24 24", "aria-hidden": "true" }); for (const d of IC[name].split(" M")) el.append(s("path", { d: d.startsWith("M") ? d : "M" + d })); return el; };
 const TABS = [
   ["accueil", "Accueil", "home", "--c-home"], ["plan", "Plan de craft", "hammer", "--c-craft", "c-plan"], ["rentabilite", "Rentabilité", "trend", "--c-gold"],
-  ["prix", "Prix HDV", "coins", "--c-gold", "c-prix"], ["farm", "Farm", "leaf", "--c-farm"], ["builds", "Builds", "shield", "--c-build", "c-builds"],
+  ["prix", "Prix HDV", "coins", "--c-gold", "c-prix"], ["tournee", "Tournée HDV", "route", "--c-gold", "c-tour"], ["farm", "Farm", "leaf", "--c-farm"], ["builds", "Builds", "shield", "--c-build", "c-builds"],
   ["stock", "Inventaire", "bag", "--c-stock", "c-stock"], ["encyclopedie", "Encyclopédie", "book", "--c-ency"], ["sauvegarde", "Sauvegarde", "save", "--c-save"],
 ];
 function buildTabs() {
@@ -1508,6 +1657,7 @@ function heroFor(v) {
     builds: ["Builds", "Importe un build, vois ses stats, son coût et ce qu'il faut farmer.", "shield", bsel ? bsel.items : []],
     stock: ["Inventaire", "Ce que tu as sous la main, valorisé au prix du groupe.", "bag", Object.keys(S.stock).map(Number)],
     encyclopedie: ["Encyclopédie", fmt.format(INDEX.length) + " objets, " + fmt.format(Object.keys(D.recipes).length) + " recettes, effets, drops et panoplies.", "book", []],
+    tournee: ["Tournée HDV", TOUR && TOUR.i < TOUR.ids.length ? "Objet " + (TOUR.i + 1) + " sur " + TOUR.ids.length + " · HDV " + hdvName(hdvOf(TOUR.ids[TOUR.i])) : "Relève à la chaîne les prix qui manquent, rangés par hôtel des ventes.", "route", TOUR && TOUR.i < TOUR.ids.length ? TOUR.ids.slice(TOUR.i, TOUR.i + 8) : tourCandidates().ids],
     sauvegarde: ["Sauvegarde", "Exporte ou importe toutes tes données en JSON.", "save", []],
   }[v];
   const fill = { farm: e => supOfE(e) === 9, builds: e => [1, 3, 10, 11].includes(supOfE(e)), encyclopedie: e => supOfE(e) === 13 || supOfE(e) === 12, sauvegarde: e => supOfE(e) === 13 };
@@ -1526,12 +1676,13 @@ function decorate(root, v) {
 // =====================================================================
 // Rendu et navigation
 // =====================================================================
-const VIEWS = { farm: viewFarm, builds: viewBuilds, accueil: viewAccueil, plan: viewPlan, rentabilite: viewRentabilite, prix: viewPrix, stock: viewStock, encyclopedie: viewEncyclopedie, sauvegarde: viewSauvegarde };
+const VIEWS = { tournee: viewTournee, farm: viewFarm, builds: viewBuilds, accueil: viewAccueil, plan: viewPlan, rentabilite: viewRentabilite, prix: viewPrix, stock: viewStock, encyclopedie: viewEncyclopedie, sauvegarde: viewSauvegarde };
 function renderCounts() {
   document.getElementById("c-plan").textContent = S.targets.length;
   document.getElementById("c-stock").textContent = Object.keys(S.stock).length;
   document.getElementById("c-prix").textContent = Object.keys(prices()).length;
   document.getElementById("c-builds").textContent = S.builds.length;
+  const ct = document.getElementById("c-tour"); if (ct) ct.textContent = TOUR && TOUR.i < TOUR.ids.length ? TOUR.ids.length - TOUR.i : tourCandidates().ids.length;
 }
 function render() {
   if (!D) return;
