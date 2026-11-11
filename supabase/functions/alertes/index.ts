@@ -55,7 +55,7 @@ Deno.serve(async () => {
     const g = group.get(id) || null;
     const p = KM?.prices?.[id];
     const km = p ? { d: String(KM.fetched).slice(0, 10), lo: p, hi: p, cur: p } : null;
-    return km && (!g || km.d > g.d) ? km : g;
+    return g || km; // le relevé du groupe passe toujours avant Kamamaster
   };
   const nowPrice = (o: Obs | null) => (o ? (o.cur ?? (o.lo + o.hi) / 2) : null);
 

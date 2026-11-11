@@ -355,7 +355,8 @@ function shareMine() {
 // Prix et calculs
 // =====================================================================
 const obsOf = id => prices()[id] || [];
-// Prix de référence : relevé du groupe ou prix Kamamaster d'Orukam, le plus récent l'emporte (à date égale, le groupe)
+// Prix de référence : le dernier relevé du groupe s'il en existe un, sinon le prix Kamamaster d'Orukam
+// (hors cotes douteuses, écartées à la récupération : voir tools/fetch_kamamaster.py)
 let KM = null, KMH = null, kmhLoading = null;
 // Historique quotidien des prix Kamamaster (90 jours), chargé à la demande pour les courbes
 let kmCheckedAt = 0;
@@ -394,8 +395,11 @@ function priceAt(id, at) {
   const o = obsOf(id); let g = null;
   for (let i = o.length - 1; i >= 0; i--) if (!at || o[i].d <= at) { g = o[i]; break; }
   const km = kmPrice(id, at);
-  return km && (!g || km.d > g.d) ? km : g;
+  return g || km;
 }
+// Cote Kamamaster écartée car trop éloignée de sa médiane récente : [prix relevé, médiane]
+const kmDoubt = id => (KM && S.settings.km !== false && KM.doubt && KM.doubt[id]) || null;
+const doubtText = id => { const x = kmDoubt(id); return x ? "cote douteuse : " + kk(x[0]) + " ₭ chez Kamamaster, d'habitude ~" + kk(x[1]) + " ₭" : ""; };
 const midOf = o => (o.lo + o.hi) / 2;
 const pick = (o, basis) => !o ? null : basis === "lo" ? o.lo : basis === "hi" ? o.hi : basis === "cur" ? (o.cur ?? midOf(o)) : midOf(o);
 // Prix de référence pour vendre ou acheter maintenant : le prix actuel s'il est connu, sinon le milieu de la fourchette
@@ -790,7 +794,7 @@ async function renderSheet() {
   const seg = h("span", { class: "seg", role: "group", "aria-label": "Période" }, ["week", "month"].map(m =>
     h("button", { type: "button", "aria-pressed": chartMode === m ? "true" : "false", onclick: () => { chartMode = m; try { localStorage.setItem(LS + "-chart", m); } catch {} renderSheet(); } }, m === "week" ? "Par semaine" : "Par mois")));
   const prices = h("section", { class: "panel" },
-    h("div", { class: "row between" }, h("h3", { text: "Prix à l'HDV" }), last ? h("span", { class: "chip kamas", text: range(last.lo, last.hi) + " ₭ · " + ago(last.d) + (last.src === "km" ? " · Kamamaster " + KM.server : (last.cur != null ? " · actuel " + k(last.cur) + " ₭" : "") + (SH && last.by ? " · par " + whoName(last.by[0]) : "")) }) : h("span", { class: "chip", text: "aucun relevé" })),
+    h("div", { class: "row between" }, h("h3", { text: "Prix à l'HDV" }), last ? h("span", { class: "chip kamas", text: range(last.lo, last.hi) + " ₭ · " + ago(last.d) + (last.src === "km" ? " · Kamamaster " + KM.server : (last.cur != null ? " · actuel " + k(last.cur) + " ₭" : "") + (SH && last.by ? " · par " + whoName(last.by[0]) : "")) }) : kmDoubt(id) ? h("span", { class: "chip warn", title: "Relève son prix à l'HDV pour le confirmer", text: doubtText(id) }) : h("span", { class: "chip", text: "aucun relevé" })),
     h("div", { class: "form-row" },
       h("label", {}, "Moyenne basse", loIn), h("label", {}, "Moyenne haute", hiIn), h("label", {}, "Prix actuel", curIn), h("label", {}, "Date", dateIn), saveBtn),
     mineNote,
@@ -1199,7 +1203,7 @@ function viewPrix() {
   const kmBox = KM ? h("section", { class: "panel" }, h("div", { class: "row between" },
     h("div", { style: "display:grid;gap:3px;max-width:75ch" },
       h("strong", { text: "Prix Kamamaster · " + KM.server }),
-      h("span", { class: "note", text: fmt.format(Object.keys(KM.prices).length) + " objets, mis à jour le " + new Date(KM.fetched).toLocaleDateString("fr-FR", { day: "numeric", month: "long" }) + " (vérifiés 4 fois par jour sur kamamaster.fr). Ils servent quand le groupe n'a pas de relevé plus récent : un prix unique, utilisé comme basse, haute et actuel. Aussi récupérés : " + Object.keys(KM.coefs || {}).length + " coefficients de brisage, les zones en anomalie et l'historique des prix (courbes)." })),
+      h("span", { class: "note", text: fmt.format(Object.keys(KM.prices).length) + " objets, mis à jour le " + new Date(KM.fetched).toLocaleDateString("fr-FR", { day: "numeric", month: "long" }) + " (vérifiés 4 fois par jour sur kamamaster.fr). Ils servent seulement pour les objets que le groupe n'a jamais relevés : un prix unique, utilisé comme basse, haute et actuel. Une cote qui s'écarte de plus de 3 fois de ses derniers jours est écartée comme douteuse" + (KM.doubt && Object.keys(KM.doubt).length ? " (" + Object.keys(KM.doubt).length + " en ce moment)" : "") + ". Aussi récupérés : " + Object.keys(KM.coefs || {}).length + " coefficients de brisage, les zones en anomalie et l'historique des prix (courbes)." })),
     (() => { const c = h("input", { type: "checkbox", id: "km-on", checked: S.settings.km !== false }); c.addEventListener("change", () => { S.settings.km = c.checked; persist("plan"); render(); }); return h("label", { class: "check" }, c, "Utiliser ces prix"); })())) : null;
   const tourN = tourCandidates().ids.length;
   return h("div", { class: "stack" },
@@ -2613,7 +2617,7 @@ function viewBrisage() {
       rows.length > 120 ? h("p", { class: "note", text: "120 premiers résultats sur " + rows.length + " : affine avec les filtres." }) : null),
     h("section", { class: "panel" },
       h("div", { class: "row between" }, h("h2", { text: "Prix des runes" }), h("span", { class: "chip", text: runeIds.filter(id => priceAt(id)).length + " / " + runeIds.length + " chiffrées" })),
-      h("p", { class: "note", text: "Prix du groupe s'il est plus récent, sinon prix Kamamaster d'Orukam. Corrige une rune directement dans les cases." }),
+      h("p", { class: "note", text: "Prix du groupe s'il a été relevé, sinon prix Kamamaster d'Orukam. Corrige une rune directement dans les cases." }),
       h("div", { class: "tablewrap" }, h("table", {},
         h("thead", {}, h("tr", {}, h("th", { text: "Rune" }), h("th", { class: "n", text: "Prix" }), h("th", { text: "Source" }), h("th", { text: "Ton relevé du jour (basse · haute · actuel)" }))),
         h("tbody", {}, runeIds.map(id => { const o = priceAt(id); return h("tr", {},
@@ -2677,7 +2681,7 @@ function sparkSeries(ser, days = 30) {
 // Objets cotés sur Orukam : prix Kamamaster + prix du groupe
 function cotedIds() {
   const set = new Set(Object.keys(prices()).map(Number));
-  if (KM && S.settings.km !== false) for (const id of Object.keys(KM.prices)) set.add(+id);
+  if (KM && S.settings.km !== false) for (const id of [...Object.keys(KM.prices), ...Object.keys(KM.doubt || {})]) set.add(+id);
   return [...set].filter(id => D.items[id]);
 }
 const favs = () => S.settings.fav || [];
@@ -2710,7 +2714,7 @@ function viewServeur() {
       h("div", { class: "tile" }, h("span", { class: "label", text: "Données Kamamaster" }), h("span", { class: "v", style: "font-size:1.25rem", text: KM ? agoTime(KM.fetched) : "—" }), h("span", { class: "small muted", text: "vérifiées 4 fois par jour" })),
       h("div", { class: "tile" }, h("span", { class: "label", text: "Zones en anomalie" }), h("span", { class: "v", text: anom.length }), h("span", { class: "small muted", text: "bonus de drop en cours" }))),
     h("section", { class: "panel" },
-      h("p", { class: "note", style: "margin:0", text: "Les relevés du groupe arrivent en direct : dès qu'un membre enregistre un prix, il s'affiche chez tout le monde. Les données de Kamamaster (prix d'Orukam, brisage, anomalies, donjons) sont vérifiées 4 fois par jour : Kamamaster les met lui-même à jour environ une fois par jour, et il n'existe pas d'accès direct au serveur du jeu. Le plus récent des deux l'emporte. Source : kamamaster.fr." })),
+      h("p", { class: "note", style: "margin:0", text: "Les relevés du groupe arrivent en direct : dès qu'un membre enregistre un prix, il s'affiche chez tout le monde. Les données de Kamamaster (prix d'Orukam, brisage, anomalies, donjons) sont vérifiées 4 fois par jour : Kamamaster les met lui-même à jour environ une fois par jour, et il n'existe pas d'accès direct au serveur du jeu. Dès que le groupe a relevé un objet, son prix passe avant celui de Kamamaster ; les cotes Kamamaster qui s'écartent de plus de 3 fois de leurs derniers jours sont écartées comme douteuses. Source : kamamaster.fr." })),
     h("div", { class: "grid2 even" },
       h("section", { class: "panel" }, h("div", { class: "row between" }, h("h2", { text: "▲ Plus fortes hausses" }), h("span", { class: "chip", text: span >= 1 ? "sur " + win + " j" : "bientôt" })), moverList(ups, span >= 1 ? "Aucune hausse notable." : noTrend)),
       h("section", { class: "panel" }, h("div", { class: "row between" }, h("h2", { text: "▼ Plus fortes baisses" }), h("span", { class: "chip", text: span >= 1 ? "sur " + win + " j" : "bientôt" })), moverList(downs, span >= 1 ? "Aucune baisse notable." : noTrend))),
@@ -2745,10 +2749,10 @@ function viewCotes() {
   const nq = norm(cotF.q || "");
   const span = histDays();
   let rows = all.filter(id => (!cotF.fav || favs().includes(id)) && (!cotF.type || item(id)[2] === +cotF.type) && (!nq || norm(item(id)[0]).includes(nq)) && (!cotF.min || item(id)[1] >= +cotF.min) && (!cotF.max || item(id)[1] <= +cotF.max))
-    .map(id => { const o = priceAt(id), ser = seriesOf(id); return { id, o, p: nowPrice(o), ser, v7: varOf(ser, 7), v30: varOf(ser, 30), vAll: varOf(ser, 1) }; }).filter(r => r.p != null);
+    .map(id => { const o = priceAt(id), ser = seriesOf(id); return { id, o, p: nowPrice(o), ser, v7: varOf(ser, 7), v30: varOf(ser, 30), vAll: varOf(ser, 1) }; }).filter(r => r.p != null || kmDoubt(r.id));
   const byName = (a, b) => item(a.id)[0].localeCompare(item(b.id)[0], "fr");
   const nn = v => v ?? -Infinity;
-  const SORTS = { nom: byName, prixd: (a, b) => b.p - a.p || byName(a, b), prixa: (a, b) => a.p - b.p || byName(a, b), hausse: (a, b) => nn(b.v7 ?? b.vAll) - nn(a.v7 ?? a.vAll) || byName(a, b), baisse: (a, b) => ((a.v7 ?? a.vAll ?? Infinity) - (b.v7 ?? b.vAll ?? Infinity)) || byName(a, b), niveau: (a, b) => item(b.id)[1] - item(a.id)[1] || byName(a, b) };
+  const SORTS = { nom: byName, prixd: (a, b) => (b.p ?? -1) - (a.p ?? -1) || byName(a, b), prixa: (a, b) => (a.p ?? Infinity) - (b.p ?? Infinity) || byName(a, b), hausse: (a, b) => nn(b.v7 ?? b.vAll) - nn(a.v7 ?? a.vAll) || byName(a, b), baisse: (a, b) => ((a.v7 ?? a.vAll ?? Infinity) - (b.v7 ?? b.vAll ?? Infinity)) || byName(a, b), niveau: (a, b) => item(b.id)[1] - item(a.id)[1] || byName(a, b) };
   rows.sort(SORTS[cotF.sort] || byName);
   const q = h("input", { type: "search", id: "q-cotes", placeholder: "Chercher un objet", value: cotF.q, "aria-label": "Chercher un objet" });
   q.addEventListener("input", () => { cotF.q = q.value; cotF.n = 100; clearTimeout(q._t); q._t = setTimeout(render, 250); });
@@ -2768,13 +2772,14 @@ function viewCotes() {
         h("tbody", {}, shown.map(r => h("tr", {},
           h("td", {}, favBtn(r.id)),
           h("td", {}, itemLink(r.id, typeName(r.id) + " · niv. " + item(r.id)[1], 26)),
-          h("td", { class: "n" }, h("strong", { style: "color:var(--kamas)", text: k(r.p) }), r.o.src !== "km" && Math.round(r.o.lo) !== Math.round(r.o.hi) ? h("small", { class: "muted", style: "display:block", text: range(r.o.lo, r.o.hi) }) : null, h("small", { class: "muted show-m", text: r.o.src === "km" ? "Kamamaster" : "groupe" })),
-          h("td", { class: "small muted hide-m", text: srcLabel(r.o) }),
+          r.o ? h("td", { class: "n" }, h("strong", { style: "color:var(--kamas)", text: k(r.p) }), r.o.src !== "km" && Math.round(r.o.lo) !== Math.round(r.o.hi) ? h("small", { class: "muted", style: "display:block", text: range(r.o.lo, r.o.hi) }) : null, h("small", { class: "muted show-m", text: r.o.src === "km" ? "Kamamaster" : "groupe" }))
+            : h("td", { class: "n" }, h("span", { class: "chip warn", title: doubtText(r.id), text: "douteuse" }), h("small", { class: "muted", style: "display:block", text: kk(kmDoubt(r.id)[0]) + " ₭ ?" })),
+          h("td", { class: "small muted hide-m", text: r.o ? srcLabel(r.o) : doubtText(r.id) }),
           varCell(r.v7), (c => { c.classList.add("hide-m"); return c; })(varCell(r.v30)),
           h("td", { class: "hide-m" }, sparkSeries(r.ser))))))) :
         h("div", { class: "empty" }, h("strong", { text: cotF.fav && !favs().length ? "Tu ne suis encore aucun objet" : "Aucun objet ne correspond" }), h("span", { text: cotF.fav && !favs().length ? "Clique sur l'étoile d'un objet pour le suivre : tu retrouveras ici sa cote et sa tendance." : "Change la recherche ou les filtres." })),
       rows.length > shown.length ? h("div", { class: "row", style: "justify-content:center" }, h("button", { type: "button", class: "btn", onclick: () => { cotF.n += 200; render(); } }, "Afficher plus (" + fmt.format(rows.length - shown.length) + " restants)")) : null,
-      h("p", { class: "note", text: "Prix : le dernier relevé du groupe s'il est plus récent, sinon la cote Kamamaster d'Orukam. Les variations comparent au prix d'il y a 7 et 30 jours" + (span < 7 ? " ; l'historique a commencé il y a " + span + " jour" + (span > 1 ? "s" : "") + ", elles se rempliront au fil des jours" : "") + ". Clique sur un objet pour sa courbe complète et saisir un relevé." })));
+      h("p", { class: "note", text: "Prix : le dernier relevé du groupe s'il existe, sinon la cote Kamamaster d'Orukam. Une cote Kamamaster qui s'écarte de plus de 3 fois de ses derniers jours est marquée douteuse : relève-la à l'HDV. Les variations comparent au prix d'il y a 7 et 30 jours" + (span < 7 ? " ; l'historique a commencé il y a " + span + " jour" + (span > 1 ? "s" : "") + ", elles se rempliront au fil des jours" : "") + ". Clique sur un objet pour sa courbe complète et saisir un relevé." })));
 }
 
 let djF = { q: "", min: "", max: "", an: false, sort: "kh", n: 40, open: new Set() };
@@ -2826,7 +2831,7 @@ function viewDonjons() {
             h("td", { class: "n hide-m", text: (x.rate < 10 ? x.rate.toFixed(2) : x.rate.toFixed(1)).replace(".", ",") + " %" }),
             h("td", { class: "n", text: x.q < 10 ? x.q.toFixed(2).replace(".", ",") : k(x.q) }),
             h("td", { class: "n hide-m" }, x.p == null ? h("span", { class: "muted", text: "—" }) : k(x.p), x.o ? h("small", { class: "muted", style: "display:block", text: x.o.src === "km" ? "Kamamaster" : "groupe" }) : null),
-            h("td", { class: "n" }, x.v == null ? h("span", { class: "muted", text: "sans prix" }) : h("strong", { text: k(x.v) }))))))),
+            h("td", { class: "n" }, x.v == null ? h("span", { class: kmDoubt(x.id) ? "chip warn" : "muted", title: doubtText(x.id), text: kmDoubt(x.id) ? "cote douteuse" : "sans prix" }) : h("strong", { text: k(x.v) }))))))),
         c.tot && c.drops[0].v / c.tot > 0.7 ? h("p", { class: "note", text: "⚠ " + item(c.drops[0].id)[0] + " fait " + Math.round(c.drops[0].v / c.tot * 100) + " % de la valeur de ce donjon : vérifie son prix à l'HDV (" + k(c.drops[0].p) + " ₭), une cote isolée peut fausser le classement." }) : null,
         c.missing ? h("p", { class: "note", text: c.missing + " drop(s) sans prix connu : relève leur prix pour affiner le total." }) : null,
         d.miss ? h("p", { class: "note", text: d.miss + " monstre(s) du donjon non reconnus par Kamamaster : leurs drops ne sont pas comptés." }) : null));
@@ -2838,7 +2843,7 @@ function viewDonjons() {
       h("div", { class: "row", style: "gap:8px" },
         h("span", { class: "label", text: "Prospection" }), ppIn, h("span", { class: "label", text: "Personnages" }), chIn, h("span", { class: "label", text: "Tri" }), sortSeg),
       h("div", { class: "filters" }, h("div", { class: "search" }, q), lv("min", "Niv. min"), lv("max", "Niv. max"), h("label", { class: "check" }, anCb, "En anomalie seulement")),
-      h("p", { class: "note", text: "Valeur des drops attendus par passage (calcul de Kamamaster pour une équipe de 4, bonus d'anomalie compris), ajustée à ta prospection et au nombre de tes personnages, aux prix d'Orukam : relevé du groupe s'il est plus récent, sinon cote Kamamaster. Règle la durée d'un passage dans chaque donjon pour un kamas/heure à ton rythme. Les âmes et ressources de quête ne sont pas comptées." })),
+      h("p", { class: "note", text: "Valeur des drops attendus par passage (calcul de Kamamaster pour une équipe de 4, bonus d'anomalie compris), ajustée à ta prospection et au nombre de tes personnages, aux prix d'Orukam : relevé du groupe s'il existe, sinon cote Kamamaster (hors cotes douteuses). Règle la durée d'un passage dans chaque donjon pour un kamas/heure à ton rythme. Les âmes et ressources de quête ne sont pas comptées." })),
     rows.length ? h("div", { class: "djlist" }, rows.slice(0, djF.n).map(card)) : h("div", { class: "empty" }, h("strong", { text: "Aucun donjon ne correspond" }), h("span", { text: "Change la recherche ou les filtres." })),
     rows.length > djF.n ? h("div", { class: "row", style: "justify-content:center" }, h("button", { type: "button", class: "btn", onclick: () => { djF.n += 40; render(); } }, "Afficher plus (" + (rows.length - djF.n) + " restants)")) : null);
 }

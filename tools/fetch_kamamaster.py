@@ -7,7 +7,8 @@ Usage : python3 tools/fetch_kamamaster.py [Orukam]
 - <serveur>.json : {"server", "fetched", "source",
                     "prices": {id_objet: prix},                       prix HDV (0 ignorés)
                     "coefs": {id_objet: [coefficient %, "AAAA-MM-JJ"]}, coefficients de brisage (meilleures opportunités)
-                    "anomalies": {id_sous_zone: bonus %}}               zones en anomalie (bonus > 0)
+                    "anomalies": {id_sous_zone: bonus %},              zones en anomalie (bonus > 0)
+                    "doubt": {id_objet: [prix, médiane récente]}}       cotes douteuses, retirées de "prices"
 - <serveur>-donjons.json : rentabilité des donjons calculée par Kamamaster (équipe de 4, prospection 100,
                     30 min, 1 personnage) : drops attendus par passage, bonus d'anomalie compris
 - <serveur>-history.json : {"dates": [...], "prices": {id_objet: [prix ou 0 par date]}}, 90 derniers jours
@@ -24,6 +25,8 @@ API = "https://api.kamamaster.fr/api/"
 UA = {"User-Agent": "AtelierDofus/1.0 (outil privé d'un groupe d'amis, quelques appels par jour)"}
 KEEP_DAYS = 90
 MAX_PRICE = 1_000_000_000  # au-delà : annonce fantaisiste à l'HDV, ignorée
+DOUBT_RATIO = 3            # cote douteuse : plus de 3 fois au-dessus ou en dessous de la médiane récente
+DOUBT_DAYS, DOUBT_MIN = 7, 3  # médiane des 7 derniers jours connus, au moins 3 valeurs pour juger
 
 
 def get(path, **params):
@@ -51,6 +54,24 @@ def main():
             prices[str(x["ankamaId"])] = p
     if len(prices) < 100:
         raise SystemExit(f"Réponse suspecte ({len(prices)} prix) : fichiers non modifiés")
+
+    # Cotes douteuses : écart de plus de ×3 avec la médiane des derniers jours (Kamamaster ne relève
+    # qu'une annonce par objet ; une seule annonce fantaisiste suffit à fausser la cote)
+    raw = dict(prices)
+    hist_file = out_dir / f"{slug}-history.json"
+    hist = {"dates": [], "prices": {}}
+    if hist_file.exists():
+        hist = json.load(open(hist_file, encoding="utf-8"))
+    day = now.strftime("%Y-%m-%d")
+    past = [i for i, d in enumerate(hist["dates"]) if d < day][-DOUBT_DAYS:]
+    doubt = {}
+    for k, p in raw.items():
+        vals = sorted(v for v in (hist["prices"].get(k, [])[i] for i in past if i < len(hist["prices"].get(k, []))) if v > 0)
+        if len(vals) >= DOUBT_MIN:
+            med = vals[len(vals) // 2] if len(vals) % 2 else (vals[len(vals) // 2 - 1] + vals[len(vals) // 2]) / 2
+            if p > med * DOUBT_RATIO or p < med / DOUBT_RATIO:
+                doubt[k] = [p, round(med)]
+                del prices[k]
 
     # 2. Coefficients de brisage (meilleures opportunités du serveur)
     coefs = {}
@@ -105,7 +126,8 @@ def main():
         return True
 
     changed = save(out_dir / f"{slug}.json", {"server": server, "source": "https://kamamaster.fr",
-                   "prices": dict(sorted(prices.items(), key=lambda kv: int(kv[0]))), "coefs": coefs, "anomalies": anomalies})
+                   "prices": dict(sorted(prices.items(), key=lambda kv: int(kv[0]))), "coefs": coefs, "anomalies": anomalies,
+                   "doubt": dict(sorted(doubt.items(), key=lambda kv: int(kv[0])))})
     if dungeons:
         save(out_dir / f"{slug}-donjons.json", {"server": server, "source": "https://kamamaster.fr",
              "params": {"team": 4, "pp": 100, "min": 30, "chars": 1}, "list": dungeons})
@@ -114,21 +136,17 @@ def main():
         return
 
     # 4. Historique quotidien des prix (90 jours)
-    hist_file = out_dir / f"{slug}-history.json"
-    hist = {"dates": [], "prices": {}}
-    if hist_file.exists():
-        hist = json.load(open(hist_file, encoding="utf-8"))
-    day = now.strftime("%Y-%m-%d")
+    # (prix bruts, cotes douteuses comprises : si un nouveau prix se confirme, la médiane le rattrape)
     if hist["dates"] and hist["dates"][-1] == day:  # relancé le même jour : on remplace
         hist["dates"].pop()
         for v in hist["prices"].values():
             v.pop()
     hist["dates"].append(day)
     n = len(hist["dates"])
-    for k in set(hist["prices"]) | set(prices):
+    for k in set(hist["prices"]) | set(raw):
         row = hist["prices"].setdefault(k, [0] * (n - 1))
         row.extend([0] * (n - 1 - len(row)))
-        row.append(prices.get(k, 0))
+        row.append(raw.get(k, 0))
     if n > KEEP_DAYS:
         cut = n - KEEP_DAYS
         hist["dates"] = hist["dates"][cut:]
@@ -137,7 +155,7 @@ def main():
     json.dump(hist, open(hist_file, "w", encoding="utf-8"), separators=(",", ":"))
 
     print(f"{server} : {len(prices)} prix, {len(coefs)} coefficients de brisage, {len(anomalies)} zone(s) en anomalie, "
-          f"{len(dungeons or [])} donjons, historique de {len(hist['dates'])} jour(s)")
+          f"{len(doubt)} cote(s) douteuse(s), {len(dungeons or [])} donjons, historique de {len(hist['dates'])} jour(s)")
 
 
 if __name__ == "__main__":
