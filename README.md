@@ -4,6 +4,8 @@ Application installable (PWA) pour un groupe d'amis sur Dofus 3 :
 
 - **prix HDV partagés en direct** (fourchette basse / haute, historique, courbes par semaine et par mois) ;
 - **rentabilité** : crafter et revendre, ou acheter à l'HDV ;
+- **Orukam** : cotes HDV de tout le serveur avec tendances, donjons rentables en kamas/heure, brisage et zones en anomalie (données publiées par [Kamamaster](https://kamamaster.fr), vérifiées 4 fois par jour) ;
+- **alertes de prix**, y compris en notification quand l'appli est fermée ;
 - **plan de craft** et liste de courses ;
 - **liste de farm** : zones, monstres, taux de drop, donjons ;
 - **builds** importés de Dofusbook (copier-coller), statistiques et coût ;

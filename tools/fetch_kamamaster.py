@@ -8,9 +8,12 @@ Usage : python3 tools/fetch_kamamaster.py [Orukam]
                     "prices": {id_objet: prix},                       prix HDV (0 ignorés)
                     "coefs": {id_objet: [coefficient %, "AAAA-MM-JJ"]}, coefficients de brisage (meilleures opportunités)
                     "anomalies": {id_sous_zone: bonus %}}               zones en anomalie (bonus > 0)
+- <serveur>-donjons.json : rentabilité des donjons calculée par Kamamaster (équipe de 4, prospection 100,
+                    30 min, 1 personnage) : drops attendus par passage, bonus d'anomalie compris
 - <serveur>-history.json : {"dates": [...], "prices": {id_objet: [prix ou 0 par date]}}, 90 derniers jours
 
-Lancé une fois par jour par .github/workflows/kamamaster.yml (3 appels à l'API de Kamamaster).
+Lancé 4 fois par jour par .github/workflows/kamamaster.yml (4 appels à l'API de Kamamaster par passage).
+Un fichier n'est réécrit que si ses données ont changé : pas de commit inutile.
 """
 import json, sys, time, urllib.parse, urllib.request
 from datetime import datetime, timezone
@@ -20,6 +23,7 @@ ROOT = Path(__file__).resolve().parent.parent
 API = "https://api.kamamaster.fr/api/"
 UA = {"User-Agent": "AtelierDofus/1.0 (outil privé d'un groupe d'amis, quelques appels par jour)"}
 KEEP_DAYS = 90
+MAX_PRICE = 1_000_000_000  # au-delà : annonce fantaisiste à l'HDV, ignorée
 
 
 def get(path, **params):
@@ -43,7 +47,7 @@ def main():
             p = round(float(x.get("price") or 0))
         except (TypeError, ValueError):
             continue
-        if p > 0 and x.get("ankamaId"):
+        if 0 < p < MAX_PRICE and x.get("ankamaId"):
             prices[str(x["ankamaId"])] = p
     if len(prices) < 100:
         raise SystemExit(f"Réponse suspecte ({len(prices)} prix) : fichiers non modifiés")
@@ -66,10 +70,48 @@ def main():
     except Exception as e:
         print("Anomalies indisponibles :", e)
 
-    main_file = out_dir / f"{slug}.json"
-    json.dump({"server": server, "fetched": now.strftime("%Y-%m-%dT%H:%M:%SZ"), "source": "https://kamamaster.fr",
-               "prices": dict(sorted(prices.items(), key=lambda kv: int(kv[0]))), "coefs": coefs, "anomalies": anomalies},
-              open(main_file, "w", encoding="utf-8"), ensure_ascii=False, separators=(",", ":"))
+    # 4. Donjons : drops attendus par passage, avec les réglages par défaut de Kamamaster
+    dungeons = None
+    try:
+        dungeons = []
+        for x in get("map/dungeons", server=server, teamSize=4, prospecting=100, durationMinutes=30, characterCount=1).get("dungeons", []):
+            drops = [[t["resourceId"], round(t.get("expectedQuantity") or 0, 5), round(t.get("effectiveDropRate") or 0, 3),
+                      ", ".join(t.get("monsterNames") or [])]
+                     for t in x.get("topDrops") or [] if t.get("resourceId") and (t.get("expectedQuantity") or 0) > 0]
+            boss = [m["name"] for r in x.get("rooms") or [] if r.get("isBossRoom") for m in r.get("monsters") or []]
+            last = (x.get("rooms") or [{}])[-1].get("monsters") or []
+            dungeons.append({"id": x["id"], "n": x["name"], "lv": x.get("recommendedLevel"), "x": x.get("posX"), "y": x.get("posY"),
+                             "an": x.get("anomalyBonusPercent") or 0, "rooms": len(x.get("rooms") or []),
+                             "boss": sorted(set(boss or [m["name"] for m in last])), "miss": x.get("missingMonsterCount") or 0,
+                             "drops": sorted(drops, key=lambda d: -d[1])})
+        dungeons.sort(key=lambda d: d["id"])
+    except Exception as e:
+        print("Donjons indisponibles :", e)
+        dungeons = None
+
+    stamp = now.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    def save(path, payload):
+        """Écrit le fichier seulement si les données (hors date de récupération) ont changé."""
+        if path.exists():
+            try:
+                old = json.load(open(path, encoding="utf-8"))
+                old.pop("fetched", None)
+                if old == json.loads(json.dumps(payload, ensure_ascii=False)):
+                    return False
+            except ValueError:
+                pass
+        json.dump({**payload, "fetched": stamp}, open(path, "w", encoding="utf-8"), ensure_ascii=False, separators=(",", ":"))
+        return True
+
+    changed = save(out_dir / f"{slug}.json", {"server": server, "source": "https://kamamaster.fr",
+                   "prices": dict(sorted(prices.items(), key=lambda kv: int(kv[0]))), "coefs": coefs, "anomalies": anomalies})
+    if dungeons:
+        save(out_dir / f"{slug}-donjons.json", {"server": server, "source": "https://kamamaster.fr",
+             "params": {"team": 4, "pp": 100, "min": 30, "chars": 1}, "list": dungeons})
+    if not changed:
+        print(f"{server} : prix inchangés depuis le dernier passage")
+        return
 
     # 4. Historique quotidien des prix (90 jours)
     hist_file = out_dir / f"{slug}-history.json"
@@ -95,7 +137,7 @@ def main():
     json.dump(hist, open(hist_file, "w", encoding="utf-8"), separators=(",", ":"))
 
     print(f"{server} : {len(prices)} prix, {len(coefs)} coefficients de brisage, {len(anomalies)} zone(s) en anomalie, "
-          f"historique de {len(hist['dates'])} jour(s)")
+          f"{len(dungeons or [])} donjons, historique de {len(hist['dates'])} jour(s)")
 
 
 if __name__ == "__main__":

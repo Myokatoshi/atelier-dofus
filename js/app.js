@@ -358,6 +358,20 @@ const obsOf = id => prices()[id] || [];
 // Prix de référence : relevé du groupe ou prix Kamamaster d'Orukam, le plus récent l'emporte (à date égale, le groupe)
 let KM = null, KMH = null, kmhLoading = null;
 // Historique quotidien des prix Kamamaster (90 jours), chargé à la demande pour les courbes
+let kmCheckedAt = 0;
+function loadKm() {
+  kmCheckedAt = Date.now();
+  return fetch("data/km/orukam.json", { cache: "no-cache" }).then(r => r.ok ? r.json() : null).then(j => {
+    if (!j || !j.prices || (KM && j.fetched === KM.fetched)) return;
+    const first = !KM;
+    KM = j;
+    // Nouvelles données : l'historique et les donjons seront rechargés à la demande
+    if (!first) { KMH = null; kmhLoading = null; KMD = null; kmdLoading = null; }
+    render();
+  }).catch(() => {});
+}
+document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible" && D && Date.now() - kmCheckedAt > 15 * 60e3) loadKm(); });
+setInterval(() => { if (document.visibilityState === "visible" && D) loadKm(); }, 30 * 60e3);
 function ensureKmHistory() {
   if (KMH || kmhLoading) return kmhLoading;
   kmhLoading = fetch("data/km/orukam-history.json", { cache: "no-cache" }).then(r => r.ok ? r.json() : null).then(j => { KMH = j || { dates: [], prices: {} }; if (sheet.open) renderSheet(); }).catch(() => { KMH = { dates: [], prices: {} }; });
@@ -1185,7 +1199,7 @@ function viewPrix() {
   const kmBox = KM ? h("section", { class: "panel" }, h("div", { class: "row between" },
     h("div", { style: "display:grid;gap:3px;max-width:75ch" },
       h("strong", { text: "Prix Kamamaster · " + KM.server }),
-      h("span", { class: "note", text: fmt.format(Object.keys(KM.prices).length) + " objets, mis à jour le " + new Date(KM.fetched).toLocaleDateString("fr-FR", { day: "numeric", month: "long" }) + " (récupérés chaque matin sur kamamaster.fr). Ils servent quand le groupe n'a pas de relevé plus récent : un prix unique, utilisé comme basse, haute et actuel. Aussi récupérés : " + Object.keys(KM.coefs || {}).length + " coefficients de brisage, les zones en anomalie et l'historique des prix (courbes)." })),
+      h("span", { class: "note", text: fmt.format(Object.keys(KM.prices).length) + " objets, mis à jour le " + new Date(KM.fetched).toLocaleDateString("fr-FR", { day: "numeric", month: "long" }) + " (vérifiés 4 fois par jour sur kamamaster.fr). Ils servent quand le groupe n'a pas de relevé plus récent : un prix unique, utilisé comme basse, haute et actuel. Aussi récupérés : " + Object.keys(KM.coefs || {}).length + " coefficients de brisage, les zones en anomalie et l'historique des prix (courbes)." })),
     (() => { const c = h("input", { type: "checkbox", id: "km-on", checked: S.settings.km !== false }); c.addEventListener("change", () => { S.settings.km = c.checked; persist("plan"); render(); }); return h("label", { class: "check" }, c, "Utiliser ces prix"); })())) : null;
   const tourN = tourCandidates().ids.length;
   return h("div", { class: "stack" },
@@ -2609,6 +2623,227 @@ function viewBrisage() {
 }
 
 // =====================================================================
+// Orukam : cotes HDV de tout le serveur, tendances et donjons rentables
+// (prix du groupe en direct + données publiées par Kamamaster, récupérées 4 fois par jour)
+// =====================================================================
+let KMD = null, kmdLoading = null, kmRedraw = false;
+function ensureKmDungeons() {
+  if (KMD || kmdLoading) return kmdLoading;
+  kmdLoading = fetch("data/km/orukam-donjons.json", { cache: "no-cache" }).then(r => r.ok ? r.json() : null).then(j => { KMD = j && j.list ? j : { list: [], params: { min: 30 } }; redrawOrukam(); }).catch(() => { KMD = { list: [], params: { min: 30 } }; });
+  return kmdLoading;
+}
+// Recharge la vue quand une donnée chargée à la demande arrive
+function redrawOrukam() { if (["serveur", "cotes", "donjons"].includes(view)) render(); }
+function needKmh() { if (!KMH) { const p = ensureKmHistory(); if (p && !kmRedraw) { kmRedraw = true; p.then(() => { kmRedraw = false; redrawOrukam(); }); } } }
+// Âge d'une date-heure en clair (« il y a 3 h »)
+function agoTime(t) {
+  const m = Math.round((Date.now() - new Date(t).getTime()) / 60000);
+  return m < 2 ? "à l'instant" : m < 60 ? "il y a " + m + " min" : m < 48 * 60 ? "il y a " + Math.round(m / 60) + " h" : "il y a " + Math.round(m / 1440) + " j";
+}
+// Série quotidienne d'un objet sur 90 jours : relevé du groupe ce jour-là, sinon prix Kamamaster
+function seriesOf(id) {
+  const m = new Map(), useKm = S.settings.km !== false;
+  if (useKm && KMH) { const row = KMH.prices[id]; if (row) KMH.dates.forEach((d, i) => { if (row[i] > 0) m.set(d, row[i]); }); }
+  if (useKm && KM && KM.prices[id]) m.set(KM.fetched.slice(0, 10), KM.prices[id]);
+  for (const o of obsOf(id)) m.set(o.d, nowPrice(o));
+  return [...m.entries()].sort((a, b) => a[0] < b[0] ? -1 : 1);
+}
+// Variation en % entre le dernier prix et celui d'il y a au moins « days » jours
+function varOf(ser, days) {
+  if (ser.length < 2) return null;
+  const [d1, v1] = ser[ser.length - 1];
+  const lim = iso(new Date(parseD(d1).getTime() - days * 864e5));
+  let ref = null;
+  for (const [d, v] of ser) { if (d <= lim) ref = v; else break; }
+  return ref ? (v1 - ref) / ref * 100 : null;
+}
+const histDays = () => KMH && KMH.dates.length ? Math.round((parseD(today()) - parseD(KMH.dates[0])) / 864e5) : 0;
+function varCell(v) { return h("td", { class: "n " + (v == null ? "muted" : v > 0.5 ? "pos" : v < -0.5 ? "neg" : "muted"), text: v == null ? "—" : (v > 0.5 ? "▲ +" : v < -0.5 ? "▼ " : "") + (Math.abs(v) < 10 ? v.toFixed(1).replace(".", ",") : Math.round(v)) + " %" }); }
+// Courbe miniature d'une série quotidienne (30 derniers jours)
+function sparkSeries(ser, days = 30) {
+  const W = 96, H = 26;
+  const svg = s("svg", { class: "spark", width: W, height: H, viewBox: `0 0 ${W} ${H}`, "aria-hidden": "true" });
+  const lim = iso(new Date(parseD(today()).getTime() - days * 864e5));
+  const pts = ser.filter(([d]) => d >= lim);
+  if (!pts.length) return svg;
+  const t0 = parseD(lim).getTime(), t1 = parseD(today()).getTime();
+  const vals = pts.map(p => p[1]), mn = Math.min(...vals), mx = Math.max(...vals), sp = mx - mn || 1;
+  const x = d => 3 + (parseD(d).getTime() - t0) / (t1 - t0 || 1) * (W - 6), y = v => mx === mn ? H / 2 : H - 4 - (v - mn) / sp * (H - 8);
+  svg.append(s("path", { d: pts.map(([d, v], i) => (i ? "L" : "M") + x(d).toFixed(1) + " " + y(v).toFixed(1)).join("") }));
+  const [ld, lv] = pts[pts.length - 1];
+  svg.append(s("circle", { cx: x(ld), cy: y(lv), r: 2.5 }));
+  return svg;
+}
+// Objets cotés sur Orukam : prix Kamamaster + prix du groupe
+function cotedIds() {
+  const set = new Set(Object.keys(prices()).map(Number));
+  if (KM && S.settings.km !== false) for (const id of Object.keys(KM.prices)) set.add(+id);
+  return [...set].filter(id => D.items[id]);
+}
+const favs = () => S.settings.fav || [];
+function favBtn(id) {
+  const on = favs().includes(id);
+  return h("button", { type: "button", class: "star" + (on ? " on" : ""), "aria-pressed": on ? "true" : "false", "aria-label": (on ? "Retirer " : "Suivre ") + item(id)[0], title: on ? "Retirer de mes objets suivis" : "Suivre cet objet",
+    onclick: () => { S.settings.fav = on ? favs().filter(x => x !== id) : [...favs(), id]; persist("plan"); render(); } }, on ? "★" : "☆");
+}
+function srcLabel(o) { return !o ? "aucun prix" : o.src === "km" ? "Kamamaster · " + ago(o.d) : "groupe · " + ago(o.d); }
+
+function viewServeur() {
+  needKmh(); ensureKmDungeons();
+  if (!F) ensureFarm().then(d => { if (d) redrawOrukam(); });
+  const ids = cotedIds();
+  const todayN = Object.values(prices()).filter(o => o.length && o[o.length - 1].d === today()).length;
+  const span = histDays(), win = Math.max(1, Math.min(7, span));
+  const movers = span >= 1 ? ids.map(id => { const ser = seriesOf(id), last = ser[ser.length - 1]; return { id, v: varOf(ser, win), p: last ? last[1] : 0 }; }).filter(r => r.v != null && r.p >= 500 && Math.abs(r.v) >= 1) : [];
+  const ups = movers.filter(r => r.v > 0).sort((a, b) => b.v - a.v).slice(0, 8), downs = movers.filter(r => r.v < 0).sort((a, b) => a.v - b.v).slice(0, 8);
+  const moverList = (list, empty) => list.length ? h("div", { class: "tablewrap" }, h("table", {}, h("tbody", {}, list.map(r => h("tr", {},
+    h("td", {}, itemLink(r.id, typeName(r.id), 26)), h("td", { class: "n", text: k(r.p) + " ₭" }), varCell(r.v)))))) : h("p", { class: "muted", text: empty });
+  const firstDay = KMH && KMH.dates.length ? parseD(KMH.dates[0]) : new Date();
+  const ready = new Date(firstDay); ready.setDate(ready.getDate() + 1);
+  const noTrend = "Les tendances apparaîtront dès le " + ready.toLocaleDateString("fr-FR", { day: "numeric", month: "long" }) + " : l'historique d'Orukam est enregistré depuis le " + firstDay.toLocaleDateString("fr-FR", { day: "numeric", month: "long" }) + ".";
+  const djs = KMD && KMD.list.length ? KMD.list.map(d => ({ d, c: djCalc(d) })).sort((a, b) => b.c.kh - a.c.kh).slice(0, 5) : [];
+  const anom = KM ? Object.entries(KM.anomalies || {}).sort((a, b) => b[1] - a[1]) : [];
+  return h("div", { class: "stack" },
+    h("div", { class: "tiles" },
+      h("div", { class: "tile" }, h("span", { class: "label", text: "Objets cotés" }), h("span", { class: "v", text: fmt.format(ids.length) }), h("span", { class: "small muted", text: "prix du groupe et de Kamamaster" })),
+      h("div", { class: "tile kamas" }, h("span", { class: "label", text: "Relevés du groupe aujourd'hui" }), h("span", { class: "v", text: todayN }), h("span", { class: "small muted", text: SH ? "reçus en direct" : "mode local" })),
+      h("div", { class: "tile" }, h("span", { class: "label", text: "Données Kamamaster" }), h("span", { class: "v", style: "font-size:1.25rem", text: KM ? agoTime(KM.fetched) : "—" }), h("span", { class: "small muted", text: "vérifiées 4 fois par jour" })),
+      h("div", { class: "tile" }, h("span", { class: "label", text: "Zones en anomalie" }), h("span", { class: "v", text: anom.length }), h("span", { class: "small muted", text: "bonus de drop en cours" }))),
+    h("section", { class: "panel" },
+      h("p", { class: "note", style: "margin:0", text: "Les relevés du groupe arrivent en direct : dès qu'un membre enregistre un prix, il s'affiche chez tout le monde. Les données de Kamamaster (prix d'Orukam, brisage, anomalies, donjons) sont vérifiées 4 fois par jour : Kamamaster les met lui-même à jour environ une fois par jour, et il n'existe pas d'accès direct au serveur du jeu. Le plus récent des deux l'emporte. Source : kamamaster.fr." })),
+    h("div", { class: "grid2 even" },
+      h("section", { class: "panel" }, h("div", { class: "row between" }, h("h2", { text: "▲ Plus fortes hausses" }), h("span", { class: "chip", text: span >= 1 ? "sur " + win + " j" : "bientôt" })), moverList(ups, span >= 1 ? "Aucune hausse notable." : noTrend)),
+      h("section", { class: "panel" }, h("div", { class: "row between" }, h("h2", { text: "▼ Plus fortes baisses" }), h("span", { class: "chip", text: span >= 1 ? "sur " + win + " j" : "bientôt" })), moverList(downs, span >= 1 ? "Aucune baisse notable." : noTrend))),
+    h("div", { class: "grid2 even" },
+      h("section", { class: "panel" },
+        h("div", { class: "row between" }, h("h2", { text: "Donjons les plus rentables" }), h("a", { href: "#donjons", class: "small", text: "Tous les donjons" })),
+        djs.length ? h("div", { class: "tablewrap" }, h("table", {}, h("tbody", {}, djs.map(({ d, c }) => h("tr", {},
+          h("td", {}, h("a", { href: "#donjons", onclick: () => { djF.open = new Set([d.id]); djF.q = d.n; } }, h("strong", { text: d.n })), h("small", { class: "muted", style: "display:block", text: "niv. " + (d.lv ?? "?") + (d.an ? " · anomalie +" + d.an + " %" : "") })),
+          h("td", { class: "n" }, h("strong", { style: "color:var(--kamas)", text: kk(c.kh) + " ₭/h" }))))))) : h("p", { class: "muted", text: KMD ? "Données des donjons indisponibles." : "Chargement…" })),
+      h("section", { class: "panel" },
+        h("div", { class: "row between" }, h("h2", { text: "Zones en anomalie" }), h("a", { href: "#farm", class: "small", text: "Liste de farm" })),
+        anom.length ? h("div", { style: "display:grid;gap:6px" }, anom.map(([sid, b]) => h("div", { class: "row between" },
+          h("span", { text: F ? subLabel(+sid).replace(/ · anomalie.*$/, "") : "Zone " + sid }), h("span", { class: "chip kamas", text: "+" + b + " %" })))) :
+          h("p", { class: "muted", text: "Aucune zone en anomalie en ce moment." }))),
+    h("section", { class: "panel" },
+      h("h2", { text: "Autres outils pour Orukam" }),
+      h("div", { class: "links-grid" },
+        [["#cotes", "Cotes HDV", "Tous les objets cotés, leur tendance et ta liste d'objets suivis.", "chart"],
+         ["#brisage", "Brisage", "Les équipements à crafter puis briser, aux prix des runes d'Orukam.", "rune"],
+         ["#rentabilite", "Crafts rentables", "Crafter et revendre ou acheter directement, taxe déduite.", "trend"],
+         ["#metiers", "Monter un métier", "Le craft le moins cher par point d'expérience.", "up"]].map(([href, t, d, ic]) =>
+          h("a", { href, class: "linkcard" }, h("span", { class: "ib" }, svgI(ic)), h("span", {}, h("strong", { text: t }), h("small", { class: "muted", style: "display:block", text: d })))))));
+}
+
+let cotF = { q: "", type: "", sort: "nom", fav: false, min: "", max: "", n: 100 };
+function viewCotes() {
+  needKmh();
+  const all = cotedIds();
+  const typeCount = new Map();
+  for (const id of all) typeCount.set(item(id)[2], (typeCount.get(item(id)[2]) || 0) + 1);
+  const types = [...typeCount.entries()].map(([t, n]) => [t, (D.types[t] || ["Autre"])[0], n]).sort((a, b) => a[1].localeCompare(b[1], "fr"));
+  const nq = norm(cotF.q || "");
+  const span = histDays();
+  let rows = all.filter(id => (!cotF.fav || favs().includes(id)) && (!cotF.type || item(id)[2] === +cotF.type) && (!nq || norm(item(id)[0]).includes(nq)) && (!cotF.min || item(id)[1] >= +cotF.min) && (!cotF.max || item(id)[1] <= +cotF.max))
+    .map(id => { const o = priceAt(id), ser = seriesOf(id); return { id, o, p: nowPrice(o), ser, v7: varOf(ser, 7), v30: varOf(ser, 30), vAll: varOf(ser, 1) }; }).filter(r => r.p != null);
+  const byName = (a, b) => item(a.id)[0].localeCompare(item(b.id)[0], "fr");
+  const nn = v => v ?? -Infinity;
+  const SORTS = { nom: byName, prixd: (a, b) => b.p - a.p || byName(a, b), prixa: (a, b) => a.p - b.p || byName(a, b), hausse: (a, b) => nn(b.v7 ?? b.vAll) - nn(a.v7 ?? a.vAll) || byName(a, b), baisse: (a, b) => ((a.v7 ?? a.vAll ?? Infinity) - (b.v7 ?? b.vAll ?? Infinity)) || byName(a, b), niveau: (a, b) => item(b.id)[1] - item(a.id)[1] || byName(a, b) };
+  rows.sort(SORTS[cotF.sort] || byName);
+  const q = h("input", { type: "search", id: "q-cotes", placeholder: "Chercher un objet", value: cotF.q, "aria-label": "Chercher un objet" });
+  q.addEventListener("input", () => { cotF.q = q.value; cotF.n = 100; clearTimeout(q._t); q._t = setTimeout(render, 250); });
+  const typeSel = h("select", { id: "cotes-type", "aria-label": "Catégorie" }, h("option", { value: "" }, "Toutes les catégories"), types.map(([t, name, n]) => h("option", { value: t, selected: String(t) === String(cotF.type) }, name + " (" + n + ")")));
+  typeSel.addEventListener("change", () => { cotF.type = typeSel.value; cotF.n = 100; render(); });
+  const sortSel = h("select", { id: "cotes-sort", "aria-label": "Trier" }, [["nom", "Par nom"], ["prixd", "Prix décroissant"], ["prixa", "Prix croissant"], ["hausse", "Plus fortes hausses"], ["baisse", "Plus fortes baisses"], ["niveau", "Niveau décroissant"]].map(([v, l]) => h("option", { value: v, selected: cotF.sort === v }, l)));
+  sortSel.addEventListener("change", () => { cotF.sort = sortSel.value; render(); });
+  const lv = (key, ph) => { const el = h("input", { type: "number", id: "cotes-" + key, min: 1, max: 200, placeholder: ph, value: cotF[key], "aria-label": ph }); el.addEventListener("change", () => { cotF[key] = el.value; cotF.n = 100; render(); }); return el; };
+  const favCb = h("input", { type: "checkbox", id: "cotes-fav", checked: cotF.fav }); favCb.addEventListener("change", () => { cotF.fav = favCb.checked; cotF.n = 100; render(); });
+  const shown = rows.slice(0, cotF.n);
+  return h("div", { class: "stack" },
+    h("section", { class: "panel" },
+      h("div", { class: "row between" }, h("h2", { text: "Cotes HDV d'Orukam" }), h("span", { class: "chip", text: fmt.format(rows.length) + " objet" + (rows.length > 1 ? "s" : "") })),
+      h("div", { class: "filters" }, h("div", { class: "search" }, q), typeSel, lv("min", "Niv. min"), lv("max", "Niv. max"), sortSel, h("label", { class: "check" }, favCb, "Mes objets suivis (" + favs().length + ")")),
+      shown.length ? h("div", { class: "tablewrap" }, h("table", {},
+        h("thead", {}, h("tr", {}, h("th", {}), h("th", { text: "Objet" }), h("th", { class: "n", text: "Prix" }), h("th", { class: "hide-m", text: "Source" }), h("th", { class: "n", text: "7 j" }), h("th", { class: "n hide-m", text: "30 j" }), h("th", { class: "hide-m", text: "30 derniers jours" }))),
+        h("tbody", {}, shown.map(r => h("tr", {},
+          h("td", {}, favBtn(r.id)),
+          h("td", {}, itemLink(r.id, typeName(r.id) + " · niv. " + item(r.id)[1], 26)),
+          h("td", { class: "n" }, h("strong", { style: "color:var(--kamas)", text: k(r.p) }), r.o.src !== "km" && Math.round(r.o.lo) !== Math.round(r.o.hi) ? h("small", { class: "muted", style: "display:block", text: range(r.o.lo, r.o.hi) }) : null, h("small", { class: "muted show-m", text: r.o.src === "km" ? "Kamamaster" : "groupe" })),
+          h("td", { class: "small muted hide-m", text: srcLabel(r.o) }),
+          varCell(r.v7), (c => { c.classList.add("hide-m"); return c; })(varCell(r.v30)),
+          h("td", { class: "hide-m" }, sparkSeries(r.ser))))))) :
+        h("div", { class: "empty" }, h("strong", { text: cotF.fav && !favs().length ? "Tu ne suis encore aucun objet" : "Aucun objet ne correspond" }), h("span", { text: cotF.fav && !favs().length ? "Clique sur l'étoile d'un objet pour le suivre : tu retrouveras ici sa cote et sa tendance." : "Change la recherche ou les filtres." })),
+      rows.length > shown.length ? h("div", { class: "row", style: "justify-content:center" }, h("button", { type: "button", class: "btn", onclick: () => { cotF.n += 200; render(); } }, "Afficher plus (" + fmt.format(rows.length - shown.length) + " restants)")) : null,
+      h("p", { class: "note", text: "Prix : le dernier relevé du groupe s'il est plus récent, sinon la cote Kamamaster d'Orukam. Les variations comparent au prix d'il y a 7 et 30 jours" + (span < 7 ? " ; l'historique a commencé il y a " + span + " jour" + (span > 1 ? "s" : "") + ", elles se rempliront au fil des jours" : "") + ". Clique sur un objet pour sa courbe complète et saisir un relevé." })));
+}
+
+let djF = { q: "", min: "", max: "", an: false, sort: "kh", n: 40, open: new Set() };
+const djMin = d => +(S.settings.djmin || {})[d.id] || (KMD && KMD.params.min) || 30;
+// Valeur d'un passage : drops attendus (Kamamaster) × prospection / 100 × personnages, aux prix d'Orukam
+function djCalc(d) {
+  const pp = ppOf(), ch = Math.max(1, Math.min(8, +S.settings.djc || 1)), min = djMin(d);
+  let tot = 0, missing = 0;
+  const drops = d.drops.map(([id, q, rate, mons]) => {
+    const o = priceAt(id), p = o ? nowPrice(o) : null, qq = q * pp / 100 * ch;
+    if (p == null) missing++; else tot += qq * p;
+    return { id, q: qq, rate: Math.min(100, rate * pp / 100), mons, p, v: p == null ? null : qq * p, o };
+  }).sort((a, b) => (b.v ?? -1) - (a.v ?? -1));
+  return { tot, kh: tot * 60 / min, min, drops, missing };
+}
+function viewDonjons() {
+  ensureKmDungeons();
+  if (!KMD) return h("div", { class: "loading", text: "Chargement des donjons d'Orukam…" });
+  if (!KMD.list.length) return h("div", { class: "empty" }, h("strong", { text: "Données des donjons indisponibles" }), h("span", { text: "Elles seront récupérées au prochain passage sur Kamamaster." }));
+  const nq = norm(djF.q || "");
+  let rows = KMD.list.filter(d => (!nq || norm(d.n).includes(nq) || d.boss.some(b => norm(b).includes(nq))) && (!djF.min || (d.lv ?? 0) >= +djF.min) && (!djF.max || (d.lv ?? 999) <= +djF.max) && (!djF.an || d.an > 0))
+    .map(d => ({ d, c: djCalc(d) }));
+  rows.sort(djF.sort === "lv" ? (a, b) => (b.d.lv ?? 0) - (a.d.lv ?? 0) || b.c.kh - a.c.kh : (a, b) => b.c.kh - a.c.kh);
+  const q = h("input", { type: "search", id: "q-donjons", placeholder: "Donjon ou boss", value: djF.q, "aria-label": "Chercher un donjon" });
+  q.addEventListener("input", () => { djF.q = q.value; clearTimeout(q._t); q._t = setTimeout(render, 250); });
+  const lv = (key, ph) => { const el = h("input", { type: "number", id: "dj-" + key, min: 1, max: 200, placeholder: ph, value: djF[key], "aria-label": ph }); el.addEventListener("change", () => { djF[key] = el.value; render(); }); return el; };
+  const anCb = h("input", { type: "checkbox", id: "dj-an", checked: djF.an }); anCb.addEventListener("change", () => { djF.an = anCb.checked; render(); });
+  const ppIn = numInput(ppOf(), v => { const n = Math.round(+String(v).replace(/\s/g, "")); S.settings.pp = n > 0 ? Math.min(1000, n) : 100; persist("plan"); }, { sm: true, label: "Prospection", id: "dj-pp" });
+  const chIn = numInput(S.settings.djc || 1, v => { const n = Math.round(+v); S.settings.djc = n >= 1 ? Math.min(8, n) : 1; persist("plan"); }, { sm: true, label: "Personnages", id: "dj-ch" });
+  const sortSeg = h("span", { class: "seg", role: "group", "aria-label": "Tri" }, [["kh", "Kamas / heure"], ["lv", "Niveau"]].map(([v, l]) =>
+    h("button", { type: "button", "aria-pressed": djF.sort === v ? "true" : "false", onclick: () => { djF.sort = v; render(); } }, l)));
+  const card = ({ d, c }, i) => {
+    const det = h("details", { class: "dj", open: djF.open.has(d.id) });
+    det.addEventListener("toggle", () => { if (det.open) djF.open.add(d.id); else djF.open.delete(d.id); });
+    const minIn = numInput(djMin(d), v => { const n = Math.round(+v); S.settings.djmin = { ...(S.settings.djmin || {}) }; if (n > 0) S.settings.djmin[d.id] = Math.min(1440, n); else delete S.settings.djmin[d.id]; persist("plan"); }, { sm: true, label: "Durée d'un passage en minutes", id: "dj-min-" + d.id });
+    det.append(
+      h("summary", {},
+        h("span", { class: "rank", text: i + 1 }),
+        h("span", { class: "djn" }, h("strong", { text: d.n }), h("small", { class: "muted", text: "niv. " + (d.lv ?? "?") + " · " + d.rooms + " salle" + (d.rooms > 1 ? "s" : "") + (d.x != null ? " · [" + d.x + ", " + d.y + "]" : "") + (d.boss.length ? " · " + d.boss.join(", ") : "") })),
+        h("span", { class: "djd" }, c.drops.slice(0, 3).map(x => icon(x.id, 26))),
+        d.an ? h("span", { class: "chip kamas", text: "Anomalie +" + d.an + " %" }) : null,
+        h("span", { class: "djv" }, h("strong", { text: kk(c.kh) + " ₭/h" }), h("small", { class: "muted", text: kk(c.tot) + " ₭ en " + c.min + " min" }))),
+      h("div", { class: "djbody" },
+        h("div", { class: "row", style: "gap:8px" }, h("span", { class: "label", text: "Durée d'un passage" }), minIn, h("span", { class: "small muted", text: "minutes" + ((S.settings.djmin || {})[d.id] ? "" : " (estimation Kamamaster)") })),
+        h("div", { class: "tablewrap" }, h("table", {},
+          h("thead", {}, h("tr", {}, h("th", { text: "Drop" }), h("th", { class: "n hide-m", text: "Taux" }), h("th", { class: "n", text: "Par passage" }), h("th", { class: "n hide-m", text: "Prix" }), h("th", { class: "n", text: "Valeur" }))),
+          h("tbody", {}, c.drops.map(x => h("tr", {},
+            h("td", {}, itemLink(x.id, x.mons, 24)),
+            h("td", { class: "n hide-m", text: (x.rate < 10 ? x.rate.toFixed(2) : x.rate.toFixed(1)).replace(".", ",") + " %" }),
+            h("td", { class: "n", text: x.q < 10 ? x.q.toFixed(2).replace(".", ",") : k(x.q) }),
+            h("td", { class: "n hide-m" }, x.p == null ? h("span", { class: "muted", text: "—" }) : k(x.p), x.o ? h("small", { class: "muted", style: "display:block", text: x.o.src === "km" ? "Kamamaster" : "groupe" }) : null),
+            h("td", { class: "n" }, x.v == null ? h("span", { class: "muted", text: "sans prix" }) : h("strong", { text: k(x.v) }))))))),
+        c.tot && c.drops[0].v / c.tot > 0.7 ? h("p", { class: "note", text: "⚠ " + item(c.drops[0].id)[0] + " fait " + Math.round(c.drops[0].v / c.tot * 100) + " % de la valeur de ce donjon : vérifie son prix à l'HDV (" + k(c.drops[0].p) + " ₭), une cote isolée peut fausser le classement." }) : null,
+        c.missing ? h("p", { class: "note", text: c.missing + " drop(s) sans prix connu : relève leur prix pour affiner le total." }) : null,
+        d.miss ? h("p", { class: "note", text: d.miss + " monstre(s) du donjon non reconnus par Kamamaster : leurs drops ne sont pas comptés." }) : null));
+    return det;
+  };
+  return h("div", { class: "stack" },
+    h("section", { class: "panel" },
+      h("div", { class: "row between" }, h("h2", { text: "Donjons rentables d'Orukam" }), h("span", { class: "chip", text: rows.length + " donjons" })),
+      h("div", { class: "row", style: "gap:8px" },
+        h("span", { class: "label", text: "Prospection" }), ppIn, h("span", { class: "label", text: "Personnages" }), chIn, h("span", { class: "label", text: "Tri" }), sortSeg),
+      h("div", { class: "filters" }, h("div", { class: "search" }, q), lv("min", "Niv. min"), lv("max", "Niv. max"), h("label", { class: "check" }, anCb, "En anomalie seulement")),
+      h("p", { class: "note", text: "Valeur des drops attendus par passage (calcul de Kamamaster pour une équipe de 4, bonus d'anomalie compris), ajustée à ta prospection et au nombre de tes personnages, aux prix d'Orukam : relevé du groupe s'il est plus récent, sinon cote Kamamaster. Règle la durée d'un passage dans chaque donjon pour un kamas/heure à ton rythme. Les âmes et ressources de quête ne sont pas comptées." })),
+    rows.length ? h("div", { class: "djlist" }, rows.slice(0, djF.n).map(card)) : h("div", { class: "empty" }, h("strong", { text: "Aucun donjon ne correspond" }), h("span", { text: "Change la recherche ou les filtres." })),
+    rows.length > djF.n ? h("div", { class: "row", style: "justify-content:center" }, h("button", { type: "button", class: "btn", onclick: () => { djF.n += 40; render(); } }, "Afficher plus (" + (rows.length - djF.n) + " restants)")) : null);
+}
+
+// =====================================================================
 // Habillage : icônes, onglets, bandeaux de section
 // =====================================================================
 const IC = {
@@ -2628,19 +2863,23 @@ const IC = {
   up: "M12 20V5 M6 11l6-6 6 6 M5 20h14",
   ledger: "M6 3h12v18l-3-2-3 2-3-2-3 2z M9 8h6 M9 12h6 M9 16h3",
   route: "M6 19a2 2 0 1 0 0-4 2 2 0 0 0 0 4z M18 9a2 2 0 1 0 0-4 2 2 0 0 0 0 4z M8 17h7a3 3 0 0 0 0-6H9a3 3 0 0 1 0-6h7",
+  globe: "M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18z M3 12h18 M12 3c3.5 3.5 3.5 14.5 0 18 M12 3c-3.5 3.5-3.5 14.5 0 18",
+  chart: "M4 20h16 M7 16v-4 M12 16V7 M17 16v-7",
+  castle: "M4 21V8h3v2h2V8h2v2h2V8h2v2h2V8h3v13z M10 21v-4a2 2 0 0 1 4 0v4",
   sun: "M12 7a5 5 0 1 0 0 10 5 5 0 0 0 0-10z M12 1v2 M12 21v2 M1 12h2 M21 12h2 M4.2 4.2l1.4 1.4 M18.4 18.4l1.4 1.4 M4.2 19.8l1.4-1.4 M18.4 5.6l1.4-1.4",
 };
 const svgI = name => { const el = s("svg", { class: "i", viewBox: "0 0 24 24", "aria-hidden": "true" }); for (const d of IC[name].split(" M")) el.append(s("path", { d: d.startsWith("M") ? d : "M" + d })); return el; };
 const TABS = [
   ["accueil", "Accueil", "home", "--c-home"], ["plan", "Plan de craft", "hammer", "--c-craft", "c-plan"], ["rentabilite", "Rentabilité", "trend", "--c-gold"],
-  ["prix", "Prix HDV", "coins", "--c-gold", "c-prix"], ["tournee", "Tournée HDV", "route", "--c-gold", "c-tour"], ["journal", "Journal", "ledger", "--c-journal"], ["alertes", "Alertes", "bell", "--c-gold", "c-alert"], ["farm", "Farm", "leaf", "--c-farm"], ["metiers", "Métiers", "up", "--c-craft"], ["brisage", "Brisage", "rune", "--c-alm"], ["builds", "Builds", "shield", "--c-build", "c-builds"], ["comparer", "Comparer", "compare", "--c-build"],
+  ["prix", "Prix HDV", "coins", "--c-gold", "c-prix"], ["tournee", "Tournée HDV", "route", "--c-gold", "c-tour"], ["journal", "Journal", "ledger", "--c-journal"], ["alertes", "Alertes", "bell", "--c-gold", "c-alert"], ["farm", "Farm", "leaf", "--c-farm"], ["metiers", "Métiers", "up", "--c-craft"], ["brisage", "Brisage", "rune", "--c-alm"], ["serveur", "Vue d'ensemble", "globe", "--c-oru"], ["cotes", "Cotes HDV", "chart", "--c-oru"], ["donjons", "Donjons", "castle", "--c-oru"], ["builds", "Builds", "shield", "--c-build", "c-builds"], ["comparer", "Comparer", "compare", "--c-build"],
   ["stock", "Inventaire", "bag", "--c-stock", "c-stock"], ["encyclopedie", "Encyclopédie", "book", "--c-ency"], ["compte", "Compte", "user", "--c-save"],
 ];
 // Sections regroupées : menu latéral (bureau), barre du bas + sous-onglets (téléphone)
 const GROUPS = [
   ["accueil", "Accueil", "home", "--c-home", ["accueil"]],
   ["marche", "Marché", "coins", "--c-gold", ["prix", "tournee", "rentabilite", "journal", "alertes"]],
-  ["production", "Production", "hammer", "--c-craft", ["plan", "brisage", "metiers", "farm", "stock"]],
+  ["orukam", "Orukam", "globe", "--c-oru", ["serveur", "cotes", "donjons", "brisage"]],
+  ["production", "Production", "hammer", "--c-craft", ["plan", "metiers", "farm", "stock"]],
   ["equipement", "Équipement", "shield", "--c-build", ["builds", "comparer", "encyclopedie"]],
   ["compte", "Compte", "user", "--c-save", ["compte"]],
 ];
@@ -2711,6 +2950,9 @@ function heroFor(v) {
     alertes: ["Alertes de prix", "Sois prévenu quand un objet passe sous ton prix d'achat, dépasse ton prix de vente, ou quand un craft devient rentable.", "bell", (S.alerts || []).map(a => a.item)],
     metiers: ["Métiers", "Les recettes à ta portée, leur coût, et le craft le plus rentable pour monter.", "up", Object.entries(D.recipes).filter(([, r]) => r[0] === (+S.settings.job || r[0])).map(([id]) => +id).filter(id => item(id)[1] <= (S.settings.jobs?.[S.settings.job] ?? 200)).sort((a, b) => item(b)[1] - item(a)[1]).slice(0, 8)],
     journal: ["Journal de ventes", "Tes achats et ventes réels, et ce qu'ils t'ont vraiment rapporté.", "ledger", [...new Set(TR.slice().reverse().map(t => t.item_id))]],
+    serveur: ["Orukam en direct", "Le marché du serveur : cotes, tendances, donjons rentables et zones en anomalie.", "globe", (KM ? Object.keys(KM.prices).map(Number) : []).filter(id => D.items[id] && item(id)[1] >= 150).slice(0, 8)],
+    cotes: ["Cotes HDV", "Tous les objets cotés sur Orukam, leur tendance et les objets que tu suis.", "chart", favs().length ? favs() : (KM ? Object.keys(KM.prices).map(Number) : []).filter(id => D.items[id] && recipe(id)).slice(0, 8)],
+    donjons: ["Donjons rentables", "Ce que rapporte chaque donjon en kamas par heure, à ta prospection et aux prix d'Orukam.", "castle", KMD ? KMD.list.flatMap(d => d.drops.slice(0, 1).map(x => x[0])).slice(0, 8) : []],
     compte: ["Compte", "Ton pseudo, ton mot de passe et la sauvegarde de tes données.", "user", []],
   }[v];
   const fill = { farm: e => supOfE(e) === 9, builds: e => [1, 3, 10, 11].includes(supOfE(e)), encyclopedie: e => supOfE(e) === 13 || supOfE(e) === 12, compte: e => supOfE(e) === 13 };
@@ -2729,7 +2971,7 @@ function decorate(root, v) {
 // =====================================================================
 // Rendu et navigation
 // =====================================================================
-const VIEWS = { brisage: viewBrisage, comparer: viewComparer, alertes: viewAlertes, metiers: viewMetiers, journal: viewJournal, tournee: viewTournee, farm: viewFarm, builds: viewBuilds, accueil: viewAccueil, plan: viewPlan, rentabilite: viewRentabilite, prix: viewPrix, stock: viewStock, encyclopedie: viewEncyclopedie, compte: viewSauvegarde };
+const VIEWS = { serveur: viewServeur, cotes: viewCotes, donjons: viewDonjons, brisage: viewBrisage, comparer: viewComparer, alertes: viewAlertes, metiers: viewMetiers, journal: viewJournal, tournee: viewTournee, farm: viewFarm, builds: viewBuilds, accueil: viewAccueil, plan: viewPlan, rentabilite: viewRentabilite, prix: viewPrix, stock: viewStock, encyclopedie: viewEncyclopedie, compte: viewSauvegarde };
 function renderCounts() {
   const set = (id, n) => { const el = document.getElementById(id); if (el) { el.textContent = n; el.dataset.z = n ? "0" : "1"; } };
   set("c-plan", S.targets.length);
@@ -2761,12 +3003,12 @@ function render() {
   if (sheet.open) renderSheet();
   checkAlertsSoon();
 }
-function route() { let v = location.hash.slice(1); if (v === "sauvegarde") v = "compte"; view = VIEWS[v] ? v : "accueil"; render(); window.scrollTo(0, 0); }
+function route() { let v = location.hash.slice(1); if (v === "sauvegarde") v = "compte"; if (v === "orukam") v = "serveur"; view = VIEWS[v] ? v : "accueil"; render(); window.scrollTo(0, 0); }
 window.addEventListener("hashchange", route);
 
 fetch(PATH.core).then(r => r.json()).then(d => {
   D = d; buildIndex(); buildTabs();
-  fetch("data/km/orukam.json", { cache: "no-cache" }).then(r => r.ok ? r.json() : null).then(j => { if (j && j.prices) { KM = j; render(); } }).catch(() => {});
+  loadKm();
   document.getElementById("ver").textContent = "Dofus " + d.v;
   route();
   connect();
