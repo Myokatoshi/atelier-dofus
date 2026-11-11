@@ -349,7 +349,20 @@ function shareMine() {
 // Prix et calculs
 // =====================================================================
 const obsOf = id => prices()[id] || [];
-function priceAt(id, at) { const o = obsOf(id); for (let i = o.length - 1; i >= 0; i--) if (!at || o[i].d <= at) return o[i]; return null; }
+// Prix de référence : relevé du groupe ou prix Kamamaster d'Orukam, le plus récent l'emporte (à date égale, le groupe)
+let KM = null;
+function kmPrice(id, at) {
+  if (!KM || S.settings.km === false) return null;
+  const p = KM.prices[id]; if (!p) return null;
+  const d = KM.fetched.slice(0, 10);
+  return at && d > at ? null : { d, lo: p, hi: p, cur: p, src: "km" };
+}
+function priceAt(id, at) {
+  const o = obsOf(id); let g = null;
+  for (let i = o.length - 1; i >= 0; i--) if (!at || o[i].d <= at) { g = o[i]; break; }
+  const km = kmPrice(id, at);
+  return km && (!g || km.d > g.d) ? km : g;
+}
 const midOf = o => (o.lo + o.hi) / 2;
 const pick = (o, basis) => !o ? null : basis === "lo" ? o.lo : basis === "hi" ? o.hi : basis === "cur" ? (o.cur ?? midOf(o)) : midOf(o);
 // Prix de référence pour vendre ou acheter maintenant : le prix actuel s'il est connu, sinon le milieu de la fourchette
@@ -739,7 +752,7 @@ async function renderSheet() {
   const seg = h("span", { class: "seg", role: "group", "aria-label": "Période" }, ["week", "month"].map(m =>
     h("button", { type: "button", "aria-pressed": chartMode === m ? "true" : "false", onclick: () => { chartMode = m; try { localStorage.setItem(LS + "-chart", m); } catch {} renderSheet(); } }, m === "week" ? "Par semaine" : "Par mois")));
   const prices = h("section", { class: "panel" },
-    h("div", { class: "row between" }, h("h3", { text: "Prix à l'HDV" }), last ? h("span", { class: "chip kamas", text: range(last.lo, last.hi) + " ₭ · " + ago(last.d) + (last.cur != null ? " · actuel " + k(last.cur) + " ₭" : "") + (SH && last.by ? " · par " + whoName(last.by[0]) : "") }) : h("span", { class: "chip", text: "aucun relevé" })),
+    h("div", { class: "row between" }, h("h3", { text: "Prix à l'HDV" }), last ? h("span", { class: "chip kamas", text: range(last.lo, last.hi) + " ₭ · " + ago(last.d) + (last.src === "km" ? " · Kamamaster " + KM.server : (last.cur != null ? " · actuel " + k(last.cur) + " ₭" : "") + (SH && last.by ? " · par " + whoName(last.by[0]) : "")) }) : h("span", { class: "chip", text: "aucun relevé" })),
     h("div", { class: "form-row" },
       h("label", {}, "Moyenne basse", loIn), h("label", {}, "Moyenne haute", hiIn), h("label", {}, "Prix actuel", curIn), h("label", {}, "Date", dateIn), saveBtn),
     mineNote,
@@ -1144,11 +1157,17 @@ function viewPrix() {
     return { id, last, n: o.length, varp };
   }).sort(prixSort === "age" ? (a, b) => a.last.d < b.last.d ? -1 : a.last.d > b.last.d ? 1 : item(a.id)[0].localeCompare(item(b.id)[0], "fr") : (a, b) => item(a.id)[0].localeCompare(item(b.id)[0], "fr"));
   const toShare = pendingShare();
+  const kmBox = KM ? h("section", { class: "panel" }, h("div", { class: "row between" },
+    h("div", { style: "display:grid;gap:3px;max-width:75ch" },
+      h("strong", { text: "Prix Kamamaster · " + KM.server }),
+      h("span", { class: "note", text: fmt.format(Object.keys(KM.prices).length) + " objets, mis à jour le " + new Date(KM.fetched).toLocaleDateString("fr-FR", { day: "numeric", month: "long" }) + " (récupérés chaque matin sur kamamaster.fr). Ils servent quand le groupe n'a pas de relevé plus récent : un prix unique, utilisé comme basse, haute et actuel." })),
+    (() => { const c = h("input", { type: "checkbox", id: "km-on", checked: S.settings.km !== false }); c.addEventListener("change", () => { S.settings.km = c.checked; persist("plan"); render(); }); return h("label", { class: "check" }, c, "Utiliser ces prix"); })())) : null;
   const tourN = tourCandidates().ids.length;
   return h("div", { class: "stack" },
     tourN ? h("section", { class: "panel" }, h("div", { class: "row between" },
       h("span", { text: tourN + " prix à relever pour ton plan, tes builds et l'Almanax." }),
       h("a", { href: "#tournee", class: "btn primary", style: "text-decoration:none" }, "Lancer la tournée HDV"))) : null,
+    kmBox,
     SH && toShare.length ? h("section", { class: "panel" },
       h("div", { class: "row between" }, h("span", { text: "Tu as des relevés personnels sur " + toShare.length + " objet" + (toShare.length > 1 ? "s" : "") + " qui ne sont pas encore dans les prix du groupe." }),
         h("button", { type: "button", class: "btn primary", onclick: shareMine }, "Les partager avec le groupe"))) : null,
@@ -2542,6 +2561,7 @@ window.addEventListener("hashchange", route);
 
 fetch(PATH.core).then(r => r.json()).then(d => {
   D = d; buildIndex(); buildTabs();
+  fetch("data/km/orukam.json", { cache: "no-cache" }).then(r => r.ok ? r.json() : null).then(j => { if (j && j.prices) { KM = j; render(); } }).catch(() => {});
   document.getElementById("ver").textContent = "Dofus " + d.v;
   route();
   connect();

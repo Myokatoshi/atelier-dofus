@@ -1,6 +1,6 @@
 // Service worker : rend l'appli installable et utilisable hors connexion.
 // Pense à changer VERSION à chaque mise en ligne pour que tout le monde reçoive la mise à jour.
-const VERSION = "atelier-v19";
+const VERSION = "atelier-v20";
 const SHELL = ["./", "index.html", "css/app.css", "js/app.js", "config.js", "vendor/supabase.js", "manifest.webmanifest",
   "icons/icon.svg", "icons/icon-192.png", "data/core.json", "data/farm.json"];
 
@@ -18,6 +18,11 @@ self.addEventListener("fetch", e => {
   const sameOrigin = url.origin === location.origin;
   const isFont = url.hostname.endsWith("fonts.googleapis.com") || url.hostname.endsWith("fonts.gstatic.com");
   if (!sameOrigin && !isFont) return;
+  // Prix Kamamaster (mis à jour chaque jour) : réseau d'abord, cache si hors connexion
+  if (sameOrigin && url.pathname.includes("/data/km/")) {
+    e.respondWith(caches.open(VERSION).then(c => fetch(e.request, { cache: "no-cache" }).then(r => { if (r.ok) c.put(e.request, r.clone()); return r; }).catch(() => c.match(e.request, { ignoreSearch: true }))));
+    return;
+  }
   // Données du jeu et icônes : cache d'abord (elles changent seulement avec VERSION)
   if (sameOrigin && url.pathname.includes("/data/")) {
     e.respondWith(caches.open(VERSION).then(async c => (await c.match(e.request)) || fetch(e.request).then(r => { if (r.ok) c.put(e.request, r.clone()); return r; })));

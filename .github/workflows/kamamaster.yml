@@ -1,0 +1,29 @@
+# Récupère chaque jour les prix HDV d'Orukam publiés par Kamamaster, puis met l'appli à jour.
+name: Prix Kamamaster
+on:
+  schedule:
+    - cron: "17 5 * * *"   # tous les jours vers 6 h 17 (heure de Paris)
+  workflow_dispatch:
+permissions:
+  contents: write
+concurrency:
+  group: kamamaster
+  cancel-in-progress: false
+jobs:
+  prix:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Récupérer les prix d'Orukam
+        run: python3 tools/fetch_kamamaster.py Orukam
+      - name: Enregistrer et mettre en ligne
+        run: |
+          if git diff --quiet -- data/km; then echo "Aucun changement"; exit 0; fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add data/km
+          git commit -m "Prix Kamamaster d'Orukam du $(date -u +%Y-%m-%d)"
+          git push origin HEAD:main
+          git push --force origin HEAD:gh-pages
