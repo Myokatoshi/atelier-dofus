@@ -1,6 +1,6 @@
 // Service worker : rend l'appli installable et utilisable hors connexion.
 // Pense à changer VERSION à chaque mise en ligne pour que tout le monde reçoive la mise à jour.
-const VERSION = "atelier-v22";
+const VERSION = "atelier-v23";
 const SHELL = ["./", "index.html", "css/app.css", "js/app.js", "config.js", "vendor/supabase.js", "manifest.webmanifest",
   "icons/icon.svg", "icons/icon-192.png", "data/core.json", "data/farm.json"];
 
@@ -33,5 +33,22 @@ self.addEventListener("fetch", e => {
     const hit = await c.match(e.request, { ignoreSearch: true });
     const net = fetch(e.request, sameOrigin ? { cache: "no-cache" } : undefined).then(r => { if (r.ok || r.type === "opaque") c.put(e.request, r.clone()); return r; }).catch(() => hit);
     return hit || net;
+  }));
+});
+
+// Notifications push envoyées par la fonction serveur « alertes » (appli fermée)
+self.addEventListener("push", e => {
+  let d = {};
+  try { d = e.data ? e.data.json() : {}; } catch { d = { body: e.data && e.data.text() }; }
+  e.waitUntil(self.registration.showNotification(d.title || "Atelier Dofus 3", {
+    body: d.body || "", tag: d.tag, renotify: !!d.tag, icon: "icons/icon-192.png", badge: "icons/icon-192.png", data: { url: d.url || "./#alertes" },
+  }));
+});
+self.addEventListener("notificationclick", e => {
+  e.notification.close();
+  const url = (e.notification.data && e.notification.data.url) || "./#alertes";
+  e.waitUntil(self.clients.matchAll({ type: "window", includeUncontrolled: true }).then(list => {
+    for (const c of list) if ("focus" in c) { c.navigate(url).catch(() => {}); return c.focus(); }
+    return self.clients.openWindow(url);
   }));
 });

@@ -2060,6 +2060,36 @@ function checkAlerts() {
 }
 const triggeredAlerts = () => { const C = coster(); return (S.alerts || []).map(a => ({ a, st: alertState(a, C) })).filter(x => x.st.ok); };
 
+// Notifications push (appli fermée) : inscription de cet appareil
+let pushState = null; // null = inconnu, "on", "off", "unsupported"
+const pushSupported = () => "serviceWorker" in navigator && "PushManager" in window && "Notification" in window && !!CFG.vapidPublicKey && !!SB;
+async function refreshPushState() {
+  if (!pushSupported()) { pushState = "unsupported"; return; }
+  try { const reg = await navigator.serviceWorker.ready; pushState = (await reg.pushManager.getSubscription()) ? "on" : "off"; } catch { pushState = "off"; }
+}
+const b64ToBytes = b => { const s = atob((b + "=".repeat((4 - b.length % 4) % 4)).replace(/-/g, "+").replace(/_/g, "/")); return Uint8Array.from(s, c => c.charCodeAt(0)); };
+async function enablePush() {
+  if (!pushSupported() || !ME) return;
+  if (await Notification.requestPermission() !== "granted") { toast("Notifications refusées : autorise-les dans les réglages du navigateur"); render(); return; }
+  try {
+    const reg = await navigator.serviceWorker.ready;
+    const sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: b64ToBytes(CFG.vapidPublicKey) });
+    const j = sub.toJSON();
+    const { error } = await SB.from("push_subs").upsert({ endpoint: j.endpoint, user_id: ME, p256dh: j.keys.p256dh, auth: j.keys.auth });
+    if (error) throw error;
+    pushState = "on"; toast("Notifications activées sur cet appareil, même appli fermée");
+  } catch (e) { console.error(e); toast("Impossible d'activer les notifications sur cet appareil"); }
+  render();
+}
+async function disablePush() {
+  try {
+    const reg = await navigator.serviceWorker.ready, sub = await reg.pushManager.getSubscription();
+    if (sub) { await SB.from("push_subs").delete().eq("endpoint", sub.endpoint); await sub.unsubscribe(); }
+    pushState = "off"; toast("Notifications désactivées sur cet appareil");
+  } catch { toast("Désactivation impossible"); }
+  render();
+}
+
 let AF = { kind: "buy", item: null, price: "" };
 function viewAlertes() {
   const C = coster();
@@ -2086,6 +2116,7 @@ function viewAlertes() {
   };
   priceIn.addEventListener("keydown", e => { if (e.key === "Enter") create(); });
   const notifState = "Notification" in window ? Notification.permission : "absent";
+  if (pushState === null) refreshPushState().then(() => { if (view === "alertes") render(); });
   return h("div", { class: "stack" },
     h("div", { class: "grid2" },
       h("section", { class: "panel" },
@@ -2099,11 +2130,11 @@ function viewAlertes() {
         h("button", { type: "button", class: "btn primary big", onclick: create }, "Créer l'alerte")),
       h("section", { class: "panel" },
         h("h2", { text: "Notifications" }),
-        h("p", { class: "muted", text: "Quand une alerte se déclenche, l'appli affiche un message. Tu peux aussi recevoir une notification de ton téléphone ou de ton PC, tant que l'appli est ouverte (même en arrière-plan)." }),
-        notifState === "granted" ? h("span", { class: "verdict good", text: "Notifications activées sur cet appareil" }) :
-        notifState === "denied" ? h("p", { class: "note", text: "Les notifications sont bloquées pour ce site : réautorise-les dans les réglages du navigateur." }) :
-        notifState === "absent" ? h("p", { class: "note", text: "Ce navigateur ne gère pas les notifications. Sur iPhone, installe d'abord l'appli sur l'écran d'accueil." }) :
-        h("button", { type: "button", class: "btn primary", onclick: () => Notification.requestPermission().then(() => render()) }, "Activer les notifications"),
+        h("p", { class: "muted", text: "Quand une alerte se déclenche, l'appli affiche un message. Active les notifications pour être prévenu sur ce téléphone ou ce PC, même appli fermée : le serveur vérifie tes alertes à chaque relevé de prix du groupe et toutes les heures." }),
+        pushState === "on" ? h("div", { class: "row" }, h("span", { class: "verdict good", text: "Notifications actives sur cet appareil, même appli fermée" }), h("button", { type: "button", class: "btn sm", onclick: disablePush }, "Désactiver")) :
+        pushState === "off" && notifState !== "denied" ? h("button", { type: "button", class: "btn primary", onclick: enablePush }, "Activer les notifications sur cet appareil") :
+        pushState === "unsupported" ? h("p", { class: "note", text: SB ? "Ce navigateur ne gère pas les notifications appli fermée. Sur iPhone, installe d'abord l'appli sur l'écran d'accueil (iOS 16.4 ou plus), puis ouvre-la depuis l'icône." : "Notifications appli fermée indisponibles en mode local." }) : null,
+        notifState === "denied" ? h("p", { class: "note", text: "Les notifications sont bloquées pour ce site : réautorise-les dans les réglages du navigateur, puis recharge l'appli." }) : null,
         h("div", { class: "tiles", style: "grid-template-columns:repeat(2,minmax(0,1fr))" },
           h("div", { class: "tile" }, h("span", { class: "label", text: "Alertes" }), h("span", { class: "v", text: list.length })),
           h("div", { class: "tile kamas" }, h("span", { class: "label", text: "Déclenchées" }), h("span", { class: "v", text: fired.length }))))),

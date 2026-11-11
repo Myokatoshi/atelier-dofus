@@ -122,3 +122,47 @@ create policy "coefficients modifiables par les membres" on public.item_coef for
 do $$ begin
   alter publication supabase_realtime add table public.item_coef;
 exception when duplicate_object then null; end $$;
+
+-- Notifications push (identique à supabase/migrations/008_notifications.sql)
+-- Appareils inscrits : chacun ne voit et ne gère que les siens
+create table if not exists public.push_subs (
+  endpoint text primary key,
+  user_id uuid not null default auth.uid() references auth.users(id) on delete cascade,
+  p256dh text not null,
+  auth text not null,
+  created_at timestamptz not null default now()
+);
+alter table public.push_subs enable row level security;
+drop policy if exists "appareils personnels" on public.push_subs;
+create policy "appareils personnels" on public.push_subs for all to authenticated using (user_id = auth.uid()) with check (user_id = auth.uid());
+
+-- Notifications déjà envoyées (une par alerte et par prix déclencheur) : lue et écrite par la fonction serveur uniquement
+create table if not exists public.push_sent (
+  user_id uuid not null references auth.users(id) on delete cascade,
+  alert_id text not null,
+  key text not null,
+  sent_at timestamptz not null default now(),
+  primary key (user_id, alert_id)
+);
+alter table public.push_sent enable row level security;  -- aucune règle : inaccessible aux membres, seule la fonction (rôle service) y accède
+
+-- Vérification automatique des alertes (identique à supabase/migrations/009_alertes_auto.sql)
+create extension if not exists pg_net;
+create extension if not exists pg_cron;
+
+create or replace function public.lancer_alertes() returns trigger language plpgsql security definer set search_path = public as $$
+begin
+  perform net.http_post(url := 'https://jvzwoialynhvhwkccgba.supabase.co/functions/v1/alertes',
+                        headers := '{"Content-Type": "application/json"}'::jsonb, body := '{}'::jsonb);
+  return null;
+end $$;
+
+drop trigger if exists alertes_apres_releve on public.price_obs;
+create trigger alertes_apres_releve after insert or update on public.price_obs
+  for each statement execute function public.lancer_alertes();
+
+select cron.unschedule('alertes-horaire') where exists (select 1 from cron.job where jobname = 'alertes-horaire');
+select cron.schedule('alertes-horaire', '7 * * * *', $$
+  select net.http_post(url := 'https://jvzwoialynhvhwkccgba.supabase.co/functions/v1/alertes',
+                       headers := '{"Content-Type": "application/json"}'::jsonb, body := '{}'::jsonb);
+$$);
