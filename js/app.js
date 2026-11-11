@@ -196,6 +196,7 @@ async function startOnline(session) {
     await loadProfiles();
     await loadTrades();
     await loadObtain();
+    await loadCoefs();
     saveState("ok", "Synchronisé avec le groupe");
   } catch (e) {
     console.error(e);
@@ -236,6 +237,11 @@ function subscribePrices() {
       if (id != null) aggregate(String(id));
       lsSavePrices();
       if (p.new && p.new.user_id && !(p.new.user_id in NAMES)) loadProfiles();
+      softRender();
+    })
+    .on("postgres_changes", { event: "*", schema: "public", table: "item_coef" }, p => {
+      if (p.eventType === "DELETE") delete COEF[p.old.item_id]; else COEF[p.new.item_id] = { coef: +p.new.coef, by: p.new.updated_by, t: p.new.updated_at };
+      try { localStorage.setItem("atelier-coef", JSON.stringify(COEF)); } catch {}
       softRender();
     })
     .on("postgres_changes", { event: "*", schema: "public", table: "item_obtain" }, p => {
@@ -813,6 +819,7 @@ async function renderSheet() {
   sheetIn.lastElementChild.replaceWith(enc);
   await ensureFarm();
   if (sheetStack[sheetStack.length - 1] !== id || !F) return;
+  const bp = brisagePanel(id); if (bp) sheetIn.append(bp);
   sheetIn.append(obtainPanel(id));
   const src = sourcesEl(id, true);
   if (src) sheetIn.append(h("section", { class: "panel" }, h("h3", { text: "Où l'obtenir" }), src));
@@ -2406,6 +2413,144 @@ function viewRentaFarm() {
 }
 
 // =====================================================================
+// Brisage : runes obtenues en brisant un équipement, comparées à son coût
+// Formule de Kamamaster : quantité = (3 × poids × jet × niveau / 200 + 1) × coef / 100,
+// divisée par le poids si poids > 1, et par 2,5 pour les pods.
+// =====================================================================
+// caractéristique -> [poids unitaire, objet rune de base]
+const RUNES = {
+  1: [100, 1557], 23: [90, 1558], 19: [51, 7438], 26: [30, 7442], 16: [20, 7435],
+  122: [15, 18721], 120: [15, 18720], 125: [15, 18719], 123: [15, 18722],
+  49: [10, 7434], 18: [10, 7433], 83: [7, 11647], 82: [7, 11645], 28: [7, 11643], 27: [7, 11641],
+  33: [6, 7459], 35: [6, 7560], 37: [6, 7460], 34: [6, 7457], 36: [6, 7458],
+  88: [5, 11657], 90: [5, 11661], 92: [5, 11665], 89: [5, 11659], 91: [5, 11663], 86: [5, 11653], 84: [5, 11649], 70: [5, 7446],
+  79: [4, 11639], 78: [4, 11637], 48: [3, 7451], 12: [3, 1521], 25: [2, 7436],
+  54: [2, 7455], 56: [2, 7454], 58: [2, 7456], 55: [2, 7452], 57: [2, 7453], 87: [2, 11655], 85: [2, 11651],
+  10: [1, 1519], 15: [1, 1522], 13: [1, 1525], 14: [1, 1524], 40: [0.25, 7443], 11: [0.2, 1523], 44: [0.1, 7448],
+};
+function runeQty(charId, jet, level, coef) {
+  const r = RUNES[charId]; if (!r || jet <= 0) return 0;
+  const u = r[0];
+  let n = Math.round((3 * u * jet * level / 200 + 1) * 100) / 100;
+  if (charId === 40) n /= 2.5;
+  n = n * coef / 100;
+  if (u > 1) n /= u;
+  return n;
+}
+// Coefficients de brisage partagés (table item_coef) ; 100 % par défaut
+let COEF = {};
+try { COEF = JSON.parse(localStorage.getItem("atelier-coef") || "{}"); } catch { COEF = {}; }
+const coefOf = id => COEF[id] ? COEF[id].coef : (S.settings.coefDefault || 100);
+async function loadCoefs() {
+  const { data, error } = await SB.from("item_coef").select("item_id,coef,updated_by,updated_at");
+  if (error) { console.error(error); return; }
+  COEF = {}; for (const r of data || []) COEF[r.item_id] = { coef: +r.coef, by: r.updated_by, t: r.updated_at };
+  try { localStorage.setItem("atelier-coef", JSON.stringify(COEF)); } catch {}
+}
+async function setCoef(id, coef) {
+  if (coef == null) delete COEF[id]; else COEF[id] = { coef, by: ME, t: new Date().toISOString() };
+  try { localStorage.setItem("atelier-coef", JSON.stringify(COEF)); } catch {}
+  if (SB && ME) {
+    const { error } = coef == null ? await SB.from("item_coef").delete().eq("item_id", +id) : await SB.from("item_coef").upsert({ item_id: +id, coef, updated_by: ME, updated_at: new Date().toISOString() });
+    saveState(error ? "err" : "ok", error ? "Coefficient non enregistré" : "Enregistré pour le groupe");
+  }
+}
+// Runes et valeur d'un objet brisé
+function brisage(id, jetMode = S.settings.bjet || "mid", C) {
+  const st = detOf(id).st; if (!st) return null;
+  const lvl = item(id)[1], coef = coefOf(id);
+  const lines = []; let value = 0, missing = 0;
+  for (const [c, lo, hi] of st) {
+    if (!RUNES[c] || hi <= 0) continue;
+    const jet = jetMode === "min" ? Math.max(0, lo) : jetMode === "max" ? hi : (Math.max(0, lo) + hi) / 2;
+    const q = runeQty(c, jet, lvl, coef), rune = RUNES[c][1], p = nowPrice(priceAt(rune));
+    if (p == null) missing++; else value += q * p;
+    lines.push({ c, jet, q, rune, p, v: p == null ? null : q * p });
+  }
+  if (!lines.length) return null;
+  // Coût : crafter (ingrédients aux prix connus) ou acheter l'objet à l'HDV
+  let cost = null, how = null;
+  const mode = S.settings.bcost || "craft";
+  if (mode === "craft" && recipe(id)) { const c = (C || coster()).craft(id); if (!c.missing) { cost = (c.lo + c.hi) / 2; how = "craft"; } }
+  if (cost == null && mode === "buy") { const o = priceAt(id); if (o) { cost = nowPrice(o); how = "achat"; } }
+  const profit = cost == null ? null : value - cost;
+  // Coefficient à partir duquel le brisage est rentable (valeur proportionnelle au coefficient, environ)
+  const seuil = cost == null || !value ? null : cost / (value / coef);
+  return { lines, value, missing, cost, how, profit, coef, seuil };
+}
+const statLabel = c => { const ch = D.chars[c]; return ch ? fxText(ch[0], 2, 2).replace(/^2\s*%?\s*/, "").trim() + (/^2\s*%/.test(fxText(ch[0], 2, 2)) ? " (%)" : "") : "#" + c; };
+
+// Panneau Brisage de la fiche objet
+function brisagePanel(id) {
+  if (!isEquip(id)) return null;
+  const b = brisage(id); if (!b) return null;
+  const coefIn = numInput(COEF[id] ? COEF[id].coef : "", v => { const n = String(v).trim() === "" ? null : Math.max(0, Math.min(1000, parseFloat(String(v).replace(",", ".")))); setCoef(id, isNaN(n) ? null : n); renderSheet(); }, { sm: true, ph: String(S.settings.coefDefault || 100), label: "Coefficient de brisage en %", noRender: true, id: "coef-" + id });
+  return h("section", { class: "panel" },
+    h("div", { class: "row between" }, h("h3", { text: "Brisage" }),
+      h("span", { class: "row", style: "gap:6px" }, h("span", { class: "label", text: "Coefficient" }), coefIn, h("span", { class: "small muted", text: "%" }))),
+    h("div", { class: "econ" },
+      h("div", {}, h("span", { class: "label", text: "Valeur des runes" }), h("span", { class: "v", text: k(b.value) + " ₭" }), b.missing ? h("span", { class: "chip warn", text: b.missing + " rune(s) sans prix" }) : null),
+      h("div", {}, h("span", { class: "label", text: b.how === "achat" ? "Prix d'achat" : "Coût du craft" }), h("span", { class: "v", text: b.cost == null ? "inconnu" : k(b.cost) + " ₭" })),
+      h("div", {}, h("span", { class: "label", text: "Bénéfice" }), h("span", { class: "v " + (b.profit == null ? "muted" : b.profit >= 0 ? "pos" : "neg"), text: b.profit == null ? "—" : (b.profit >= 0 ? "+" : "") + k(b.profit) + " ₭" }),
+        b.seuil != null ? h("span", { class: "note", text: "rentable dès un coefficient de " + Math.ceil(b.seuil) + " %" }) : null)),
+    h("div", { class: "tablewrap" }, h("table", {},
+      h("thead", {}, h("tr", {}, h("th", { text: "Effet" }), h("th", { class: "n", text: "Jet" }), h("th", { text: "Rune" }), h("th", { class: "n", text: "Quantité" }), h("th", { class: "n", text: "Prix" }), h("th", { class: "n", text: "Valeur" }))),
+      h("tbody", {}, b.lines.map(l => h("tr", {},
+        h("td", { text: statLabel(l.c) }), h("td", { class: "n", text: (Math.round(l.jet * 10) / 10).toLocaleString("fr-FR") }),
+        h("td", {}, itemLink(l.rune, null, 22)), h("td", { class: "n", text: l.q.toLocaleString("fr-FR", { maximumFractionDigits: 2 }) }),
+        h("td", { class: "n", text: l.p == null ? "?" : k(l.p) }), h("td", { class: "n", text: l.v == null ? "?" : k(l.v) })))))),
+    h("p", { class: "note", text: "Jet " + ({ min: "minimum", mid: "moyen", max: "maximum" })[S.settings.bjet || "mid"] + " de l'objet, coefficient " + b.coef + " % (modifiable, partagé avec le groupe). Formule de Kamamaster ; la quantité réelle dépend du jet exact de ton objet." }));
+}
+
+let brisF = { q: "", min: "", max: "", all: false };
+let detsReady = false;
+function viewBrisage() {
+  if (!detsReady) { ensureDets([...Array(32).keys()]).then(() => { detsReady = true; if (view === "brisage") render(); }); return h("div", { class: "loading", text: "Chargement des effets des équipements…" }); }
+  const seg = (key, opts, def) => h("span", { class: "seg", role: "group" }, opts.map(([v, l]) =>
+    h("button", { type: "button", "aria-pressed": (S.settings[key] || def) === v ? "true" : "false", onclick: () => { S.settings[key] = v; persist("plan"); render(); } }, l)));
+  const coefIn = numInput(S.settings.coefDefault || 100, v => { const n = parseFloat(String(v).replace(",", ".")); S.settings.coefDefault = n > 0 ? Math.min(1000, n) : 100; persist("plan"); }, { sm: true, label: "Coefficient par défaut", id: "coef-def" });
+  // Équipements à évaluer : craftables (coût du craft) ou avec un prix HDV (achat)
+  const mode = S.settings.bcost || "craft";
+  const n = norm(brisF.q || "");
+  let ids = INDEX.filter(e => isEquip(e.id) && (mode === "craft" ? e.craft : !!priceAt(e.id)) && (!n || e.key.includes(n)) && (!brisF.min || e.lvl >= +brisF.min) && (!brisF.max || e.lvl <= +brisF.max)).map(e => e.id);
+  const C = coster();
+  const rows = ids.map(id => ({ id, b: brisage(id, undefined, C) })).filter(r => r.b && r.b.profit != null && (brisF.all || r.b.profit > 0)).sort((a, b) => b.b.profit - a.b.profit);
+  const q = h("input", { type: "search", id: "q-bris", placeholder: "Filtrer par nom", value: brisF.q, "aria-label": "Filtrer" });
+  q.addEventListener("input", () => { brisF.q = q.value; clearTimeout(q._t); q._t = setTimeout(render, 250); });
+  const lv = (key, ph) => { const el = h("input", { type: "number", id: "bris-" + key, min: 1, max: 200, placeholder: ph, value: brisF[key], "aria-label": ph }); el.addEventListener("change", () => { brisF[key] = el.value; render(); }); return el; };
+  const allCb = h("input", { type: "checkbox", id: "bris-all", checked: brisF.all }); allCb.addEventListener("change", () => { brisF.all = allCb.checked; render(); });
+  const runeIds = [...new Set(Object.values(RUNES).map(r => r[1]))].sort((a, b) => item(a)[0].localeCompare(item(b)[0], "fr"));
+  return h("div", { class: "stack" },
+    h("section", { class: "panel" },
+      h("div", { class: "row between" }, h("h2", { text: "Que briser ?" }),
+        h("div", { class: "row", style: "gap:8px" }, h("span", { class: "label", text: "Coût" }), seg("bcost", [["craft", "Crafter"], ["buy", "Acheter à l'HDV"]], "craft"),
+          h("span", { class: "label", text: "Jet" }), seg("bjet", [["min", "Min"], ["mid", "Moyen"], ["max", "Max"]], "mid"),
+          h("span", { class: "label", text: "Coef. par défaut" }), coefIn, h("span", { class: "small muted", text: "%" }))),
+      h("p", { class: "note", text: "Pour chaque équipement : valeur des runes obtenues en le brisant (prix du groupe, sinon Kamamaster), moins son coût (" + (mode === "craft" ? "ingrédients aux prix connus" : "prix d'achat à l'HDV") + "). Le coefficient de brisage d'un objet se règle dans sa fiche ; il baisse quand l'objet est beaucoup brisé sur le serveur." }),
+      h("div", { class: "filters" }, h("div", { class: "search" }, q), lv("min", "Niv. min"), lv("max", "Niv. max"), h("label", { class: "check" }, allCb, "Afficher aussi les pertes")),
+      rows.length ? h("div", { class: "tablewrap" }, h("table", {},
+        h("thead", {}, h("tr", {}, h("th", { text: "Objet" }), h("th", { class: "n", text: mode === "craft" ? "Coût du craft" : "Prix d'achat" }), h("th", { class: "n", text: "Valeur runes" }), h("th", { class: "n", text: "Bénéfice" }), h("th", { class: "n", text: "Rentable dès" }), h("th", { class: "n", text: "Coef." }), h("th", {}))),
+        h("tbody", {}, rows.slice(0, 120).map(({ id, b }) => h("tr", {},
+          h("td", {}, itemLink(id, typeName(id) + " · niv. " + item(id)[1] + (b.missing ? " · " + b.missing + " rune(s) sans prix" : ""), 28)),
+          h("td", { class: "n", text: k(b.cost) }), h("td", { class: "n", text: k(b.value) }),
+          h("td", { class: "n" }, h("span", { class: "verdict " + (b.profit >= 0 ? "good" : "bad"), text: (b.profit >= 0 ? "+" : "") + kk(b.profit) })),
+          h("td", { class: "n", text: b.seuil == null ? "—" : Math.ceil(b.seuil) + " %" }),
+          h("td", { class: "n" + (COEF[id] ? "" : " muted"), text: b.coef + " %" }),
+          h("td", {}, mode === "craft" ? h("button", { type: "button", class: "btn sm", onclick: () => { addTarget(id); toast(item(id)[0] + " ajouté au plan"); } }, "+ Plan") : null)))))) :
+        h("div", { class: "empty" }, h("strong", { text: "Aucun brisage rentable avec ces réglages" }), h("span", { text: "Coche « Afficher aussi les pertes », change de jet ou de mode de coût, ou complète les prix des runes ci-dessous." })),
+      rows.length > 120 ? h("p", { class: "note", text: "120 premiers résultats sur " + rows.length + " : affine avec les filtres." }) : null),
+    h("section", { class: "panel" },
+      h("div", { class: "row between" }, h("h2", { text: "Prix des runes" }), h("span", { class: "chip", text: runeIds.filter(id => priceAt(id)).length + " / " + runeIds.length + " chiffrées" })),
+      h("p", { class: "note", text: "Prix du groupe s'il est plus récent, sinon prix Kamamaster d'Orukam. Corrige une rune directement dans les cases." }),
+      h("div", { class: "tablewrap" }, h("table", {},
+        h("thead", {}, h("tr", {}, h("th", { text: "Rune" }), h("th", { class: "n", text: "Prix" }), h("th", { text: "Source" }), h("th", { text: "Ton relevé du jour (basse · haute · actuel)" }))),
+        h("tbody", {}, runeIds.map(id => { const o = priceAt(id); return h("tr", {},
+          h("td", {}, itemLink(id, null, 24)), h("td", { class: "n" }, o ? h("strong", { style: "color:var(--kamas)", text: k(nowPrice(o)) }) : h("span", { class: "muted", text: "—" })),
+          h("td", { class: "small muted", text: !o ? "aucun prix" : o.src === "km" ? "Kamamaster · " + ago(o.d) : "groupe · " + ago(o.d) }),
+          h("td", {}, quickObs(id))); }))))));
+}
+
+// =====================================================================
 // Habillage : icônes, onglets, bandeaux de section
 // =====================================================================
 const IC = {
@@ -2418,6 +2563,7 @@ const IC = {
   bag: "M6 9a6 6 0 0 1 12 0v11H6z M9 9V6a3 3 0 0 1 6 0v3 M6 14h12",
   book: "M4 5a2 2 0 0 1 2-2h13v16H6a2 2 0 0 0-2 2z M4 21V5 M8 7h7 M8 11h5",
   save: "M12 3v12 M7 10l5 5 5-5 M4 17v3h16v-3",
+  rune: "M12 2l7 5v10l-7 5-7-5V7z M12 7l3 3-3 7-3-7z",
   compare: "M8 3v18 M16 3v18 M3 8h5 M16 16h5 M3 3h18v18H3z",
   bell: "M6 16v-5a6 6 0 1 1 12 0v5l2 2H4z M10 21a2 2 0 0 0 4 0",
   user: "M12 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8z M4 21a8 8 0 0 1 16 0",
@@ -2429,14 +2575,14 @@ const IC = {
 const svgI = name => { const el = s("svg", { class: "i", viewBox: "0 0 24 24", "aria-hidden": "true" }); for (const d of IC[name].split(" M")) el.append(s("path", { d: d.startsWith("M") ? d : "M" + d })); return el; };
 const TABS = [
   ["accueil", "Accueil", "home", "--c-home"], ["plan", "Plan de craft", "hammer", "--c-craft", "c-plan"], ["rentabilite", "Rentabilité", "trend", "--c-gold"],
-  ["prix", "Prix HDV", "coins", "--c-gold", "c-prix"], ["tournee", "Tournée HDV", "route", "--c-gold", "c-tour"], ["journal", "Journal", "ledger", "--c-journal"], ["alertes", "Alertes", "bell", "--c-gold", "c-alert"], ["farm", "Farm", "leaf", "--c-farm"], ["metiers", "Métiers", "up", "--c-craft"], ["builds", "Builds", "shield", "--c-build", "c-builds"], ["comparer", "Comparer", "compare", "--c-build"],
+  ["prix", "Prix HDV", "coins", "--c-gold", "c-prix"], ["tournee", "Tournée HDV", "route", "--c-gold", "c-tour"], ["journal", "Journal", "ledger", "--c-journal"], ["alertes", "Alertes", "bell", "--c-gold", "c-alert"], ["farm", "Farm", "leaf", "--c-farm"], ["metiers", "Métiers", "up", "--c-craft"], ["brisage", "Brisage", "rune", "--c-alm"], ["builds", "Builds", "shield", "--c-build", "c-builds"], ["comparer", "Comparer", "compare", "--c-build"],
   ["stock", "Inventaire", "bag", "--c-stock", "c-stock"], ["encyclopedie", "Encyclopédie", "book", "--c-ency"], ["compte", "Compte", "user", "--c-save"],
 ];
 // Sections regroupées : menu latéral (bureau), barre du bas + sous-onglets (téléphone)
 const GROUPS = [
   ["accueil", "Accueil", "home", "--c-home", ["accueil"]],
   ["marche", "Marché", "coins", "--c-gold", ["prix", "tournee", "rentabilite", "journal", "alertes"]],
-  ["production", "Production", "hammer", "--c-craft", ["plan", "metiers", "farm", "stock"]],
+  ["production", "Production", "hammer", "--c-craft", ["plan", "brisage", "metiers", "farm", "stock"]],
   ["equipement", "Équipement", "shield", "--c-build", ["builds", "comparer", "encyclopedie"]],
   ["compte", "Compte", "user", "--c-save", ["compte"]],
 ];
@@ -2498,6 +2644,7 @@ function heroFor(v) {
     rentabilite: ["Rentabilité", "Crafter ou acheter, farmer ou capturer : ce qui rapporte vraiment, taxe et investissement déduits.", "trend", Object.keys(prices()).map(Number).filter(id => recipe(id))],
     prix: ["Prix du groupe", SH ? "Chaque relevé est partagé en direct avec tout le groupe." : "Tes relevés de fourchettes de prix à l'HDV.", "coins", Object.keys(prices()).map(Number)],
     farm: ["Liste de farm", "Où récolter, quels monstres taper, quels donjons faire.", "leaf", []],
+    brisage: ["Brisage", "Les équipements à crafter puis briser pour revendre les runes, aux prix d'Orukam.", "rune", [...new Set(Object.values(RUNES).map(r => r[1]))].filter(id => priceAt(id)).slice(0, 8)],
     comparer: ["Comparer deux builds", "Pièces, statistiques et coût côte à côte, pour choisir la meilleure variante.", "compare", [...new Set(S.builds.flatMap(b => b.items))]],
     builds: ["Builds", "Importe un build, vois ses stats, son coût et ce qu'il faut farmer.", "shield", bsel ? bsel.items : []],
     stock: ["Inventaire", "Ce que tu as sous la main, valorisé au prix du groupe.", "bag", Object.keys(S.stock).map(Number)],
@@ -2524,7 +2671,7 @@ function decorate(root, v) {
 // =====================================================================
 // Rendu et navigation
 // =====================================================================
-const VIEWS = { comparer: viewComparer, alertes: viewAlertes, metiers: viewMetiers, journal: viewJournal, tournee: viewTournee, farm: viewFarm, builds: viewBuilds, accueil: viewAccueil, plan: viewPlan, rentabilite: viewRentabilite, prix: viewPrix, stock: viewStock, encyclopedie: viewEncyclopedie, compte: viewSauvegarde };
+const VIEWS = { brisage: viewBrisage, comparer: viewComparer, alertes: viewAlertes, metiers: viewMetiers, journal: viewJournal, tournee: viewTournee, farm: viewFarm, builds: viewBuilds, accueil: viewAccueil, plan: viewPlan, rentabilite: viewRentabilite, prix: viewPrix, stock: viewStock, encyclopedie: viewEncyclopedie, compte: viewSauvegarde };
 function renderCounts() {
   const set = (id, n) => { const el = document.getElementById(id); if (el) { el.textContent = n; el.dataset.z = n ? "0" : "1"; } };
   set("c-plan", S.targets.length);
