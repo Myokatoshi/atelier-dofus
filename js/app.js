@@ -356,7 +356,20 @@ function shareMine() {
 // =====================================================================
 const obsOf = id => prices()[id] || [];
 // Prix de référence : relevé du groupe ou prix Kamamaster d'Orukam, le plus récent l'emporte (à date égale, le groupe)
-let KM = null;
+let KM = null, KMH = null, kmhLoading = null;
+// Historique quotidien des prix Kamamaster (90 jours), chargé à la demande pour les courbes
+function ensureKmHistory() {
+  if (KMH || kmhLoading) return kmhLoading;
+  kmhLoading = fetch("data/km/orukam-history.json", { cache: "no-cache" }).then(r => r.ok ? r.json() : null).then(j => { KMH = j || { dates: [], prices: {} }; if (sheet.open) renderSheet(); }).catch(() => { KMH = { dates: [], prices: {} }; });
+  return kmhLoading;
+}
+function kmHistoryIn(id, s0, e0) {
+  if (!KMH || S.settings.km === false) return [];
+  const row = KMH.prices[id]; if (!row) return [];
+  const out = [];
+  KMH.dates.forEach((d, i) => { if (d >= s0 && d <= e0 && row[i] > 0) out.push(row[i]); });
+  return out;
+}
 function kmPrice(id, at) {
   if (!KM || S.settings.km === false) return null;
   const p = KM.prices[id]; if (!p) return null;
@@ -619,14 +632,16 @@ function chartData(id, mode) {
   const bs = buckets(mode, 12), r = recipe(id);
   return bs.map(p => {
     const o = obsOf(id).filter(x => x.d >= p.s && x.d <= p.e);
-    const row = { ...p, n: o.length, lo: null, hi: null, c: null };
+    const row = { ...p, n: o.length, lo: null, hi: null, c: null, km: false };
     if (o.length) { row.lo = o.reduce((t, x) => t + x.lo, 0) / o.length; row.hi = o.reduce((t, x) => t + x.hi, 0) / o.length; }
+    else { const kh = kmHistoryIn(id, p.s, p.e); if (kh.length) { row.lo = Math.min(...kh); row.hi = Math.max(...kh); row.n = kh.length; row.km = true; } }
     if (r) { const c = coster(p.e).craft(id); if (!c.missing) row.c = (c.lo + c.hi) / 2; }
     return row;
   });
 }
 function niceMax(v) { if (v <= 0) return 10; const p = Math.pow(10, Math.floor(Math.log10(v))); for (const m of [1, 1.5, 2, 2.5, 3, 4, 5, 6, 8, 10]) if (m * p >= v) return m * p; return 10 * p; }
 function chart(id, mode) {
+  ensureKmHistory();
   const data = chartData(id, mode);
   const hasHdv = data.some(d => d.lo != null), hasC = data.some(d => d.c != null);
   const box = h("div", { class: "chart" });
@@ -666,7 +681,7 @@ function chart(id, mode) {
     const show = () => {
       cross.setAttribute("x1", x(i)); cross.setAttribute("x2", x(i)); cross.setAttribute("visibility", "visible");
       tip.replaceChildren(h("strong", { text: d.long }),
-        h("span", {}, h("i", { class: "k", style: "background:var(--s-hdv)" }), "HDV : " + (d.lo == null ? "aucun relevé" : range(d.lo, d.hi) + " ₭" + (d.n > 1 ? " (" + d.n + " relevés)" : ""))),
+        h("span", {}, h("i", { class: "k", style: "background:var(--s-hdv)" }), "HDV : " + (d.lo == null ? "aucun relevé" : range(d.lo, d.hi) + " ₭" + (d.km ? " (Kamamaster)" : d.n > 1 ? " (" + d.n + " relevés)" : ""))),
         recipe(id) ? h("span", {}, h("i", { class: "k", style: "background:var(--s-craft)" }), "Coût du craft : " + (d.c == null ? "prix manquants" : k(d.c) + " ₭")) : null);
       tip.hidden = false;
       const pct = x(i) / W * 100;
@@ -709,7 +724,10 @@ function openSheet(id, push = true) {
 }
 sheet.addEventListener("close", () => { sheetStack = []; render(); });
 sheet.addEventListener("click", e => { if (e.target === sheet) sheet.close(); });
+let sheetRenderSeq = 0;
 async function renderSheet() {
+  // Plusieurs rendus peuvent se chevaucher (données qui arrivent) : seul le dernier ajoute ses panneaux
+  const seq = ++sheetRenderSeq;
   const id = sheetStack[sheetStack.length - 1]; if (id == null) return;
   const it = item(id), r = recipe(id);
   const head = h("div", { class: "sheet-head" }, icon(id, 64, "big"),
@@ -805,7 +823,7 @@ async function renderSheet() {
 
   // Encyclopédie (chargée à la demande)
   const det = await loadDet(id);
-  if (sheetStack[sheetStack.length - 1] !== id) return;
+  if (seq !== sheetRenderSeq || sheetStack[sheetStack.length - 1] !== id) return;
   const used = (USED_IN[id] || []).slice().sort((a, b) => item(a)[1] - item(b)[1]);
   const almDays = D.almanax.filter(a => a[1] === id);
   const setItems = it[4] > 0 ? (SET_ITEMS[it[4]] || []) : [];
@@ -818,7 +836,7 @@ async function renderSheet() {
       h("div", { class: "chips" }, used.slice(0, 40).map(x => h("button", { type: "button", class: "chip", onclick: () => openSheet(x) }, item(x)[0] + " · " + item(x)[1])), used.length > 40 ? h("span", { class: "chip", text: "+" + (used.length - 40) }) : null)) : null);
   sheetIn.lastElementChild.replaceWith(enc);
   await ensureFarm();
-  if (sheetStack[sheetStack.length - 1] !== id || !F) return;
+  if (seq !== sheetRenderSeq || sheetStack[sheetStack.length - 1] !== id || !F) return;
   const bp = brisagePanel(id); if (bp) sheetIn.append(bp);
   sheetIn.append(obtainPanel(id));
   const src = sourcesEl(id, true);
@@ -1167,7 +1185,7 @@ function viewPrix() {
   const kmBox = KM ? h("section", { class: "panel" }, h("div", { class: "row between" },
     h("div", { style: "display:grid;gap:3px;max-width:75ch" },
       h("strong", { text: "Prix Kamamaster · " + KM.server }),
-      h("span", { class: "note", text: fmt.format(Object.keys(KM.prices).length) + " objets, mis à jour le " + new Date(KM.fetched).toLocaleDateString("fr-FR", { day: "numeric", month: "long" }) + " (récupérés chaque matin sur kamamaster.fr). Ils servent quand le groupe n'a pas de relevé plus récent : un prix unique, utilisé comme basse, haute et actuel." })),
+      h("span", { class: "note", text: fmt.format(Object.keys(KM.prices).length) + " objets, mis à jour le " + new Date(KM.fetched).toLocaleDateString("fr-FR", { day: "numeric", month: "long" }) + " (récupérés chaque matin sur kamamaster.fr). Ils servent quand le groupe n'a pas de relevé plus récent : un prix unique, utilisé comme basse, haute et actuel. Aussi récupérés : " + Object.keys(KM.coefs || {}).length + " coefficients de brisage, les zones en anomalie et l'historique des prix (courbes)." })),
     (() => { const c = h("input", { type: "checkbox", id: "km-on", checked: S.settings.km !== false }); c.addEventListener("change", () => { S.settings.km = c.checked; persist("plan"); render(); }); return h("label", { class: "check" }, c, "Utiliser ces prix"); })())) : null;
   const tourN = tourCandidates().ids.length;
   return h("div", { class: "stack" },
@@ -1277,7 +1295,8 @@ function ensureFarm() {
   return farmLoading;
 }
 const subName = sid => { const z = F.subs[sid]; return z ? z[0] : "Zone " + sid; };
-const subLabel = sid => { const z = F.subs[sid]; if (!z) return "Zone " + sid; const a = F.areas[z[1]]; return z[0] + (a && a !== z[0] ? " (" + a + ")" : ""); };
+const anomalyOf = sid => (KM && KM.anomalies && KM.anomalies[sid]) || 0;
+const subLabel = sid => { const z = F.subs[sid]; if (!z) return "Zone " + sid; const a = F.areas[z[1]]; return z[0] + (a && a !== z[0] ? " (" + a + ")" : "") + (anomalyOf(sid) ? " · anomalie +" + anomalyOf(sid) + " %" : ""); };
 const djName = id => (F.dungeons[id] || ["Donjon"])[0];
 const pctTxt = (a, b) => { const f = v => v >= 10 ? Math.round(v) : v.toLocaleString("fr-FR", { maximumFractionDigits: 1 }); return a === b ? f(a) + " %" : f(a) + " – " + f(b) + " %"; };
 // Résumé des sources d'un objet. full = liste détaillée (fiche objet)
@@ -1337,7 +1356,7 @@ function zonesFor(ids) {
     if (s_.hv) for (const sid of s_.hv[2]) add(sid, id, "récolte");
     for (const [mid, , b] of s_.dr) { if (b < 1) continue; const m = F.mons[mid]; for (const sid of m[3]) add(sid, id, m[0] + " " + pctTxt(b, b)); }
   }
-  return [...z.entries()].map(([sid, m]) => ({ sid, res: [...m.entries()] })).sort((a, b) => b.res.length - a.res.length || (F.subs[a.sid][2] - F.subs[b.sid][2])).slice(0, 12);
+  return [...z.entries()].map(([sid, m]) => ({ sid, res: [...m.entries()] })).sort((a, b) => b.res.length - a.res.length || anomalyOf(b.sid) - anomalyOf(a.sid) || (F.subs[a.sid][2] - F.subs[b.sid][2])).slice(0, 12);
 }
 
 let farmSrc = "plan";
@@ -1379,7 +1398,7 @@ function viewFarm() {
       h("div", { class: "stack" },
         h("section", { class: "panel" }, h("h2", { text: "Où farmer" }),
           zones.length ? h("div", { style: "display:grid;gap:10px" }, zones.map(z => { const sb = F.subs[z.sid]; return h("div", { class: "target" },
-            h("div", { class: "row between" }, h("strong", { text: subLabel(z.sid) }), h("span", { class: "chips" }, h("span", { class: "chip", text: "niv. " + sb[2] }), sb[3] >= 0 ? h("span", { class: "chip warn", text: "Donjon" }) : null, h("span", { class: "chip job", text: z.res.length + " ressource" + (z.res.length > 1 ? "s" : "") }))),
+            h("div", { class: "row between" }, h("strong", { text: subLabel(z.sid) }), h("span", { class: "chips" }, h("span", { class: "chip", text: "niv. " + sb[2] }), anomalyOf(z.sid) ? h("span", { class: "chip kamas", text: "Anomalie +" + anomalyOf(z.sid) + " %" }) : null, sb[3] >= 0 ? h("span", { class: "chip warn", text: "Donjon" }) : null, h("span", { class: "chip job", text: z.res.length + " ressource" + (z.res.length > 1 ? "s" : "") }))),
             h("div", { class: "chips" }, z.res.map(([rid, how]) => h("button", { type: "button", class: "chip", onclick: () => openSheet(rid), title: how }, item(rid)[0] + " · " + how)))); })) :
             h("p", { class: "muted", text: "Choisis « Farmer » sur au moins une ressource : les zones qui en regroupent le plus s'afficheront ici." })),
         djs.size ? h("section", { class: "panel" }, h("h2", { text: "Donjons utiles" }),
@@ -2440,7 +2459,15 @@ function runeQty(charId, jet, level, coef) {
 // Coefficients de brisage partagés (table item_coef) ; 100 % par défaut
 let COEF = {};
 try { COEF = JSON.parse(localStorage.getItem("atelier-coef") || "{}"); } catch { COEF = {}; }
-const coefOf = id => COEF[id] ? COEF[id].coef : (S.settings.coefDefault || 100);
+// Coefficient de brisage : celui du groupe ou celui de Kamamaster (Orukam), le plus récent l'emporte
+function coefInfo(id) {
+  const g = COEF[id], km = KM && KM.coefs && KM.coefs[id];
+  const gd = g ? String(g.t || "").slice(0, 10) : "", kd = km ? km[1] || "" : "";
+  if (g && (!km || gd >= kd)) return { coef: g.coef, src: "groupe", d: gd };
+  if (km) return { coef: km[0], src: "Kamamaster", d: kd };
+  return { coef: S.settings.coefDefault || 100, src: "défaut", d: "" };
+}
+const coefOf = id => coefInfo(id).coef;
 async function loadCoefs() {
   const { data, error } = await SB.from("item_coef").select("item_id,coef,updated_by,updated_at");
   if (error) { console.error(error); return; }
@@ -2499,7 +2526,7 @@ function brisagePanel(id) {
         h("td", { text: statLabel(l.c) }), h("td", { class: "n", text: (Math.round(l.jet * 10) / 10).toLocaleString("fr-FR") }),
         h("td", {}, itemLink(l.rune, null, 22)), h("td", { class: "n", text: l.q.toLocaleString("fr-FR", { maximumFractionDigits: 2 }) }),
         h("td", { class: "n", text: l.p == null ? "?" : k(l.p) }), h("td", { class: "n", text: l.v == null ? "?" : k(l.v) })))))),
-    h("p", { class: "note", text: "Jet " + ({ min: "minimum", mid: "moyen", max: "maximum" })[S.settings.bjet || "mid"] + " de l'objet, coefficient " + b.coef + " % (modifiable, partagé avec le groupe). Formule de Kamamaster ; la quantité réelle dépend du jet exact de ton objet." }));
+    h("p", { class: "note", text: "Jet " + ({ min: "minimum", mid: "moyen", max: "maximum" })[S.settings.bjet || "mid"] + " de l'objet, coefficient " + b.coef + " % (" + (() => { const ci = coefInfo(id); return ci.src === "défaut" ? "valeur par défaut" : ci.src + (ci.d ? ", " + parseD(ci.d).toLocaleDateString("fr-FR", { day: "numeric", month: "short" }) : ""); })() + "). Saisir un coefficient le partage avec le groupe. Formule de Kamamaster ; la quantité réelle dépend du jet exact de ton objet." }));
 }
 
 let brisF = { q: "", min: "", max: "", all: false };
@@ -2526,7 +2553,7 @@ function viewBrisage() {
         h("div", { class: "row", style: "gap:8px" }, h("span", { class: "label", text: "Coût" }), seg("bcost", [["craft", "Crafter"], ["buy", "Acheter à l'HDV"]], "craft"),
           h("span", { class: "label", text: "Jet" }), seg("bjet", [["min", "Min"], ["mid", "Moyen"], ["max", "Max"]], "mid"),
           h("span", { class: "label", text: "Coef. par défaut" }), coefIn, h("span", { class: "small muted", text: "%" }))),
-      h("p", { class: "note", text: "Pour chaque équipement : valeur des runes obtenues en le brisant (prix du groupe, sinon Kamamaster), moins son coût (" + (mode === "craft" ? "ingrédients aux prix connus" : "prix d'achat à l'HDV") + "). Le coefficient de brisage d'un objet se règle dans sa fiche ; il baisse quand l'objet est beaucoup brisé sur le serveur." }),
+      h("p", { class: "note", text: "Pour chaque équipement : valeur des runes obtenues en le brisant (prix du groupe, sinon Kamamaster), moins son coût (" + (mode === "craft" ? "ingrédients aux prix connus" : "prix d'achat à l'HDV") + "). Coefficient de brisage : celui relevé par le groupe ou par les joueurs de Kamamaster (le plus récent), sinon la valeur par défaut ; il baisse quand l'objet est beaucoup brisé sur le serveur et se règle dans sa fiche." }),
       h("div", { class: "filters" }, h("div", { class: "search" }, q), lv("min", "Niv. min"), lv("max", "Niv. max"), h("label", { class: "check" }, allCb, "Afficher aussi les pertes")),
       rows.length ? h("div", { class: "tablewrap" }, h("table", {},
         h("thead", {}, h("tr", {}, h("th", { text: "Objet" }), h("th", { class: "n", text: mode === "craft" ? "Coût du craft" : "Prix d'achat" }), h("th", { class: "n", text: "Valeur runes" }), h("th", { class: "n", text: "Bénéfice" }), h("th", { class: "n", text: "Rentable dès" }), h("th", { class: "n", text: "Coef." }), h("th", {}))),
@@ -2535,7 +2562,7 @@ function viewBrisage() {
           h("td", { class: "n", text: k(b.cost) }), h("td", { class: "n", text: k(b.value) }),
           h("td", { class: "n" }, h("span", { class: "verdict " + (b.profit >= 0 ? "good" : "bad"), text: (b.profit >= 0 ? "+" : "") + kk(b.profit) })),
           h("td", { class: "n", text: b.seuil == null ? "—" : Math.ceil(b.seuil) + " %" }),
-          h("td", { class: "n" + (COEF[id] ? "" : " muted"), text: b.coef + " %" }),
+          h("td", { class: "n" + (coefInfo(id).src === "défaut" ? " muted" : "") }, b.coef + " %", coefInfo(id).src !== "défaut" ? h("small", { class: "muted", style: "display:block", text: coefInfo(id).src }) : null),
           h("td", {}, mode === "craft" ? h("button", { type: "button", class: "btn sm", onclick: () => { addTarget(id); toast(item(id)[0] + " ajouté au plan"); } }, "+ Plan") : null)))))) :
         h("div", { class: "empty" }, h("strong", { text: "Aucun brisage rentable avec ces réglages" }), h("span", { text: "Coche « Afficher aussi les pertes », change de jet ou de mode de coût, ou complète les prix des runes ci-dessous." })),
       rows.length > 120 ? h("p", { class: "note", text: "120 premiers résultats sur " + rows.length + " : affine avec les filtres." }) : null),
