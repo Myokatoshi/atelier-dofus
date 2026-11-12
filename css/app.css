@@ -548,3 +548,17 @@ tr.today td { background: color-mix(in srgb, var(--kamas) 10%, transparent); }
 }
 @media (max-width: 720px) { .tablewrap td.hide-m, .hide-m { display: none !important; } }
 @media (max-width: 720px) { .filters input[type="number"] { width: 108px; font-size: .9rem; } input.cell.sm { width: 96px; } }
+/* Tendances : une courbe par objet */
+.icards { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 12px; }
+.icard { background: var(--surface); border: 1px solid var(--line); border-radius: var(--r); padding: 12px 14px; display: grid; gap: 8px; box-shadow: var(--shadow); min-width: 0; }
+.ichart-btn { display: block; width: 100%; padding: 0; border: 0; background: transparent; cursor: pointer; color: inherit; }
+.ichart { display: block; width: 100%; height: auto; }
+.ichart .grid { stroke: var(--line); stroke-dasharray: 3 3; }
+.ichart .axis { fill: var(--muted); font: 600 10px var(--f-data); }
+.ichart-line { fill: none; stroke: var(--sec); stroke-width: 2; stroke-linejoin: round; }
+.ichart-area { fill: color-mix(in srgb, var(--sec) 14%, transparent); }
+.ichart-dot { fill: var(--sec); }
+.check.small { font-size: .78rem; white-space: nowrap; }
+details.panel > summary { cursor: pointer; list-style: none; }
+details.panel > summary::-webkit-details-marker { display: none; }
+@media (max-width: 720px) { .icards { grid-template-columns: minmax(0, 1fr); } }
