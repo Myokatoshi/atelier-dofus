@@ -359,9 +359,11 @@ const obsOf = id => prices()[id] || [];
 // (hors cotes douteuses, écartées à la récupération : voir tools/fetch_kamamaster.py)
 let KM = null, KMH = null, kmhLoading = null;
 // Historique quotidien des prix Kamamaster (90 jours), chargé à la demande pour les courbes
-let kmCheckedAt = 0;
+let kmCheckedAt = 0, KMC = null;
 function loadKm() {
   kmCheckedAt = Date.now();
+  // Heure de la dernière vérification sur Kamamaster (toutes les 2 h) et du dernier changement des prix
+  fetch("data/km/orukam-check.json", { cache: "no-cache" }).then(r => r.ok ? r.json() : null).then(j => { if (j && j.checked && (!KMC || j.checked !== KMC.checked)) { KMC = j; if (view === "serveur") render(); } }).catch(() => {});
   return fetch("data/km/orukam.json", { cache: "no-cache" }).then(r => r.ok ? r.json() : null).then(j => {
     if (!j || !j.prices || (KM && j.fetched === KM.fetched)) return;
     const first = !KM;
@@ -1223,7 +1225,7 @@ function viewPrix() {
   const kmBox = KM ? h("section", { class: "panel" }, h("div", { class: "row between" },
     h("div", { style: "display:grid;gap:3px;max-width:75ch" },
       h("strong", { text: "Prix Kamamaster · " + KM.server }),
-      h("span", { class: "note", text: fmt.format(Object.keys(KM.prices).length) + " objets, mis à jour le " + new Date(KM.fetched).toLocaleDateString("fr-FR", { day: "numeric", month: "long" }) + " (vérifiés 4 fois par jour sur kamamaster.fr). Ils servent seulement pour les objets que le groupe n'a jamais relevés : un prix unique, utilisé comme basse, haute et actuel. Une cote qui s'écarte de plus de 3 fois de ses derniers jours est écartée comme douteuse" + (KM.doubt && Object.keys(KM.doubt).length ? " (" + Object.keys(KM.doubt).length + " en ce moment)" : "") + ". Aussi récupérés : " + Object.keys(KM.coefs || {}).length + " coefficients de brisage, les zones en anomalie et l'historique des prix (courbes)." })),
+      h("span", { class: "note", text: fmt.format(Object.keys(KM.prices).length) + " objets, mis à jour le " + new Date(KM.fetched).toLocaleDateString("fr-FR", { day: "numeric", month: "long" }) + " (vérifiés toutes les 2 heures sur kamamaster.fr). Ils servent seulement pour les objets que le groupe n'a jamais relevés : un prix unique, utilisé comme basse, haute et actuel. Une cote qui s'écarte de plus de 3 fois de ses derniers jours est écartée comme douteuse" + (KM.doubt && Object.keys(KM.doubt).length ? " (" + Object.keys(KM.doubt).length + " en ce moment)" : "") + ". Aussi récupérés : " + Object.keys(KM.coefs || {}).length + " coefficients de brisage, les zones en anomalie et l'historique des prix (courbes)." })),
     (() => { const c = h("input", { type: "checkbox", id: "km-on", checked: S.settings.km !== false }); c.addEventListener("change", () => { S.settings.km = c.checked; persist("plan"); render(); }); return h("label", { class: "check" }, c, "Utiliser ces prix"); })())) : null;
   const tourN = tourCandidates().ids.length;
   return h("div", { class: "stack" },
@@ -2750,7 +2752,7 @@ function viewBrisage() {
 
 // =====================================================================
 // Orukam : cotes HDV de tout le serveur, tendances et donjons rentables
-// (prix du groupe en direct + données publiées par Kamamaster, récupérées 4 fois par jour)
+// (prix du groupe en direct + données publiées par Kamamaster, vérifiées toutes les 2 heures)
 // =====================================================================
 let KMD = null, kmdLoading = null, kmRedraw = false;
 function ensureKmDungeons() {
@@ -2833,10 +2835,10 @@ function viewServeur() {
     h("div", { class: "tiles" },
       h("div", { class: "tile" }, h("span", { class: "label", text: "Objets cotés" }), h("span", { class: "v", text: fmt.format(ids.length) }), h("span", { class: "small muted", text: "prix du groupe et de Kamamaster" })),
       h("div", { class: "tile kamas" }, h("span", { class: "label", text: "Relevés du groupe aujourd'hui" }), h("span", { class: "v", text: todayN }), h("span", { class: "small muted", text: SH ? "reçus en direct" : "mode local" })),
-      h("div", { class: "tile" }, h("span", { class: "label", text: "Données Kamamaster" }), h("span", { class: "v", style: "font-size:1.25rem", text: KM ? agoTime(KM.fetched) : "—" }), h("span", { class: "small muted", text: "vérifiées 4 fois par jour" })),
+      h("div", { class: "tile" }, h("span", { class: "label", text: "Prix Kamamaster changés" }), h("span", { class: "v", style: "font-size:1.25rem", text: KM ? agoTime(KMC?.changed || KM.fetched) : "—" }), h("span", { class: "small muted", text: KMC ? "vérifié " + agoTime(KMC.checked) + " · toutes les 2 h" : "vérifié toutes les 2 h" })),
       h("div", { class: "tile" }, h("span", { class: "label", text: "Zones en anomalie" }), h("span", { class: "v", text: anom.length }), h("span", { class: "small muted", text: "bonus de drop en cours" }))),
     h("section", { class: "panel" },
-      h("p", { class: "note", style: "margin:0", text: "Les relevés du groupe arrivent en direct : dès qu'un membre enregistre un prix, il s'affiche chez tout le monde. Les données de Kamamaster (prix d'Orukam, brisage, anomalies, donjons) sont vérifiées 4 fois par jour : Kamamaster les met lui-même à jour environ une fois par jour, et il n'existe pas d'accès direct au serveur du jeu. Dès que le groupe a relevé un objet, son prix passe avant celui de Kamamaster ; les cotes Kamamaster qui s'écartent de plus de 3 fois de leurs derniers jours sont écartées comme douteuses. Source : kamamaster.fr." })),
+      h("p", { class: "note", style: "margin:0", text: "Les relevés du groupe arrivent en direct : dès qu'un membre enregistre un prix, il s'affiche chez tout le monde. Les données de Kamamaster (prix d'Orukam, brisage, anomalies, donjons) sont vérifiées toutes les 2 heures : Kamamaster ne les met lui-même à jour qu'environ une fois par jour, parfois moins, et il n'existe pas d'accès direct au serveur du jeu. Dès que le groupe a relevé un objet, son prix passe avant celui de Kamamaster ; les cotes Kamamaster qui s'écartent de plus de 3 fois de leurs derniers jours sont écartées comme douteuses. Source : kamamaster.fr." })),
     h("div", { class: "grid2 even" },
       h("section", { class: "panel" }, h("div", { class: "row between" }, h("h2", { text: "▲ Plus fortes hausses" }), h("span", { class: "chip", text: span >= 1 ? "sur " + win + " j" : "bientôt" })), moverList(ups, span >= 1 ? "Aucune hausse notable." : noTrend)),
       h("section", { class: "panel" }, h("div", { class: "row between" }, h("h2", { text: "▼ Plus fortes baisses" }), h("span", { class: "chip", text: span >= 1 ? "sur " + win + " j" : "bientôt" })), moverList(downs, span >= 1 ? "Aucune baisse notable." : noTrend))),

@@ -1,8 +1,8 @@
-# Récupère 4 fois par jour les données d'Orukam publiées par Kamamaster (prix HDV, brisage, anomalies, donjons), puis met l'appli à jour.
+# Vérifie toutes les 2 heures les données d'Orukam publiées par Kamamaster (prix HDV, brisage, anomalies, donjons), puis met l'appli à jour.
 name: Prix Kamamaster
 on:
   schedule:
-    - cron: "17 5,11,17,23 * * *"   # 4 fois par jour (vers 6 h, 12 h, 18 h et minuit, heure de Paris)
+    - cron: "17 */2 * * *"   # toutes les 2 heures (1 appel si les prix n'ont pas changé)
   workflow_dispatch:
 permissions:
   contents: write

@@ -13,11 +13,14 @@ Usage : python3 tools/fetch_kamamaster.py [Orukam]
                     30 min, 1 personnage) : drops attendus par passage, bonus d'anomalie compris
 - <serveur>-history.json : {"dates": [...], "prices": {id_objet: [prix ou 0 par date]}}, 90 derniers jours
 
-Lancé 4 fois par jour par .github/workflows/kamamaster.yml (4 appels à l'API de Kamamaster par passage).
-Un fichier n'est réécrit que si ses données ont changé : pas de commit inutile.
+- <serveur>-check.json : {"checked": dernière vérification, "changed": dernier changement des prix, "full": dernier passage complet}
+
+Lancé toutes les 2 heures par .github/workflows/kamamaster.yml : 1 appel (prix HDV) ; les 3 autres
+(brisage, anomalies, donjons) seulement si les prix ont changé ou si le dernier passage complet date de 6 h ou plus.
+Un fichier de données n'est réécrit que si ses données ont changé.
 """
 import json, sys, time, urllib.parse, urllib.request
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -26,7 +29,8 @@ UA = {"User-Agent": "AtelierDofus/1.0 (outil privé d'un groupe d'amis, quelques
 KEEP_DAYS = 90
 MAX_PRICE = 1_000_000_000  # au-delà : annonce fantaisiste à l'HDV, ignorée
 DOUBT_RATIO = 3            # cote douteuse : plus de 3 fois au-dessus ou en dessous de la médiane récente
-DOUBT_DAYS, DOUBT_MIN = 7, 3  # médiane des 7 derniers jours connus, au moins 3 valeurs pour juger
+DOUBT_DAYS, DOUBT_MIN = 7, 3
+FULL_EVERY = timedelta(hours=6)  # brisage, anomalies et donjons : au moins toutes les 6 h  # médiane des 7 derniers jours connus, au moins 3 valeurs pour juger
 
 
 def get(path, **params):
@@ -54,6 +58,19 @@ def main():
             prices[str(x["ankamaId"])] = p
     if len(prices) < 100:
         raise SystemExit(f"Réponse suspecte ({len(prices)} prix) : fichiers non modifiés")
+
+    # Prix identiques au dernier passage et passage complet récent : on note juste l'heure de vérification
+    stamp = now.strftime("%Y-%m-%dT%H:%M:%SZ")
+    main_file, check_file = out_dir / f"{slug}.json", out_dir / f"{slug}-check.json"
+    old = json.load(open(main_file, encoding="utf-8")) if main_file.exists() else None
+    check = json.load(open(check_file, encoding="utf-8")) if check_file.exists() else {}
+    old_raw = {**old["prices"], **{k: v[0] for k, v in (old.get("doubt") or {}).items()}} if old else None
+    last_full = check.get("full")
+    recent = last_full and now - datetime.strptime(last_full, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc) < FULL_EVERY
+    if old_raw == prices and recent:
+        json.dump({"checked": stamp, "changed": old.get("fetched"), "full": last_full}, open(check_file, "w"), separators=(",", ":"))
+        print(f"{server} : prix inchangés depuis le {old.get('fetched')} (vérifié le {stamp})")
+        return
 
     # Cotes douteuses : écart de plus de ×3 avec la médiane des derniers jours (Kamamaster ne relève
     # qu'une annonce par objet ; une seule annonce fantaisiste suffit à fausser la cote)
@@ -110,8 +127,6 @@ def main():
         print("Donjons indisponibles :", e)
         dungeons = None
 
-    stamp = now.strftime("%Y-%m-%dT%H:%M:%SZ")
-
     def save(path, payload):
         """Écrit le fichier seulement si les données (hors date de récupération) ont changé."""
         if path.exists():
@@ -131,6 +146,8 @@ def main():
     if dungeons:
         save(out_dir / f"{slug}-donjons.json", {"server": server, "source": "https://kamamaster.fr",
              "params": {"team": 4, "pp": 100, "min": 30, "chars": 1}, "list": dungeons})
+    json.dump({"checked": stamp, "changed": json.load(open(main_file, encoding="utf-8"))["fetched"], "full": stamp},
+              open(check_file, "w"), separators=(",", ":"))
     if not changed:
         print(f"{server} : prix inchangés depuis le dernier passage")
         return
