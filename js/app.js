@@ -898,6 +898,7 @@ async function renderSheet() {
 
   const actions = h("div", { class: "row" },
     r ? h("button", { type: "button", class: "btn primary", onclick: () => { addTarget(id); toast(it[0] + " ajouté au plan"); } }, "Ajouter au plan de craft") : null,
+    r ? h("button", { type: "button", class: "btn", onclick: () => openSimu(id) }, "Simuler le craft") : null,
     h("button", { type: "button", class: "btn", onclick: () => { JF = { ...JF, kind: "vente", item: id }; sheet.close(); location.hash = "#journal"; } }, "J'ai vendu"),
     h("button", { type: "button", class: "btn", onclick: () => { AF = { kind: "buy", item: id, price: "" }; sheet.close(); location.hash = "#alertes"; } }, "🔔 Alerte"),
     h("button", { type: "button", class: "btn", onclick: () => { JF = { ...JF, kind: "achat", item: id }; sheet.close(); location.hash = "#journal"; } }, "J'ai acheté"),
@@ -1226,11 +1227,86 @@ function copyText(txt, btn) {
 }
 
 let rentF = { q: "", job: "", only: "", sort: "m" };
+// =====================================================================
+// Simulateur de craft : coût, ressources déjà possédées, prix de vente, marge et prix à viser
+// =====================================================================
+let simF = { id: null, n: 1, own: {}, pr: {}, route: {}, sell: null, ownMode: "free" };
+function openSimu(id) { simF = { ...simF, id, n: 1, own: {}, pr: {}, route: {}, sell: null }; rentMode = "simu"; if (sheet.open) sheet.close(); location.hash = "#rentabilite"; render(); }
+function viewSimu() {
+  const C = coster(undefined, true), tax = taxRate();
+  const target = S.settings.simMargin ?? 20;
+  const pick = searchBox("Objet à crafter (nom)…", { craftOnly: true }, id => { simF = { ...simF, id, own: {}, pr: {}, route: {}, sell: null }; render(); }, "q-simu");
+  if (!simF.id || !recipe(simF.id)) return h("section", { class: "panel" }, h("h2", { text: "Simulateur de craft" }), pick,
+    h("div", { class: "empty" }, h("strong", { text: "Choisis un objet à crafter" }), h("span", { text: "Cherche l'objet ci-dessus, ou ouvre sa fiche et appuie sur « Simuler ». Tu pourras indiquer les ressources que tu as déjà, ajuster chaque prix et voir à quel prix vendre pour la marge que tu veux." })));
+  const id = simF.id, rec = recipe(id), n = Math.max(1, simF.n || 1);
+  // Ingrédients : besoin, possédé, à acheter, prix unitaire (marché ou saisi), voie (acheter / fabriquer)
+  const rows = rec[1].map(([ing, q]) => {
+    const need = q * n, own = Math.min(need, Math.max(0, simF.own[ing] ?? (S.stock[ing] || 0)));
+    const o = priceAt(ing), market = o ? nowPrice(o) : null;
+    const canCraft = !!recipe(ing), cc = canCraft ? C.craft(ing) : null, craftU = cc && !cc.missing ? (cc.lo + cc.hi) / 2 : null;
+    const best = C.best(ing), defRoute = canCraft && best.route === "craft" ? "craft" : "buy";
+    const route = simF.route[ing] || defRoute;
+    const autoU = route === "craft" ? craftU : market;
+    const unit = simF.pr[ing] != null ? simF.pr[ing] : autoU;
+    const buyQ = need - own;
+    const cost = unit == null ? null : buyQ * unit + (simF.ownMode === "market" ? own * (market ?? unit) : 0);
+    return { ing, q, need, own, buyQ, market, craftU, canCraft, route, unit, cost, o, edited: simF.pr[ing] != null };
+  });
+  const missing = rows.filter(r => r.cost == null);
+  const totCost = rows.reduce((t, r) => t + (r.cost ?? 0), 0), unitCost = totCost / n;
+  const so = priceAt(id), marketSell = so ? nowPrice(so) : null, sell = simF.sell != null ? simF.sell : marketSell;
+  const net = sell != null ? sell * n * (1 - tax) : null, margin = net != null ? net - totCost : null, pct = margin != null && totCost > 0 ? margin / totCost * 100 : null;
+  const priceFor = m => unitCost * (1 + m / 100) / (1 - tax);
+  const numIn = (val, on, o) => numInput(val == null ? "" : fmt.format(Math.round(val)), v => { const x = String(v).trim() === "" ? null : parseKamas(String(v)); on(x); }, o);
+  const ownSeg = h("span", { class: "seg", role: "group", "aria-label": "Ressources possédées" }, [["free", "Gratuites"], ["market", "Au prix du marché"]].map(([v, l]) =>
+    h("button", { type: "button", "aria-pressed": simF.ownMode === v ? "true" : "false", onclick: () => { simF.ownMode = v; render(); } }, l)));
+  const marginIn = numInput(target, v => { const x = parseFloat(String(v).replace(",", ".").replace("%", "")); S.settings.simMargin = isNaN(x) ? 20 : Math.max(-90, Math.min(1000, x)); persist("plan"); }, { sm: true, label: "Marge visée en %", id: "simu-marge" });
+  const col = v => v == null ? "muted" : v >= 0 ? "pos" : "neg";
+  return h("div", { class: "stack" },
+    h("section", { class: "panel" },
+      h("div", { class: "row between" }, h("h2", { text: "Simulateur de craft" }), pick),
+      h("div", { class: "row", style: "gap:14px;align-items:center" }, itemLink(id, typeName(id) + " · niv. " + item(id)[1] + " · " + jobName(rec[0]), 40),
+        h("span", { class: "label", text: "Quantité à crafter" }), qtyCtrl(n, v => { simF.n = v; render(); }),
+        h("button", { type: "button", class: "btn sm", onclick: () => { for (let i = 0; i < n; i++) addTarget(id); toast(n + " × " + item(id)[0] + " ajouté(s) au plan"); } }, "+ Plan de craft"))),
+    h("section", { class: "panel" },
+      h("div", { class: "row between" }, h("h2", { text: "Ingrédients" }), h("div", { class: "row", style: "gap:8px" }, h("span", { class: "label", text: "Ce que je possède" }), ownSeg)),
+      h("div", { class: "tablewrap" }, h("table", {},
+        h("thead", {}, h("tr", {}, h("th", { text: "Ingrédient" }), h("th", { class: "n", text: "Besoin" }), h("th", { class: "n", text: "J'en ai" }), h("th", { class: "n", text: "À acheter" }), h("th", { text: "Voie" }), h("th", { class: "n", text: "Prix unitaire" }), h("th", { class: "n", text: "Coût" }))),
+        h("tbody", {}, rows.map(r => h("tr", {},
+          h("td", {}, itemLink(r.ing, r.o ? (r.o.src === "km" ? "Kamamaster" : "groupe") + " · " + k(r.market) + " ₭/u" : "aucun prix connu", 26)),
+          h("td", { class: "n", text: fmt.format(r.need) }),
+          h("td", { class: "n" }, numInput(r.own || "", v => { const x = Math.max(0, Math.round(+String(v).replace(/\s/g, "")) || 0); simF.own = { ...simF.own, [r.ing]: x }; }, { sm: true, ph: "0", label: "Quantité possédée de " + item(r.ing)[0], id: "simu-own-" + r.ing })),
+          h("td", { class: "n" }, h("strong", { text: fmt.format(r.buyQ) })),
+          h("td", {}, r.canCraft ? h("span", { class: "seg", role: "group" }, [["buy", "Acheter"], ["craft", "Fabriquer"]].map(([v, l]) =>
+            h("button", { type: "button", "aria-pressed": r.route === v ? "true" : "false", title: v === "craft" ? (r.craftU != null ? "coût de fabrication ≈ " + k(r.craftU) + " ₭/u" : "prix manquants") : "", onclick: () => { simF.route = { ...simF.route, [r.ing]: v }; const pr = { ...simF.pr }; delete pr[r.ing]; simF.pr = pr; render(); } }, l))) : h("span", { class: "small muted", text: "acheter" })),
+          h("td", { class: "n" }, numIn(r.unit, x => { const pr = { ...simF.pr }; if (x == null) delete pr[r.ing]; else pr[r.ing] = x; simF.pr = pr; }, { sm: true, ph: "prix", label: "Prix unitaire de " + item(r.ing)[0], id: "simu-pr-" + r.ing }),
+            r.edited ? h("small", { class: "muted", style: "display:block", text: "saisi" }) : null),
+          h("td", { class: "n" }, r.cost == null ? h("span", { class: "chip warn", text: "prix ?" }) : h("strong", { text: k(r.cost) }))))))),
+      h("p", { class: "note", text: "« J'en ai » est pré-rempli avec ton inventaire. Ressources possédées « gratuites » : elles ne coûtent rien ; « au prix du marché » : on compte ce qu'elles te rapporteraient si tu les revendais. Prix unitaire : prix actuel (relevé du groupe, sinon Kamamaster), ou coût de fabrication si tu choisis « Fabriquer » ; tu peux le remplacer, vide = prix du marché." })),
+    h("section", { class: "panel" },
+      h("h2", { text: "Résultat" }),
+      h("div", { class: "row", style: "gap:8px" }, h("span", { class: "label", text: "Prix de vente unitaire" }),
+        numIn(sell, x => { simF.sell = x; }, { sm: true, ph: "prix", label: "Prix de vente unitaire", id: "simu-sell" }),
+        h("span", { class: "small muted", text: simF.sell != null ? "saisi (marché : " + (marketSell != null ? k(marketSell) + " ₭" : "?") + ")" : so ? "prix actuel · " + srcLabel(so) : "aucun prix connu" }),
+        h("span", { class: "label", text: "Marge visée" }), marginIn, h("span", { class: "small muted", text: "%" })),
+      h("div", { class: "tiles" },
+        h("div", { class: "tile" }, h("span", { class: "label", text: "Coût du craft" }), h("span", { class: "v", text: kk(totCost) + (missing.length ? "+" : "") }),
+          h("span", { class: "small muted", text: kk(unitCost) + " ₭ par unité" + (missing.length ? " · " + missing.length + " prix manquant(s)" : "") })),
+        h("div", { class: "tile" }, h("span", { class: "label", text: "Vente nette" }), h("span", { class: "v", text: net != null ? kk(net) : "—" }),
+          h("span", { class: "small muted", text: sell != null ? n + " × " + k(sell) + " ₭ − taxe " + Math.round(tax * 1000) / 10 + " %" : "indique un prix de vente" })),
+        h("div", { class: "tile kamas" }, h("span", { class: "label", text: "Marge" }), h("span", { class: "v " + col(margin), text: margin != null ? (margin >= 0 ? "+" : "") + kk(margin) : "—" }),
+          h("span", { class: "small muted", text: pct != null ? (pct >= 0 ? "+" : "") + pct.toFixed(1).replace(".", ",") + " % du coût · " + (margin / n >= 0 ? "+" : "") + kk(margin / n) + " ₭ par unité" : "" })),
+        h("div", { class: "tile" }, h("span", { class: "label", text: "Prix pour " + target + " % de marge" }), h("span", { class: "v", text: totCost > 0 ? k(priceFor(target)) : "—" }),
+          h("span", { class: "small muted", text: totCost > 0 ? "par unité · rentable dès " + k(priceFor(0)) + " ₭" : "" }))),
+      totCost > 0 ? h("div", { class: "chips" }, [0, 10, 20, 30, 50, 100].map(m => h("span", { class: "chip" + (m === target ? " kamas" : ""), text: (m ? "+" + m + " %" : "sans perte") + " → " + k(priceFor(m)) + " ₭" }))) : null,
+      h("p", { class: "note", text: "Marge = vente nette (après taxe HDV de " + Math.round(tax * 1000) / 10 + " %, réglable dans Crafts) − coût du craft ; en % du coût. Prix à viser = coût par unité × (1 + marge) ÷ (1 − taxe)." })));
+}
+
 let rentMode = "craft";
 function viewRentabilite() {
-  const modeSeg = h("span", { class: "seg", role: "group", "aria-label": "Type de rentabilité" }, [["craft", "Crafts"], ["farm", "Farm et captures"]].map(([v, l]) =>
+  const modeSeg = h("span", { class: "seg", role: "group", "aria-label": "Type de rentabilité" }, [["craft", "Crafts"], ["simu", "Simulateur"], ["farm", "Farm et captures"]].map(([v, l]) =>
     h("button", { type: "button", "aria-pressed": rentMode === v ? "true" : "false", onclick: () => { rentMode = v; render(); } }, l)));
-  return h("div", { class: "stack" }, h("div", { class: "row" }, modeSeg), rentMode === "farm" ? viewRentaFarm() : viewRentaCraft());
+  return h("div", { class: "stack" }, h("div", { class: "row" }, modeSeg), rentMode === "farm" ? viewRentaFarm() : rentMode === "simu" ? viewSimu() : viewRentaCraft());
 }
 function viewRentaCraft() {
   let rows = profitRows();
