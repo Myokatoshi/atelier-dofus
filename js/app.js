@@ -446,6 +446,33 @@ function kmOdd(id) {
 const oddOf = (id, o) => o && o.src === "km" ? kmOdd(id) : null;
 const oddText = id => "prix inhabituel : les objets du même type et de niveau proche valent ~" + kk(kmOdd(id)) + " ₭. À vérifier à l'HDV";
 const oddChip = (id, o) => oddOf(id, o) ? h("span", { class: "chip warn", title: oddText(id), text: "à vérifier" }) : null;
+// Cotes Kamamaster à vérifier : douteuses (écartées) ou inhabituelles (gardées), pour les objets que le groupe n'a pas relevés
+function kmSuspects() {
+  if (!KM || S.settings.km === false) return [];
+  const out = [];
+  for (const [id, x] of Object.entries(KM.doubt || {})) if (D.items[id] && !obsOf(+id).length) out.push({ id: +id, p: x[0], ref: x[1], why: "douteuse" });
+  for (const id of Object.keys(KM.prices)) { if (!D.items[id] || obsOf(+id).length) continue; const ref = kmOdd(+id); if (ref != null) out.push({ id: +id, p: KM.prices[id], ref, why: "inhabituelle" }); }
+  return out.sort((a, b) => b.p / (b.ref || 1) - a.p / (a.ref || 1));
+}
+let suspN = 30;
+function suspectsPanel() {
+  const list = kmSuspects();
+  if (!list.length) return null;
+  return h("section", { class: "panel", id: "a-verifier" },
+    h("div", { class: "row between" }, h("h2", { text: "Cotes Kamamaster à vérifier" }),
+      h("div", { class: "row", style: "gap:8px" }, h("span", { class: "chip warn", text: list.length + " objet" + (list.length > 1 ? "s" : "") }),
+        h("button", { type: "button", class: "btn sm", onclick: () => { tourSetup.extra = [...new Set([...(tourSetup.extra || []), ...list.map(x => x.id)])]; saveTour(); location.hash = "#tournee"; } }, "Les relever (tournée HDV)"))),
+    h("p", { class: "note", text: "Cotes Kamamaster jamais relevées par le groupe et suspectes : « inhabituelle » = plus de 50 fois le prix des objets du même type et de niveau proche (encore utilisée dans les calculs, sauf la revente des métiers) ; « douteuse » = plus de 3 fois au-dessus ou en dessous de ses derniers jours (écartée). Un seul relevé du groupe remplace la cote et retire l'objet de cette liste. Les plus suspectes d'abord." }),
+    h("div", { class: "tablewrap" }, h("table", {},
+      h("thead", {}, h("tr", {}, h("th", { text: "Objet" }), h("th", { class: "n", text: "Cote Kamamaster" }), h("th", { class: "n hide-m", text: "Objets similaires" }), h("th", {}), h("th", { text: "Ton relevé (basse · haute · actuel)" }))),
+      h("tbody", {}, list.slice(0, suspN).map(x => h("tr", {},
+        h("td", {}, itemLink(x.id, typeName(x.id) + " · niv. " + item(x.id)[1], 26)),
+        h("td", { class: "n" }, h("strong", { style: "color:var(--bad)", text: kk(x.p) + " ₭" })),
+        h("td", { class: "n hide-m", text: "~" + kk(x.ref) + " ₭" }),
+        h("td", {}, h("span", { class: "chip warn", text: x.why + " · ×" + (x.ref ? (x.p >= x.ref ? Math.round(x.p / x.ref) : "1/" + Math.round(x.ref / x.p)) : "?") })),
+        h("td", {}, quickObs(x.id))))))),
+    list.length > suspN ? h("div", { class: "row", style: "justify-content:center" }, h("button", { type: "button", class: "btn", onclick: () => { suspN += 50; render(); } }, "Afficher plus (" + (list.length - suspN) + " restants)")) : null);
+}
 const doubtText = id => { const x = kmDoubt(id); return x ? "cote douteuse : " + kk(x[0]) + " ₭ chez Kamamaster, d'habitude ~" + kk(x[1]) + " ₭" : ""; };
 const midOf = o => (o.lo + o.hi) / 2;
 const pick = (o, basis) => !o ? null : basis === "lo" ? o.lo : basis === "hi" ? o.hi : basis === "cur" ? (o.cur ?? midOf(o)) : midOf(o);
@@ -1304,6 +1331,7 @@ function viewPrix() {
       h("span", { text: tourN + " prix à relever pour ton plan, tes builds et l'Almanax." }),
       h("a", { href: "#tournee", class: "btn primary", style: "text-decoration:none" }, "Lancer la tournée HDV"))) : null,
     kmBox,
+    suspectsPanel(),
     SH && toShare.length ? h("section", { class: "panel" },
       h("div", { class: "row between" }, h("span", { text: "Tu as des relevés personnels sur " + toShare.length + " objet" + (toShare.length > 1 ? "s" : "") + " qui ne sont pas encore dans les prix du groupe." }),
         h("button", { type: "button", class: "btn primary", onclick: shareMine }, "Les partager avec le groupe"))) : null,
@@ -3035,6 +3063,7 @@ function viewServeur() {
       h("div", { class: "tile" }, h("span", { class: "label", text: "Objets cotés" }), h("span", { class: "v", text: fmt.format(ids.length) }), h("span", { class: "small muted", text: "prix du groupe et de Kamamaster" })),
       h("div", { class: "tile kamas" }, h("span", { class: "label", text: "Relevés du groupe aujourd'hui" }), h("span", { class: "v", text: todayN }), h("span", { class: "small muted", text: SH ? "reçus en direct" : "mode local" })),
       h("div", { class: "tile" }, h("span", { class: "label", text: "Prix Kamamaster changés" }), h("span", { class: "v", style: "font-size:1.25rem", text: KM ? agoTime(KMC?.changed || KM.fetched) : "—" }), h("span", { class: "small muted", text: KMC ? "vérifié " + agoTime(KMC.checked) + " · toutes les 2 h" : "vérifié toutes les 2 h" })),
+      (() => { const n = kmSuspects().length; return h("a", { class: "tile", href: "#prix", style: "text-decoration:none;color:inherit", onclick: () => setTimeout(() => document.getElementById("a-verifier")?.scrollIntoView({ behavior: "smooth" }), 300) }, h("span", { class: "label", text: "Cotes à vérifier" }), h("span", { class: "v", style: n ? "color:var(--bad)" : null, text: n }), h("span", { class: "small muted", text: n ? "prix Kamamaster suspects → les relever" : "aucune cote suspecte" })); })(),
       h("div", { class: "tile" }, h("span", { class: "label", text: "Zones en anomalie" }), h("span", { class: "v", text: anom.length }), h("span", { class: "small muted", text: "bonus de drop en cours" + (KM && KM.anomaliesAt ? " · changé " + agoTime(KM.anomaliesAt) : "") }))),
     h("section", { class: "panel" },
       h("p", { class: "note", style: "margin:0", text: "Les relevés du groupe arrivent en direct : dès qu'un membre enregistre un prix, il s'affiche chez tout le monde. Les données de Kamamaster (prix d'Orukam, brisage, anomalies, donjons) sont vérifiées toutes les 2 heures : Kamamaster ne les met lui-même à jour qu'environ une fois par jour, parfois moins, et il n'existe pas d'accès direct au serveur du jeu. Dès que le groupe a relevé un objet, son prix passe avant celui de Kamamaster ; les cotes Kamamaster qui s'écartent de plus de 3 fois de leurs derniers jours sont écartées comme douteuses. Source : kamamaster.fr." })),
@@ -3062,7 +3091,7 @@ function viewServeur() {
           h("a", { href, class: "linkcard" }, h("span", { class: "ib" }, svgI(ic)), h("span", {}, h("strong", { text: t }), h("small", { class: "muted", style: "display:block", text: d })))))));
 }
 
-let cotF = { q: "", type: "", sort: "nom", fav: false, min: "", max: "", n: 100 };
+let cotF = { q: "", type: "", sort: "nom", fav: false, susp: false, min: "", max: "", n: 100 };
 function viewCotes() {
   needKmh();
   const all = cotedIds();
@@ -3071,7 +3100,8 @@ function viewCotes() {
   const types = [...typeCount.entries()].map(([t, n]) => [t, (D.types[t] || ["Autre"])[0], n]).sort((a, b) => a[1].localeCompare(b[1], "fr"));
   const nq = norm(cotF.q || "");
   const span = histDays();
-  let rows = all.filter(id => (!cotF.fav || favs().includes(id)) && (!cotF.type || item(id)[2] === +cotF.type) && (!nq || norm(item(id)[0]).includes(nq)) && (!cotF.min || item(id)[1] >= +cotF.min) && (!cotF.max || item(id)[1] <= +cotF.max))
+  const suspSet = cotF.susp ? new Set(kmSuspects().map(x => x.id)) : null;
+  let rows = all.filter(id => (!suspSet || suspSet.has(id)) && (!cotF.fav || favs().includes(id)) && (!cotF.type || item(id)[2] === +cotF.type) && (!nq || norm(item(id)[0]).includes(nq)) && (!cotF.min || item(id)[1] >= +cotF.min) && (!cotF.max || item(id)[1] <= +cotF.max))
     .map(id => { const o = priceAt(id), ser = seriesOf(id); return { id, o, p: nowPrice(o), ser, v7: varOf(ser, 7), v30: varOf(ser, 30), vAll: varOf(ser, 1) }; }).filter(r => r.p != null || kmDoubt(r.id));
   const byName = (a, b) => item(a.id)[0].localeCompare(item(b.id)[0], "fr");
   const nn = v => v ?? -Infinity;
@@ -3084,12 +3114,13 @@ function viewCotes() {
   const sortSel = h("select", { id: "cotes-sort", "aria-label": "Trier" }, [["nom", "Par nom"], ["prixd", "Prix décroissant"], ["prixa", "Prix croissant"], ["hausse", "Plus fortes hausses"], ["baisse", "Plus fortes baisses"], ["niveau", "Niveau décroissant"]].map(([v, l]) => h("option", { value: v, selected: cotF.sort === v }, l)));
   sortSel.addEventListener("change", () => { cotF.sort = sortSel.value; render(); });
   const lv = (key, ph) => { const el = h("input", { type: "number", id: "cotes-" + key, min: 1, max: 200, placeholder: ph, value: cotF[key], "aria-label": ph }); el.addEventListener("change", () => { cotF[key] = el.value; cotF.n = 100; render(); }); return el; };
+  const suspCb = h("input", { type: "checkbox", id: "cotes-susp", checked: cotF.susp }); suspCb.addEventListener("change", () => { cotF.susp = suspCb.checked; cotF.n = 100; render(); });
   const favCb = h("input", { type: "checkbox", id: "cotes-fav", checked: cotF.fav }); favCb.addEventListener("change", () => { cotF.fav = favCb.checked; cotF.n = 100; render(); });
   const shown = rows.slice(0, cotF.n);
   return h("div", { class: "stack" },
     h("section", { class: "panel" },
       h("div", { class: "row between" }, h("h2", { text: "Cotes HDV d'Orukam" }), h("span", { class: "chip", text: fmt.format(rows.length) + " objet" + (rows.length > 1 ? "s" : "") })),
-      h("div", { class: "filters" }, h("div", { class: "search" }, q), typeSel, lv("min", "Niv. min"), lv("max", "Niv. max"), sortSel, h("label", { class: "check" }, favCb, "Mes objets suivis (" + favs().length + ")")),
+      h("div", { class: "filters" }, h("div", { class: "search" }, q), typeSel, lv("min", "Niv. min"), lv("max", "Niv. max"), sortSel, h("label", { class: "check" }, favCb, "Mes objets suivis (" + favs().length + ")"), h("label", { class: "check" }, suspCb, "À vérifier (" + kmSuspects().length + ")")),
       shown.length ? h("div", { class: "tablewrap" }, h("table", {},
         h("thead", {}, h("tr", {}, h("th", {}), h("th", { text: "Objet" }), h("th", { class: "n", text: "Prix" }), h("th", { class: "hide-m", text: "Source" }), h("th", { class: "n", text: "7 j" }), h("th", { class: "n hide-m", text: "30 j" }), h("th", { class: "hide-m", text: "30 derniers jours" }))),
         h("tbody", {}, shown.map(r => h("tr", {},

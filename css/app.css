@@ -509,3 +509,4 @@ tr.today td { background: color-mix(in srgb, var(--kamas) 10%, transparent); }
 .xpbar .xpfill { position: absolute; inset: 0 auto 0 0; background: linear-gradient(90deg, color-mix(in srgb, var(--sec) 55%, transparent), var(--sec)); }
 .xpbar span { position: relative; padding: 0 12px; font: 700 .8rem var(--f-body); color: var(--fg); text-shadow: 0 1px 2px rgb(0 0 0 / .6); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .selbox { display: inline-flex; align-items: center; gap: 8px; } .selbox select { min-width: 0; max-width: 100%; }
+@media (min-width: 1100px) { .tiles:has(> :nth-child(5)) { grid-template-columns: repeat(5, minmax(0, 1fr)); } }
