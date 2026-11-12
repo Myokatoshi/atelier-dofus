@@ -3519,7 +3519,7 @@ function viewServeur() {
          ["#brisage", "Brisage", "Les équipements à crafter puis briser, aux prix des runes d'Orukam.", "rune"],
          ["#rentabilite", "Crafts rentables", "Crafter et revendre ou acheter directement, taxe déduite.", "trend"],
          ["#metiers", "Monter un métier", "Le craft le moins cher par point d'expérience.", "up"]].map(([href, t, d, ic]) =>
-          h("a", { href, class: "linkcard" }, h("span", { class: "ib" }, svgI(ic)), h("span", {}, h("strong", { text: t }), h("small", { class: "muted", style: "display:block", text: d })))))));
+          h("a", { href, class: "linkcard" }, h("span", { class: "ib" }, gameIcon(href.slice(1), ic, 30)), h("span", {}, h("strong", { text: t }), h("small", { class: "muted", style: "display:block", text: d })))))));
 }
 
 let cotF = { q: "", type: "", sort: "nom", fav: false, susp: false, min: "", max: "", n: 100 };
@@ -4160,9 +4160,14 @@ const tabOf = v => TABS.find(t => t[0] === v);
 const groupOf = v => GROUPS.find(g => g[4].includes(v)) || GROUPS[0];
 let lastInGroup = {};
 try { lastInGroup = JSON.parse(localStorage.getItem("atelier-nav") || "{}"); } catch {}
+// Icônes du jeu pour les menus (objets de Dofus, planche d'icônes locale) ; dessin de secours sinon
+const GI = { accueil: 548, almanax: 21014, marche: 8425, prix: 8425, tournee: 14978, rentabilite: 745, journal: 678, alertes: 1339,
+  orukam: 737, serveur: 737, cotes: 489, tendances: 1328, donjons: 8437, carte: 15378, brisage: 1519,
+  production: 147, plan: 147, metiers: 14146, farm: 289, stock: 1699, equipement: 2411, builds: 2411, comparer: 22444, encyclopedie: 2337, compte: 11270 };
+const gameIcon = (key, ic, px) => GI[key] && D && D.items[GI[key]] && item(GI[key])[3] >= 0 ? icon(GI[key], px, "gi") : svgI(ic);
 function navLink(v, cls) {
   const [, label, ic, c, cnt] = tabOf(v);
-  const a = h("a", { href: "#" + v, "data-v": v, class: cls || null }, h("span", { class: "ib" }, svgI(ic)), h("span", { class: "lb", text: label }), cnt ? h("span", { class: "count", id: cnt, text: "" }) : null);
+  const a = h("a", { href: "#" + v, "data-v": v, class: cls || null }, h("span", { class: "ib" }, gameIcon(v, ic, 26)), h("span", { class: "lb", text: label }), cnt ? h("span", { class: "count", id: cnt, text: "" }) : null);
   a.style.setProperty("--c", "var(" + c + ")");
   return a;
 }
@@ -4170,7 +4175,7 @@ function buildTabs() {
   document.getElementById("tabs").replaceChildren(...GROUPS.map(([g, label, , , tabs]) =>
     tabs.length === 1 ? h("div", { class: "grp" }, navLink(tabs[0])) : h("div", { class: "grp" }, h("span", { class: "gl", text: label }), tabs.map(v => navLink(v)))));
   document.getElementById("bottom").replaceChildren(...GROUPS.map(([g, label, ic, c, tabs]) => {
-    const a = h("a", { href: "#" + (lastInGroup[g] && tabs.includes(lastInGroup[g]) ? lastInGroup[g] : tabs[0]), "data-g": g }, h("span", { class: "ib" }, svgI(ic)), h("span", { text: label }), g === "marche" ? h("span", { class: "dot", id: "dot-marche", hidden: true }) : null);
+    const a = h("a", { href: "#" + (lastInGroup[g] && tabs.includes(lastInGroup[g]) ? lastInGroup[g] : tabs[0]), "data-g": g }, h("span", { class: "ib" }, gameIcon(g, ic, 28)), h("span", { text: label }), g === "marche" ? h("span", { class: "dot", id: "dot-marche", hidden: true }) : null);
     a.style.setProperty("--c", "var(" + c + ")");
     return a;
   }));
@@ -4180,7 +4185,7 @@ function subTabs(v) {
   if (g[4].length < 2) return null;
   return h("nav", { class: "subtabs", "aria-label": g[1] }, g[4].map(x => {
     const [, label, ic, c] = tabOf(x);
-    const a = h("a", { href: "#" + x, "aria-current": x === v ? "page" : null }, svgI(ic), label);
+    const a = h("a", { href: "#" + x, "aria-current": x === v ? "page" : null }, gameIcon(x, ic, 22), label);
     a.style.setProperty("--c", "var(" + c + ")");
     return a;
   }));
@@ -4236,7 +4241,7 @@ function heroFor(v) {
   if (ids.length < 8) ids = ids.concat(sampleIds(fill[v] || (e => !!D.recipes[e.id]), 8 - ids.length, v).filter(x => !ids.includes(x)));
   return h("section", { class: "hero", "data-sec": v },
     h("div", { class: "mosaic", "aria-hidden": "true" }, ids.map(id => h("span", { class: "m" }, icon(id, 40)))),
-    h("span", { class: "hi" }, svgI(H[2])),
+    h("span", { class: "hi" }, gameIcon(v, H[2], 40)),
     h("div", { class: "txt" }, h("h1", { text: H[0] }), h("p", { text: H[1] })));
 }
 // Tableaux en cartes sur téléphone : chaque cellule reçoit l'intitulé de sa colonne (affiché au-dessus de la valeur),
@@ -4274,7 +4279,7 @@ new MutationObserver(() => { if (labT) return; labT = requestAnimationFrame(() =
 function decorate(root, v) {
   groupFields(root); labelTables(root); // avant que le focus soit rendu au champ en cours de saisie
   const tab = TABS.find(t => t[0] === v);
-  root.querySelectorAll(".empty").forEach(e => { if (!e.querySelector(".ei")) e.prepend(h("span", { class: "ei" }, svgI(tab ? tab[2] : "home"))); });
+  root.querySelectorAll(".empty").forEach(e => { if (!e.querySelector(".ei")) e.prepend(h("span", { class: "ei" }, gameIcon(tab ? tab[0] : "accueil", tab ? tab[2] : "home", 44))); });
 }
 
 // =====================================================================

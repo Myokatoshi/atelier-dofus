@@ -603,3 +603,10 @@ tr.fm-exo td { background: color-mix(in srgb, var(--kamas) 8%, transparent); }
   .doll-row { gap: 4px; }
   .dmg { white-space: normal; }
 }
+
+/* Icônes du jeu dans les menus : pas de fond teinté, légère ombre comme en jeu */
+.ico.gi { background-color: transparent !important; box-shadow: none !important; border-radius: 0; filter: drop-shadow(0 1px 1px rgb(0 0 0 / .5)); }
+.sidenav a .ib:has(.gi), .bottom a .ib:has(.gi), .linkcard .ib:has(.gi) { background: color-mix(in srgb, var(--c, var(--accent)) 12%, transparent); }
+.sidenav a[aria-current="page"] .ib:has(.gi) { background: color-mix(in srgb, var(--c) 35%, transparent); box-shadow: inset 0 0 0 1px var(--c); }
+.subtabs a .gi { margin-right: 2px; }
+.hero .hi:has(.gi) { background: rgb(0 0 0 / .25); }
