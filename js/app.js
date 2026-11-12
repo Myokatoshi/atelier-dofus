@@ -2046,16 +2046,28 @@ function almJobs() {
   if (ALMJ) return ALMJ;
   const jobs = Object.entries(D.jobs).filter(([j]) => j !== "1").map(([j, n]) => [+j, norm(n)]);
   const src = XPR && XPR.almanax ? XPR.almanax : (D.almanax || []).map(a => [a[3], a[4], [a[0] + "/*"]]);
+  ALMDAY = new Map();
   ALMJ = [];
   for (const [title, text, dates] of src) { const fx = almEffects(text || "", jobs); if (fx.length) ALMJ.push({ title, text, dates, fx }); }
   return ALMJ;
 }
-// Une date de l'Almanax : « JJ/MM/AAAA », « JJ/MM/* » ou « */MM/* »
+// Une date de l'Almanax : « JJ/MM/AAAA » (événement) ou « JJ/MM/* » (chaque année)
 function almMatch(pat, d) {
   const [dd, mm, yy] = pat.split("/");
   return (dd === "*" || +dd === d.getDate()) && +mm === d.getMonth() + 1 && (yy === "*" || +yy === d.getFullYear());
 }
-const almActive = (e, d) => e.dates.some(p => almMatch(p, d));
+// Bonus d'un jour : l'événement daté de cette année s'il y en a un (il remplace le bonus habituel), sinon le bonus habituel
+let ALMDAY = new Map();
+function almOn(d) {
+  const key = iso(d);
+  if (!ALMDAY.has(key)) {
+    const all = (XPR && XPR.almanax ? XPR.almanax : (D.almanax || []).map(a => [a[3], a[4], [a[0] + "/*"]]));
+    const ev = all.filter(a => a[2].some(p => !p.endsWith("/*") && almMatch(p, d)));
+    ALMDAY.set(key, ev.length ? ev : all.filter(a => a[2].some(p => p.endsWith("/*") && almMatch(p, d))));
+  }
+  return ALMDAY.get(key);
+}
+const almActive = (e, d) => almOn(d).some(a => a[1] === e.text && a[0] === e.title);
 const forJob = (f, job) => f.all || f.jobs.includes(job);
 const jobFx = (e, job) => e.fx.filter(f => forJob(f, job));
 // Bonus cumulés d'un métier pour un jour : { xp, eco, fab, list }
@@ -2102,7 +2114,7 @@ function almanaxJobsPanel(job) {
         h("td", {}, h("strong", { text: p.e.title }), h("small", { class: "muted", style: "display:block", text: p.e.text }),
           almF.scope === "all" ? h("small", { style: "display:block;color:var(--sec)", text: p.fx.some(f => f.all) ? "Tous les métiers" : [...new Set(p.fx.flatMap(f => f.jobs))].map(jobName).join(", ") }) : null)); })))) :
       h("p", { class: "muted", text: "Aucun bonus de ce type dans l'Almanax pour ce métier." }),
-    h("p", { class: "note", text: "Calendrier complet de l'Almanax (DofusDB), y compris les bonus de saison et d'événement. Les bonus d'XP, d'économie d'ingrédients et de fabrication intensive du jour choisi sont inclus dans les calculs ci-dessus ; « Qualité des objets » vaut pour toute fabrication dans la ville indiquée." }));
+    h("p", { class: "note", text: "Calendrier de l'Almanax (DofusDB) : bonus du jour, remplacé par l'événement prévu certaines années. Les bonus d'XP, d'économie d'ingrédients et de fabrication intensive du jour choisi sont inclus dans les calculs ci-dessus ; « Qualité des objets » vaut pour toute fabrication dans la ville indiquée." }));
 }
 // Valeur de revente d'un craft à l'HDV, taxe déduite (prix actuel, sinon milieu de la fourchette)
 const resale = id => { const o = priceAt(id); return o ? nowPrice(o) * (1 - (S.settings.tax || 0) / 100) : null; };
@@ -2205,7 +2217,7 @@ function viewMetiers() {
           h("span", { class: "v", style: "font-size:1.2rem", text: nextB ? nextB.start.toLocaleDateString("fr-FR", { day: "numeric", month: "long" }) : "—" }),
           h("span", { class: "small muted", text: nextB ? nextB.fx.map(fxLabel).join(", ") + " · dans " + daysTo(nextB.start) + " j" : "aucun autre bonus prévu" }),
           nextB && days.findIndex(x => +x.d === +nextB.start) > 0 && dayIdx === 0 ? h("button", { type: "button", class: "btn sm", style: "justify-self:start;margin-top:4px", onclick: () => { metierDay = days.findIndex(x => +x.d === +nextB.start); render(); } }, "Calculer pour ce jour") : null)),
-      h("p", { class: "note", text: "Calcul du simulateur d'XP de DofusDB : une recette rapporte d'autant plus d'XP que son niveau est proche du tien, plus du tout au-delà de 100 niveaux d'écart, et certains objets rapportent moins (pains, potions, alliages…). Jour de craft : ses bonus d'Almanax (saison comprise) sont inclus : XP en plus, ingrédients économisés (coût et liste d'achat réduits), objets fabriqués en plus (revente augmentée, en moyenne). Autre bonus d'XP : parchemin, équipement… « Le moins cher » choisit à chaque niveau la recette au meilleur coût d'ingrédients par XP ; « Le plus rentable », celle qui coûte le moins par XP une fois revendue (coût moins revente, taxe déduite) ; « Le moins de crafts », celle qui rapporte le plus d'XP." })),
+      h("p", { class: "note", text: "Calcul du simulateur d'XP de DofusDB : une recette rapporte d'autant plus d'XP que son niveau est proche du tien, plus du tout au-delà de 100 niveaux d'écart, et certains objets rapportent moins (pains, potions, alliages…). Jour de craft : son bonus d'Almanax est inclus : XP en plus, ingrédients économisés (coût et liste d'achat réduits), objets fabriqués en plus (revente augmentée, en moyenne). Autre bonus d'XP : parchemin, équipement… « Le moins cher » choisit à chaque niveau la recette au meilleur coût d'ingrédients par XP ; « Le plus rentable », celle qui coûte le moins par XP une fois revendue (coût moins revente, taxe déduite) ; « Le moins de crafts », celle qui rapporte le plus d'XP." })),
     h("div", { class: "grid2 wide-left" },
       h("section", { class: "panel" },
         h("div", { class: "row between" }, h("h2", { text: "Plan de montée" }),

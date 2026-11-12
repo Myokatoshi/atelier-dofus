@@ -7,7 +7,8 @@ Usage : python3 tools/fetch_dofusdb_xp.py
                       "types": {id_type: ratio %},   types d'objets dont l'XP de craft diffère de 100 %
                       "items": {id_objet: ratio %},  objets dont l'XP de craft diffère (prioritaire sur le type)
                       "almanax": [[nom, texte, [dates]]]}  tous les bonus de l'Almanax, dont plusieurs par jour
-                                   (saisons, événements) ; date « JJ/MM/AAAA », « JJ/MM/* » ou « */MM/* »
+                                   (événements datés) ; date « JJ/MM/AAAA » (événement, remplace le bonus
+                                   habituel ce jour-là) ou « JJ/MM/* » ; sans les bonus de remplacement de Théodoran
 Formule (simulateur d'XP de DofusDB) : XP d'un craft de niveau R au niveau de métier M =
     0 si M − R > 100, sinon ⌊20 × R ÷ ((M − R)^1,1 ÷ 10 + 1) × ratio / 100 × bonus / 100⌋
 XP totale du niveau N : N × (N − 1) × 10.
@@ -19,6 +20,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 API = "https://api.dofusdb.fr/"
+THEODORAN = 1754
 UA = {"User-Agent": "AtelierDofus/1.0 (outil privé d'un groupe d'amis)"}
 
 
@@ -41,6 +43,9 @@ def main():
     year = datetime.now(timezone.utc).year
     almanax = []
     for x in page("almanax-calendars", {}):
+        # Théodoran (PNJ 1754) ne remplace le Méryde que « quand la divinité attendue est absente » : pas un bonus du jour
+        if x.get("npcId") == THEODORAN:
+            continue
         dates = [d for d in x.get("dates") or [] if d.endswith("/*") or int(d.split("/")[2]) >= year]
         if dates:
             almanax.append([x["name"]["fr"], clean(x["desc"]["fr"]), dates])
