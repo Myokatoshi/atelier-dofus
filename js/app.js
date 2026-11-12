@@ -2019,21 +2019,60 @@ function craftXp(id, lv, bonus = 0) {
   if (r > lv || lv - r > 100) return 0;
   return Math.floor(20 * r / (Math.pow(lv - r, 1.1) / 10 + 1) * xpRatio(id) * (100 + bonus) / 100);
 }
-// Jours de l'Almanax qui augmentent l'XP de ce métier : [{ d: "JJ/MM", pct }]
-function almanaxJobBonus(job) {
-  const name = norm(jobName(job));
-  const out = [];
-  for (const a of D.almanax || []) for (const m of (a[4] || "").matchAll(/gains d'expérience sont augmentés de (\d+) % pour ([^.]*)/gi)) {
-    const who = norm(m[2]);
-    if (who.includes("tous les metiers") || who.includes(name)) out.push({ d: a[0], pct: +m[1] });
+// Bonus de métier de l'Almanax (lus dans le texte du bonus de chaque jour)
+const ALM_KINDS = { xp: "XP de métier", eco: "Économie d'ingrédients", fab: "Fabrication intensive", rec: "Récolte", fm: "Forgemagie", qual: "Qualité des objets" };
+let ALMJ = null;
+function almJobs() {
+  if (ALMJ) return ALMJ;
+  const jobs = Object.entries(D.jobs).filter(([j]) => j !== "1").map(([j, n]) => [+j, norm(n)]);
+  ALMJ = [];
+  for (const a of D.almanax || []) {
+    const t = a[4] || "";
+    const xp = [...t.matchAll(/gains d'expérience sont augmentés de (\d+) % pour ([^.]*)/gi)];
+    const kind = xp.length ? "xp" : /économis/i.test(t) ? "eco" : /second objet|objets fabriqués par/i.test(t) ? "fab" : /consumer de rune/i.test(t) ? "fm"
+      : /qualité des objets fabriqués/i.test(t) ? "qual" : /récupérées par|(cueillies|récoltées) par/i.test(t) ? "rec" : null;
+    if (!kind) continue;
+    const scope = norm(kind === "xp" ? xp.map(m => m[2]).join(" ") : t);
+    const all = kind === "qual" || scope.includes("tous les metiers");
+    const js = all ? [] : jobs.filter(([, n]) => scope.includes(n)).map(([j]) => j);
+    if (!all && !js.length) continue;
+    ALMJ.push({ d: a[0], title: a[3], text: t, kind, all, jobs: js, pct: kind === "xp" ? +xp[0][1] : null });
   }
-  return out;
+  return ALMJ;
 }
-function nextJobBonus(job) {
-  const days = almanaxJobBonus(job); if (!days.length) return null;
-  const now = new Date();
-  for (let i = 0; i < 400; i++) { const d = new Date(now); d.setDate(now.getDate() + i); const hit = days.find(x => x.d === almKey(d)); if (hit) return { date: d, pct: hit.pct, i }; }
+// Prochaine date d'un jour « JJ/MM » de l'Almanax (aujourd'hui compris ; 29/02 : prochaine année bissextile)
+function nextDateOf(dm) {
+  const [d, m] = dm.split("/").map(Number), t = new Date(); t.setHours(0, 0, 0, 0);
+  for (let y = t.getFullYear(); y < t.getFullYear() + 9; y++) { const x = new Date(y, m - 1, d); if (x.getMonth() === m - 1 && x >= t) return x; }
   return null;
+}
+const daysTo = x => Math.round((x - new Date(new Date().setHours(0, 0, 0, 0))) / 864e5);
+const forJob = (e, job) => e.all || e.jobs.includes(job);
+function almanaxJobBonus(job) { return almJobs().filter(e => e.kind === "xp" && forJob(e, job)).map(e => ({ d: e.d, pct: e.pct })); }
+// Prochain bonus d'XP propre au métier, et prochain bonus d'XP pour tous les métiers
+function nextJobBonus(job) {
+  const next = list => list.map(e => ({ ...e, date: nextDateOf(e.d) })).filter(e => e.date).sort((a, b) => a.date - b.date)[0] || null;
+  const xp = almJobs().filter(e => e.kind === "xp");
+  return { own: next(xp.filter(e => e.jobs.includes(job))), all: next(xp.filter(e => e.all)) };
+}
+let almF = { scope: "job", kind: "" };
+function almanaxJobsPanel(job) {
+  const rows = almJobs().filter(e => (almF.scope === "all" || forJob(e, job)) && (!almF.kind || e.kind === almF.kind))
+    .map(e => ({ ...e, date: nextDateOf(e.d) })).filter(e => e.date).sort((a, b) => a.date - b.date);
+  const seg = (key, opts) => h("span", { class: "seg", role: "group" }, opts.map(([v, l]) =>
+    h("button", { type: "button", "aria-pressed": almF[key] === v ? "true" : "false", onclick: () => { almF[key] = v; render(); } }, l)));
+  const fmtD = d => d.toLocaleDateString("fr-FR", { day: "numeric", month: "short" }) + (d.getFullYear() !== new Date().getFullYear() ? " " + d.getFullYear() : "");
+  return h("section", { class: "panel" },
+    h("div", { class: "row between" }, h("h2", { text: "Almanax des métiers" }), h("span", { class: "chip", text: rows.length + " jour" + (rows.length > 1 ? "s" : "") })),
+    h("div", { class: "row", style: "gap:8px" }, seg("scope", [["job", jobName(job)], ["all", "Tous les métiers"]]),
+      seg("kind", [["", "Tous les bonus"], ...Object.entries(ALM_KINDS)])),
+    rows.length ? h("div", { class: "tablewrap" }, h("table", {}, h("tbody", {}, rows.map(e => { const n = daysTo(e.date); return h("tr", { class: n === 0 ? "today" : null },
+      h("td", { style: "white-space:nowrap" }, h("strong", { text: fmtD(e.date) }), h("small", { class: "muted", style: "display:block", text: n === 0 ? "aujourd'hui" : n === 1 ? "demain" : "dans " + n + " j" })),
+      h("td", {}, h("span", { class: "chip " + (e.kind === "xp" ? "kamas" : "job"), text: ALM_KINDS[e.kind] + (e.pct ? " +" + e.pct + " %" : "") })),
+      h("td", {}, h("strong", { text: e.title }), h("small", { class: "muted", style: "display:block", text: e.text }),
+        almF.scope === "all" ? h("small", { style: "display:block;color:var(--sec)", text: e.all ? "Tous les métiers" : e.jobs.map(jobName).join(", ") }) : null)); })))) :
+      h("p", { class: "muted", text: "Aucun bonus de ce type dans l'Almanax pour ce métier." }),
+    h("p", { class: "note", text: "Bonus de l'Almanax qui touchent les métiers, triés par date à venir. Les bonus « Qualité des objets » valent pour toutes les fabrications dans la ville indiquée." }));
 }
 // Plan de montée : à chaque niveau, la recette la moins chère par XP (ou celle qui rapporte le plus d'XP)
 function xpPlan(job, from, to, bonus, mode, C) {
@@ -2114,7 +2153,11 @@ function viewMetiers() {
         h("div", { class: "tile" }, h("span", { class: "label", text: "XP à gagner" }), h("span", { class: "v", text: kk(Math.max(0, lvToXp(to) - lvToXp(lv))) }), h("span", { class: "small muted", text: "du niveau " + lv + " au niveau " + to })),
         h("div", { class: "tile" }, h("span", { class: "label", text: "Crafts nécessaires" }), h("span", { class: "v", text: plan.stuck ? "—" : fmt.format(totN) }), h("span", { class: "small muted", text: plan.steps.length + " étape" + (plan.steps.length > 1 ? "s" : "") })),
         h("div", { class: "tile kamas" }, h("span", { class: "label", text: "Coût estimé" }), h("span", { class: "v", text: kk(totC) + (unknown.length ? "+" : "") }), h("span", { class: "small muted", text: unknown.length ? unknown.length + " étape(s) sans prix complet" : "aux prix d'Orukam" })),
-        h("div", { class: "tile" }, h("span", { class: "label", text: "Prochain bonus Almanax" }), h("span", { class: "v", style: "font-size:1.2rem", text: nextB ? (nextB.i === 0 ? "Aujourd'hui" : nextB.date.toLocaleDateString("fr-FR", { day: "numeric", month: "long" })) : "—" }), h("span", { class: "small muted", text: nextB ? "+" + nextB.pct + " % d'XP" + (nextB.i > 0 ? " · dans " + nextB.i + " j" : "") : "aucun pour ce métier" }))),
+        (() => { const o = nextB.own, g = nextB.all, d = x => daysTo(x.date) === 0 ? "aujourd'hui" : x.date.toLocaleDateString("fr-FR", { day: "numeric", month: "long" });
+          return h("div", { class: "tile" }, h("span", { class: "label", text: "Prochain bonus d'XP · " + jobName(job) }),
+            h("span", { class: "v", style: "font-size:1.2rem", text: o ? d(o) : "—" }),
+            h("span", { class: "small muted", text: o ? "+" + o.pct + " % d'XP" + (daysTo(o.date) > 0 ? " · dans " + daysTo(o.date) + " j" : "") : "aucun jour propre à ce métier" }),
+            g && (!o || g.date < o.date) ? h("span", { class: "small muted", text: "Tous métiers avant : " + d(g) + " (+" + g.pct + " %)" }) : null); })()),
       h("p", { class: "note", text: "Calcul du simulateur d'XP de DofusDB : une recette rapporte d'autant plus d'XP que son niveau est proche du tien, plus du tout au-delà de 100 niveaux d'écart, et certains objets rapportent moins (pains, potions, alliages…). Bonus d'XP : Almanax ou autre bonus en cours. « Le moins cher » choisit à chaque niveau la recette au meilleur coût par XP parmi celles dont les ingrédients ont un prix ; « Le moins de crafts », celle qui rapporte le plus d'XP." })),
     h("div", { class: "grid2 wide-left" },
       h("section", { class: "panel" },
@@ -2151,7 +2194,8 @@ function viewMetiers() {
           h("td", { class: "hide-m" }, h("button", { type: "button", class: "btn sm", onclick: () => { addTarget(r.id); toast(item(r.id)[0] + " ajouté au plan"); } }, "+ Plan")))))),
         ) : h("div", { class: "empty" }, h("strong", { text: "Aucune recette à ce niveau" }), h("span", { text: "Indique ton niveau dans ce métier, ou coche « Toutes »." })),
       rows.length > 80 ? h("p", { class: "note", text: "Seules les 80 premières recettes sont affichées." }) : null,
-      h("p", { class: "note", text: "Formules et coefficients d'XP : simulateur de dofusdb.fr. Crafts / niveau : nombre de crafts de cette recette pour passer au niveau suivant." })));
+      h("p", { class: "note", text: "Formules et coefficients d'XP : simulateur de dofusdb.fr. Crafts / niveau : nombre de crafts de cette recette pour passer au niveau suivant." })),
+    almanaxJobsPanel(job));
 }
 
 // =====================================================================
