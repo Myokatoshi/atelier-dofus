@@ -642,3 +642,4 @@ details.fmd[open] > summary { border-bottom: 1px solid var(--line); }
 .fmf.over { border-color: var(--kamas); } .fmf.over small { color: var(--kamas); }
 .fmf.exo { border-color: var(--c-alm); } .fmf.exo small { color: var(--c-alm); }
 @media (max-width: 720px) { .fm-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+.fm-glob { display: grid; gap: 8px; padding: 10px; border-radius: 12px; background: var(--sunk); border: 1px dashed var(--c-alm); }

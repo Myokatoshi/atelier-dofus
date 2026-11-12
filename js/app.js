@@ -2853,6 +2853,11 @@ const BREED_ALIASES = { feca: 1, osamodas: 2, enutrof: 3, sram: 4, xelor: 5, eca
 // --- Forgemagie : jets exacts, over et exos -------------------------------------------
 const jetOf = (lo, hi, jet) => jet === "min" ? lo : jet === "max" ? hi : Math.round((lo + hi) / 2);
 const charLabel = c => { const t = D.chars[c]; if (!t) return "?"; const n = fxText(t[0], 2, 2).replace(/^2\s*%?\s*/, "").trim() || t[3]; return /^0\s*%/.test(fxText(t[0], 0, 0)) ? n + " (%)" : n; };
+// Caractéristiques possibles en exo : toutes celles du jeu (PA, PM, PO, % do sorts, % distance, résistances…), les plus courantes d'abord
+let EXO_LIST = null;
+const EXO_FIRST = [1, 23, 19, 26, 123, 122, 120, 125, 141, 142, 121, 124, 16, 18, 86, 25, 49, 88, 89, 90, 91, 92, 84];
+const EXO_CHARS = () => EXO_LIST || (EXO_LIST = [...EXO_FIRST, ...Object.keys(D.chars).map(Number).filter(c => !EXO_FIRST.includes(c)).sort((a, b) => D.chars[a][1] - D.chars[b][1] || D.chars[a][2] - D.chars[b][2])]
+  .filter(c => D.chars[c] && /#1/.test(D.chars[c][0])));
 // Forgemagie simple : une valeur par caractéristique (jet exact, over permis) et des exos ; pas sur Dofus, trophées, familiers, montures
 function fmPanel(b, id, jet) {
   const st = detOf(id).st || [], fm = (b.fm && b.fm[id]) || {};
@@ -2863,8 +2868,7 @@ function fmPanel(b, id, jet) {
     h("span", { class: "fmn", text: charLabel(r.c) }),
     numInput(r.v, v => { const x = Math.round(+String(v).replace(",", ".")); const nf = { ...fm }; if (isNaN(x) || (r.exo && !x)) delete nf[r.c]; else nf[r.c] = x; save(nf); }, { sm: true, label: "Valeur de " + charLabel(r.c), id: "fm-" + id + "-" + r.c, noRender: true }),
     h("small", { class: "muted", text: r.exo ? "exo" : r.lo === r.hi ? "fixe" : fmt.format(Math.min(r.lo, r.hi)) + " à " + fmt.format(r.mx) + (r.v > r.mx ? " · over" : "") }));
-  const exoChoices = [1, 23, 19, 26, 16, 18, 25, 49, 86, 88, 89, 90, 91, 92, 120, 125, 123, 122, 82, 83, 27, 28, 79, 78, 48, 44, 40, 11, 12, 10, 15, 13, 14, 33, 34, 35, 36, 37, 54, 55, 56, 57, 58]
-    .filter(c => D.chars[c] && !rows.some(r => r.c === c));
+  const exoChoices = EXO_CHARS().filter(c => !rows.some(r => r.c === c));
   const exoSel = h("select", { id: "fm-exo-" + id, "aria-label": "Exo à ajouter" }, exoChoices.map(c => h("option", { value: c }, charLabel(c))));
   const exoIn = h("input", { class: "cell sm", inputmode: "numeric", value: "1", id: "fm-exov-" + id, "aria-label": "Valeur de l'exo" });
   const all = v => save(Object.fromEntries([...st.map(([c, lo, hi]) => [c, v === "max" ? hi : lo]), ...rows.filter(r => r.exo).map(r => [r.c, r.v])]));
@@ -3066,9 +3070,16 @@ function fmSection(b, jet) {
   if (miss.length) { ensureDets(miss).then(() => { if (view === "builds") render(); }); return null; }
   return h("section", { class: "panel" },
     h("div", { class: "row between" }, h("h2", { text: "Forgemagie" }), h("span", { class: "small muted", text: "Choisis la valeur de chaque caractéristique ; les stats se recalculent." })),
-    h("div", { class: "row", style: "gap:10px;align-items:end" }, h("span", { class: "label", text: "Forgemagie globale (exos du stuff)" }),
-      [[1, "PA"], [23, "PM"], [19, "PO"], [26, "Invoc."]].map(([c, l]) => h("label", { class: "fld" }, h("span", { class: "label", text: l }),
-        numInput((b.fmg || {})[c] || "", v => { const x = Math.round(+String(v).replace(",", ".")) || 0; b.fmg = { ...(b.fmg || {}) }; if (x) b.fmg[c] = x; else delete b.fmg[c]; persist("builds"); }, { sm: true, ph: "0", label: "Exo " + l + " du stuff", id: "fmg-" + c })))),
+    (() => { // Forgemagie globale (exos du stuff, comme Dofusbook) : n'importe quelle caractéristique
+      const g = b.fmg || {}, set = (c, x) => { b.fmg = { ...(b.fmg || {}) }; if (x) b.fmg[c] = x; else delete b.fmg[c]; persist("builds"); render(); };
+      const sel = h("select", { id: "fmg-add", "aria-label": "Caractéristique à ajouter" }, EXO_CHARS().filter(c => g[c] == null).map(c => h("option", { value: c }, charLabel(c))));
+      const val = h("input", { class: "cell sm", inputmode: "numeric", value: "1", id: "fmg-v", "aria-label": "Valeur" });
+      return h("div", { class: "fm-glob" }, h("span", { class: "label", text: "Forgemagie globale (exos du stuff)" }),
+        h("div", { class: "fm-grid" }, Object.entries(g).map(([c, v]) => h("label", { class: "fmf exo" }, h("span", { class: "fmn", text: charLabel(+c) }),
+          numInput(v, x => set(+c, Math.round(+String(x).replace(",", ".")) || 0), { sm: true, label: "Exo " + charLabel(+c), id: "fmg-" + c, noRender: true }),
+          h("small", { class: "muted", text: "exo du stuff" })))),
+        h("div", { class: "row", style: "gap:6px" }, sel, val, h("button", { type: "button", class: "btn sm primary", onclick: () => set(+sel.value, Math.round(+String(val.value).replace(",", ".")) || 1) }, "+ Ajouter")));
+    })(),
     h("div", { style: "display:grid;gap:6px" }, ids.map(id => {
       const n = Object.keys((b.fm || {})[id] || {}).length;
       const d = h("details", { class: "fmd", "data-id": id }, h("summary", {}, icon(id, 28), h("strong", { text: item(id)[0] }),
