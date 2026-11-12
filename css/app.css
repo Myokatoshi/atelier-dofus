@@ -46,7 +46,7 @@ img { max-width: 100%; }
 [data-sec="farm"] { --sec: var(--c-farm); } [data-sec="builds"] { --sec: var(--c-build); }
 [data-sec="stock"] { --sec: var(--c-stock); } [data-sec="encyclopedie"] { --sec: var(--c-ency); }
 [data-sec="compte"] { --sec: var(--c-save); }
-[data-sec="serveur"], [data-sec="cotes"], [data-sec="donjons"], [data-sec="carte"] { --sec: var(--c-oru); } [data-sec="almanax"] { --sec: var(--c-alm); } [data-sec="alm"] { --sec: var(--c-alm); }
+[data-sec="serveur"], [data-sec="cotes"], [data-sec="tendances"], [data-sec="donjons"], [data-sec="carte"] { --sec: var(--c-oru); } [data-sec="almanax"] { --sec: var(--c-alm); } [data-sec="alm"] { --sec: var(--c-alm); }
 :root { --sec: var(--c-home); }
 .secvars, [data-sec] { --sec-soft: color-mix(in srgb, var(--sec) 13%, var(--surface)); --sec-line: color-mix(in srgb, var(--sec) 35%, var(--line)); }
 

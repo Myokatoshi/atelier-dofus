@@ -3051,7 +3051,7 @@ function ensureKmDungeons() {
   return kmdLoading;
 }
 // Recharge la vue quand une donnée chargée à la demande arrive
-function redrawOrukam() { if (["serveur", "cotes", "donjons"].includes(view)) render(); }
+function redrawOrukam() { if (["serveur", "cotes", "donjons", "tendances"].includes(view)) render(); }
 function needKmh() { if (!KMH) { const p = ensureKmHistory(); if (p && !kmRedraw) { kmRedraw = true; p.then(() => { kmRedraw = false; redrawOrukam(); }); } } }
 // Âge d'une date-heure en clair (« il y a 3 h »)
 function agoTime(t) {
@@ -3615,6 +3615,106 @@ function viewCarte() {
 }
 
 // =====================================================================
+// Tendances du marché d'Orukam : indices de prix (base 100) par famille et par catégorie, hausses et baisses
+// (historique quotidien des cotes Kamamaster, 90 jours)
+// =====================================================================
+const RUNE_TYPES = new Set([78, 211, 233]);
+const FAMILIES = [
+  ["runes", "Runes", "#c77dff", id => RUNE_TYPES.has(item(id)[2])],
+  ["res", "Ressources", "#90be6d", id => (D.types[item(id)[2]] || [])[1] === 9 && !RUNE_TYPES.has(item(id)[2])],
+  ["cons", "Consommables", "#f8961e", id => (D.types[item(id)[2]] || [])[1] === 6],
+];
+let trF = { days: 30, cat: "", q: "" };
+// Indice : pour chaque objet, prix du jour ÷ son premier prix de la période ; médiane des objets × 100
+function marketIndex(ids, dates) {
+  const idx = dates.map(d => KMH.dates.indexOf(d));
+  const ratios = dates.map(() => []);
+  for (const id of ids) {
+    const row = KMH.prices[id]; if (!row) continue;
+    let base = 0;
+    idx.forEach((i, j) => { const p = row[i] || 0; if (!p) return; if (!base) base = p; ratios[j].push(p / base); });
+  }
+  return dates.map((d, j) => { const r = ratios[j].sort((a, b) => a - b); return r.length >= 3 ? [d, 100 * r[r.length >> 1]] : null; }).filter(Boolean);
+}
+// Courbes en SVG (plusieurs séries) : [{ name, color, pts: [[date, valeur]] }]
+function lineChart(series, opt = {}) {
+  const W = 640, H = opt.h || 230, L = 46, R = 12, T = 12, B = 26;
+  const all = series.flatMap(s => s.pts), dates = [...new Set(all.map(p => p[0]))].sort();
+  const box = h("div", { class: "chart" });
+  if (dates.length < 2) { box.append(h("div", { class: "empty" }, h("strong", { text: "Pas encore assez d'historique" }), h("span", { text: "Les courbes se remplissent jour après jour : il faut au moins 2 jours de cotes sur la période." }))); return box; }
+  let mn = Math.min(...all.map(p => p[1])), mx = Math.max(...all.map(p => p[1]));
+  if (mx - mn < 1e-9) { mn -= 1; mx += 1; } const pad = (mx - mn) * .08; mn -= pad; mx += pad;
+  const x = d => L + dates.indexOf(d) * (W - L - R) / (dates.length - 1), y = v => T + (1 - (v - mn) / (mx - mn)) * (H - T - B);
+  const svg = s("svg", { viewBox: `0 0 ${W} ${H}`, role: "img", "aria-label": opt.label || "Évolution" });
+  for (let i = 0; i <= 4; i++) { const v = mn + (mx - mn) * i / 4; svg.append(s("line", { class: "grid", x1: L, x2: W - R, y1: y(v), y2: y(v) }), s("text", { class: "axis", x: L - 6, y: y(v) + 4, "text-anchor": "end" }, opt.fmt ? opt.fmt(v) : Math.round(v))); }
+  const step = Math.max(1, Math.ceil(dates.length / 6));
+  dates.forEach((d, i) => { if (i % step && i !== dates.length - 1) return; const dt = parseD(d); svg.append(s("text", { class: "axis", x: x(d), y: H - 8, "text-anchor": "middle" }, dt.getDate() + " " + MOIS[dt.getMonth()])); });
+  if (opt.base != null) svg.append(s("line", { x1: L, x2: W - R, y1: y(opt.base), y2: y(opt.base), stroke: "currentColor", "stroke-opacity": .35, "stroke-dasharray": "4 4" }));
+  for (const sr of series) {
+    if (!sr.pts.length) continue;
+    svg.append(s("path", { d: sr.pts.map((p, i) => (i ? "L" : "M") + x(p[0]).toFixed(1) + " " + y(p[1]).toFixed(1)).join(""), fill: "none", stroke: sr.color, "stroke-width": 2.4, "stroke-linejoin": "round" }));
+    for (const p of sr.pts) { const c = s("circle", { cx: x(p[0]), cy: y(p[1]), r: 3, fill: sr.color }); c.append(s("title", {}, sr.name + " · " + p[0] + " : " + (opt.fmt ? opt.fmt(p[1]) : p[1].toFixed(1)))); svg.append(c); }
+  }
+  box.append(svg);
+  box.append(h("div", { class: "chips", style: "margin-top:6px" }, series.filter(sr => sr.pts.length).map(sr => { const a = sr.pts[0][1], b = sr.pts[sr.pts.length - 1][1], v = (b - a) / a * 100;
+    return h("span", { class: "chip", style: "border:1.5px solid " + sr.color }, h("span", { style: "color:" + sr.color, text: "● " }), sr.name + " " + (v >= 0 ? "+" : "") + v.toFixed(1).replace(".", ",") + " %"); })));
+  return box;
+}
+function viewTendances() {
+  needKmh();
+  if (!KMH) return h("div", { class: "loading", text: "Chargement de l'historique des prix…" });
+  const last = KMH.dates[KMH.dates.length - 1] || today();
+  const from = iso(new Date(parseD(last).getTime() - (trF.days - 1) * 864e5));
+  const dates = KMH.dates.filter(d => d >= from);
+  const ids = Object.keys(KMH.prices).map(Number).filter(id => D.items[id]);
+  const fam = FAMILIES.map(([k, name, color, f]) => ({ name, color, pts: marketIndex(ids.filter(f), dates) }));
+  const types = new Map(); for (const id of ids) types.set(item(id)[2], (types.get(item(id)[2]) || 0) + 1);
+  const catList = [...types.entries()].filter(([, n]) => n >= 3).map(([t, n]) => [t, (D.types[t] || ["Autre"])[0], n]).sort((a, b) => a[1].localeCompare(b[1], "fr"));
+  if (!trF.cat || !types.has(+trF.cat)) trF.cat = String((catList.find(c => c[1] === "Rune de forgemagie") || catList[0] || [""])[0]);
+  const catIds = ids.filter(id => String(item(id)[2]) === String(trF.cat));
+  const catName = (D.types[trF.cat] || ["Catégorie"])[0];
+  // Variation de chaque objet sur la période (prix du groupe compris : seriesOf)
+  const movers = catIds.map(id => { const ser = seriesOf(id).filter(([d]) => d >= from); if (ser.length < 2) return null; const a = ser[0][1], b = ser[ser.length - 1][1]; return a > 0 ? { id, a, b, v: (b - a) / a * 100, ser } : null; }).filter(Boolean);
+  const ups = movers.filter(m => m.v > 0).sort((a, b) => b.v - a.v).slice(0, 8), downs = movers.filter(m => m.v < 0).sort((a, b) => a.v - b.v).slice(0, 8);
+  const daysSeg = h("span", { class: "seg", role: "group", "aria-label": "Période" }, [[7, "7 jours"], [30, "30 jours"], [90, "90 jours"]].map(([v, l]) =>
+    h("button", { type: "button", "aria-pressed": trF.days === v ? "true" : "false", onclick: () => { trF.days = v; render(); } }, l)));
+  const catSel = h("select", { id: "tr-cat", "aria-label": "Catégorie" }, catList.map(([t, nm, n]) => h("option", { value: t, selected: String(t) === String(trF.cat) }, nm + " (" + n + ")")));
+  catSel.addEventListener("change", () => { trF.cat = catSel.value; render(); });
+  const moverTable = (list, empty) => list.length ? h("div", { class: "tablewrap" }, h("table", {}, h("thead", {}, h("tr", {}, h("th", { text: "Objet" }), h("th", { class: "n", text: "Prix" }), h("th", { class: "n", text: "Variation" }), h("th", { class: "hide-m", text: "Courbe" }))),
+    h("tbody", {}, list.map(m => h("tr", {}, h("td", {}, itemLink(m.id, typeName(m.id) + " · niv. " + item(m.id)[1], 24)), h("td", { class: "n", text: k(m.b) + " ₭" }), varCell(m.v), h("td", { class: "hide-m" }, sparkSeries(m.ser, trF.days))))))) : h("p", { class: "muted", text: empty });
+  // Runes : toutes, avec prix, variation et courbe
+  const nq = norm(trF.q || "");
+  const runes = ids.filter(id => RUNE_TYPES.has(item(id)[2]) && (!nq || norm(item(id)[0]).includes(nq))).map(id => { const ser = seriesOf(id).filter(([d]) => d >= from), o = priceAt(id); const a = ser.length ? ser[0][1] : null, b = o ? nowPrice(o) : null; return { id, ser, b, o, v: a && b != null && ser.length > 1 ? (b - a) / a * 100 : null }; })
+    .sort((a, b) => (b.v ?? -1e9) - (a.v ?? -1e9) || item(a.id)[0].localeCompare(item(b.id)[0], "fr"));
+  const q = h("input", { type: "search", id: "q-tr", placeholder: "Chercher une rune (Fo, Ine, Pa…)", value: trF.q, "aria-label": "Chercher une rune" });
+  q.addEventListener("input", () => { trF.q = q.value; clearTimeout(q._t); q._t = setTimeout(render, 250); });
+  const histNote = "Historique des cotes d'Orukam depuis le " + parseD(KMH.dates[0] || today()).toLocaleDateString("fr-FR", { day: "numeric", month: "long" }) + " (" + KMH.dates.length + " jour" + (KMH.dates.length > 1 ? "s" : "") + ") : les courbes s'allongent chaque jour, jusqu'à 90 jours.";
+  return h("div", { class: "stack" },
+    h("section", { class: "panel" },
+      h("div", { class: "row between" }, h("h2", { text: "Indice du marché d'Orukam" }), daysSeg),
+      lineChart(fam, { base: 100, label: "Indice des prix par famille", fmt: v => Math.round(v) }),
+      h("p", { class: "note", text: "Base 100 au début de la période : pour chaque objet, son prix du jour divisé par son premier prix de la période ; l'indice est la médiane des objets de la famille (une cote aberrante ne le fausse pas). 110 = les prix ont monté de 10 % en moyenne. " + histNote })),
+    h("section", { class: "panel" },
+      h("div", { class: "row between" }, h("h2", { text: "Par catégorie" }), catSel),
+      lineChart([{ name: catName, color: "var(--sec)", pts: marketIndex(catIds, dates) }].map(sr => ({ ...sr, color: "#f2786a" })), { base: 100, label: "Indice " + catName, fmt: v => Math.round(v) }),
+      h("div", { class: "grid2 even" },
+        h("div", { style: "display:grid;gap:8px" }, h("h3", { text: "▲ Plus fortes hausses" }), moverTable(ups, "Aucune hausse sur la période.")),
+        h("div", { style: "display:grid;gap:8px" }, h("h3", { text: "▼ Plus fortes baisses" }), moverTable(downs, "Aucune baisse sur la période.")))),
+    h("section", { class: "panel" },
+      h("div", { class: "row between" }, h("h2", { text: "Runes" }), h("span", { class: "chip", text: runes.length + " runes" })),
+      h("div", { class: "filters" }, h("div", { class: "search" }, q)),
+      h("div", { class: "tablewrap" }, h("table", {},
+        h("thead", {}, h("tr", {}, h("th", { text: "Rune" }), h("th", { class: "n", text: "Prix" }), h("th", { class: "n", text: "Sur " + trF.days + " j" }), h("th", { class: "hide-m", text: "Courbe" }), h("th", { class: "hide-m", text: "Source" }))),
+        h("tbody", {}, runes.map(r => h("tr", {},
+          h("td", {}, itemLink(r.id, null, 24)),
+          h("td", { class: "n" }, r.b != null ? h("strong", { style: "color:var(--kamas)", text: k(r.b) }) : h("span", { class: "muted", text: "—" })),
+          varCell(r.v),
+          h("td", { class: "hide-m" }, sparkSeries(r.ser, trF.days)),
+          h("td", { class: "small muted hide-m", text: r.o ? srcLabel(r.o) : "aucun prix" })))))),
+      h("p", { class: "note", text: "Prix actuel : relevé du groupe s'il existe, sinon cote Kamamaster. Clique une rune pour sa courbe complète et saisir un relevé." })));
+}
+
+// =====================================================================
 // Habillage : icônes, onglets, bandeaux de section
 // =====================================================================
 const IC = {
@@ -3644,14 +3744,14 @@ const IC = {
 const svgI = name => { const el = s("svg", { class: "i", viewBox: "0 0 24 24", "aria-hidden": "true" }); for (const d of IC[name].split(" M")) el.append(s("path", { d: d.startsWith("M") ? d : "M" + d })); return el; };
 const TABS = [
   ["accueil", "Accueil", "home", "--c-home"], ["plan", "Plan de craft", "hammer", "--c-craft", "c-plan"], ["rentabilite", "Rentabilité", "trend", "--c-gold"],
-  ["prix", "Prix HDV", "coins", "--c-gold", "c-prix"], ["tournee", "Tournée HDV", "route", "--c-gold", "c-tour"], ["journal", "Journal", "ledger", "--c-journal"], ["alertes", "Alertes", "bell", "--c-gold", "c-alert"], ["farm", "Farm", "leaf", "--c-farm"], ["metiers", "Métiers", "up", "--c-craft"], ["brisage", "Brisage", "rune", "--c-alm"], ["serveur", "Vue d'ensemble", "globe", "--c-oru"], ["almanax", "Almanax", "calendar", "--c-alm"], ["carte", "Carte", "map", "--c-oru"], ["cotes", "Cotes HDV", "chart", "--c-oru"], ["donjons", "Donjons", "castle", "--c-oru"], ["builds", "Builds", "shield", "--c-build", "c-builds"], ["comparer", "Comparer", "compare", "--c-build"],
+  ["prix", "Prix HDV", "coins", "--c-gold", "c-prix"], ["tournee", "Tournée HDV", "route", "--c-gold", "c-tour"], ["journal", "Journal", "ledger", "--c-journal"], ["alertes", "Alertes", "bell", "--c-gold", "c-alert"], ["farm", "Farm", "leaf", "--c-farm"], ["metiers", "Métiers", "up", "--c-craft"], ["brisage", "Brisage", "rune", "--c-alm"], ["serveur", "Vue d'ensemble", "globe", "--c-oru"], ["almanax", "Almanax", "calendar", "--c-alm"], ["carte", "Carte", "map", "--c-oru"], ["cotes", "Cotes HDV", "chart", "--c-oru"], ["tendances", "Tendances", "trend", "--c-oru"], ["donjons", "Donjons", "castle", "--c-oru"], ["builds", "Builds", "shield", "--c-build", "c-builds"], ["comparer", "Comparer", "compare", "--c-build"],
   ["stock", "Inventaire", "bag", "--c-stock", "c-stock"], ["encyclopedie", "Encyclopédie", "book", "--c-ency"], ["compte", "Compte", "user", "--c-save"],
 ];
 // Sections regroupées : menu latéral (bureau), barre du bas + sous-onglets (téléphone)
 const GROUPS = [
   ["accueil", "Accueil", "home", "--c-home", ["accueil", "almanax"]],
   ["marche", "Marché", "coins", "--c-gold", ["prix", "tournee", "rentabilite", "journal", "alertes"]],
-  ["orukam", "Orukam", "globe", "--c-oru", ["serveur", "cotes", "donjons", "carte", "brisage"]],
+  ["orukam", "Orukam", "globe", "--c-oru", ["serveur", "cotes", "tendances", "donjons", "carte", "brisage"]],
   ["production", "Production", "hammer", "--c-craft", ["plan", "metiers", "farm", "stock"]],
   ["equipement", "Équipement", "shield", "--c-build", ["builds", "comparer", "encyclopedie"]],
   ["compte", "Compte", "user", "--c-save", ["compte"]],
@@ -3726,6 +3826,7 @@ function heroFor(v) {
     almanax: ["Almanax", "Chaque jour de l'année : offrande, bonus et événements, avec les bonus de métier.", "calendar", (() => { const out = []; for (let i = 0; i < 8; i++) { const d = new Date(); d.setDate(d.getDate() + i); const a = almanaxFor(d); if (a) out.push(a[1]); } return out; })()],
     carte: ["Carte d'Orukam", "Où pousse chaque ressource, et les zones en anomalie avec leur bonus.", "map", mapF.sel.slice()],
     serveur: ["Orukam en direct", "Le marché du serveur : cotes, tendances, donjons rentables et zones en anomalie.", "globe", (KM ? Object.keys(KM.prices).map(Number) : []).filter(id => D.items[id] && item(id)[1] >= 150).slice(0, 8)],
+    tendances: ["Tendances du marché", "L'évolution des prix d'Orukam : indices des runes, des ressources et de chaque catégorie, hausses et baisses.", "trend", (KM ? Object.keys(KM.prices).map(Number) : []).filter(id => D.items[id] && RUNE_TYPES.has(item(id)[2])).slice(0, 8)],
     cotes: ["Cotes HDV", "Tous les objets cotés sur Orukam, leur tendance et les objets que tu suis.", "chart", favs().length ? favs() : (KM ? Object.keys(KM.prices).map(Number) : []).filter(id => D.items[id] && recipe(id)).slice(0, 8)],
     donjons: ["Donjons rentables", "Ce que rapporte chaque donjon en kamas par heure, à ta prospection et aux prix d'Orukam.", "castle", KMD ? KMD.list.flatMap(d => d.drops.slice(0, 1).map(x => x[0])).slice(0, 8) : []],
     compte: ["Compte", "Ton pseudo, ton mot de passe et la sauvegarde de tes données.", "user", []],
@@ -3779,7 +3880,7 @@ function decorate(root, v) {
 // =====================================================================
 // Rendu et navigation
 // =====================================================================
-const VIEWS = { almanax: viewAlmanax, carte: viewCarte, serveur: viewServeur, cotes: viewCotes, donjons: viewDonjons, brisage: viewBrisage, comparer: viewComparer, alertes: viewAlertes, metiers: viewMetiers, journal: viewJournal, tournee: viewTournee, farm: viewFarm, builds: viewBuilds, accueil: viewAccueil, plan: viewPlan, rentabilite: viewRentabilite, prix: viewPrix, stock: viewStock, encyclopedie: viewEncyclopedie, compte: viewSauvegarde };
+const VIEWS = { tendances: viewTendances, almanax: viewAlmanax, carte: viewCarte, serveur: viewServeur, cotes: viewCotes, donjons: viewDonjons, brisage: viewBrisage, comparer: viewComparer, alertes: viewAlertes, metiers: viewMetiers, journal: viewJournal, tournee: viewTournee, farm: viewFarm, builds: viewBuilds, accueil: viewAccueil, plan: viewPlan, rentabilite: viewRentabilite, prix: viewPrix, stock: viewStock, encyclopedie: viewEncyclopedie, compte: viewSauvegarde };
 function renderCounts() {
   const set = (id, n) => { const el = document.getElementById(id); if (el) { el.textContent = n; el.dataset.z = n ? "0" : "1"; } };
   set("c-plan", S.targets.length);
