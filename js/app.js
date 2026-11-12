@@ -340,7 +340,9 @@ const NAMES = {};
 const prices = () => SH ? AGG : S.prices;
 // Moyenne des relevés d'un même jour (plusieurs membres peuvent relever le même objet)
 // Pour un objet et un jour, le relevé le plus récent fait foi ; les autres restent consultables (others)
+let PRICE_VER = 0; // change à chaque relevé : invalide les calculs mis en cache (cotes incohérentes avec le craft)
 function aggregate(id) {
+  PRICE_VER++;
   const days = new Map();
   for (const [u, list] of Object.entries(RAW[id] || {})) for (const o of (Array.isArray(list) ? list : [])) {
     if (!o || !o.d || o.lo == null) continue;
@@ -478,8 +480,30 @@ function kmOdd(id) {
   return ODD.get(+id) ?? null;
 }
 // Avertissement seulement si le prix utilisé vient de Kamamaster (un relevé du groupe fait foi)
-const oddOf = (id, o) => o && o.src === "km" ? kmOdd(id) : null;
-const oddText = id => "prix inhabituel : les objets du même type et de niveau proche valent ~" + kk(kmOdd(id)) + " ₭. À vérifier à l'HDV";
+// Cote Kamamaster incohérente avec le coût de craft : plus de 10 fois au-dessus ou en dessous du coût des
+// ingrédients (aux prix connus, voie la moins chère), pour un objet craftable que le groupe n'a pas relevé
+let CODD = null, coddKey = "";
+function craftOddMap() {
+  const key = (KM ? KM.fetched + KM.anomaliesAt : "") + "|" + PRICE_VER + "|" + (S.settings.km !== false);
+  if (CODD && coddKey === key) return CODD;
+  coddKey = key; CODD = new Map();
+  if (!KM || S.settings.km === false || !D) return CODD;
+  const C = coster(undefined, true);
+  for (const [k, p] of Object.entries(KM.prices)) {
+    const id = +k; if (!D.recipes[id] || obsOf(id).length) continue;
+    const c = C.craft(id); if (c.missing) continue;
+    const cost = (c.lo + c.hi) / 2; if (cost < 50) continue;
+    // Ingrédient qui pèse le plus dans le coût (souvent le vrai coupable quand la cote paraît bradée)
+    const main = () => { let best = null; for (const [ing, q] of recipe(id)[1]) { const b = C.best(ing), v = q * (b.lo + b.hi) / 2; if (!best || v > best.v) best = { id: ing, v }; } return best; };
+    if (p > 10 * cost) CODD.set(id, { cost, up: true }); else if (p < cost / 10) CODD.set(id, { cost, up: false, main: main() });
+  }
+  return CODD;
+}
+const craftOdd = id => craftOddMap().get(+id) || null;
+const oddOf = (id, o) => o && o.src === "km" ? (kmOdd(id) ?? (craftOdd(id) ? craftOdd(id).cost : null)) : null;
+const oddText = id => { const t = kmOdd(id), c = craftOdd(id);
+  return [t != null ? "prix inhabituel : les objets du même type et de niveau proche valent ~" + kk(t) + " ₭" : null,
+    c ? "cote " + (c.up ? "plus de 10 fois au-dessus" : "plus de 10 fois en dessous") + " du coût de craft (~" + kk(c.cost) + " ₭)" : null].filter(Boolean).join(" ; ") + ". À vérifier à l'HDV"; };
 const oddChip = (id, o) => oddOf(id, o) ? h("span", { class: "chip warn", title: oddText(id), text: "à vérifier" }) : null;
 // Cotes Kamamaster à vérifier : douteuses (écartées) ou inhabituelles (gardées), pour les objets que le groupe n'a pas relevés
 function kmSuspects() {
@@ -487,7 +511,9 @@ function kmSuspects() {
   const out = [];
   for (const [id, x] of Object.entries(KM.doubt || {})) if (D.items[id] && !obsOf(+id).length) out.push({ id: +id, p: x[0], ref: x[1], why: "douteuse" });
   for (const id of Object.keys(KM.prices)) { if (!D.items[id] || obsOf(+id).length) continue; const ref = kmOdd(+id); if (ref != null) out.push({ id: +id, p: KM.prices[id], ref, why: "inhabituelle" }); }
-  return out.sort((a, b) => b.p / (b.ref || 1) - a.p / (a.ref || 1));
+  for (const [id, c] of craftOddMap()) if (!out.some(x => x.id === id)) out.push({ id, p: KM.prices[id], ref: c.cost, why: c.up ? "chère vs craft" : "bradée vs craft", main: c.main });
+  const gap = x => Math.max(x.p / (x.ref || 1), (x.ref || 1) / (x.p || 1));
+  return out.sort((a, b) => gap(b) - gap(a));
 }
 let suspN = 30;
 function suspectsPanel() {
@@ -497,13 +523,14 @@ function suspectsPanel() {
     h("div", { class: "row between" }, h("h2", { text: "Cotes Kamamaster à vérifier" }),
       h("div", { class: "row", style: "gap:8px" }, h("span", { class: "chip warn", text: list.length + " objet" + (list.length > 1 ? "s" : "") }),
         h("button", { type: "button", class: "btn sm", onclick: () => { tourSetup.extra = [...new Set([...(tourSetup.extra || []), ...list.map(x => x.id)])]; saveTour(); location.hash = "#tournee"; } }, "Les relever (tournée HDV)"))),
-    h("p", { class: "note", text: "Cotes Kamamaster jamais relevées par le groupe et suspectes : « inhabituelle » = plus de 50 fois le prix des objets du même type et de niveau proche (encore utilisée dans les calculs, sauf la revente des métiers) ; « douteuse » = plus de 3 fois au-dessus ou en dessous de ses derniers jours (écartée). Un seul relevé du groupe remplace la cote et retire l'objet de cette liste. Les plus suspectes d'abord." }),
+    h("p", { class: "note", text: "Cotes Kamamaster jamais relevées par le groupe et suspectes : « inhabituelle » = plus de 50 fois le prix des objets du même type et de niveau proche ; « chère / bradée vs craft » = plus de 10 fois au-dessus ou en dessous du coût de ses ingrédients (souvent un ingrédient mal coté) ; ces cotes restent utilisées dans les calculs, sauf la revente des métiers ; « douteuse » = plus de 3 fois au-dessus ou en dessous de ses derniers jours (écartée). Un seul relevé du groupe remplace la cote et retire l'objet de cette liste. Les plus suspectes d'abord." }),
     h("div", { class: "tablewrap" }, h("table", {},
-      h("thead", {}, h("tr", {}, h("th", { text: "Objet" }), h("th", { class: "n", text: "Cote Kamamaster" }), h("th", { class: "n hide-m", text: "Objets similaires" }), h("th", {}), h("th", { text: "Ton relevé (basse · haute · actuel)" }))),
+      h("thead", {}, h("tr", {}, h("th", { text: "Objet" }), h("th", { class: "n", text: "Cote Kamamaster" }), h("th", { class: "n hide-m", text: "Référence" }), h("th", {}), h("th", { text: "Ton relevé (basse · haute · actuel)" }))),
       h("tbody", {}, list.slice(0, suspN).map(x => h("tr", {},
         h("td", {}, itemLink(x.id, typeName(x.id) + " · niv. " + item(x.id)[1], 26)),
         h("td", { class: "n" }, h("strong", { style: "color:var(--bad)", text: kk(x.p) + " ₭" })),
-        h("td", { class: "n hide-m", text: "~" + kk(x.ref) + " ₭" }),
+        h("td", { class: "n hide-m" }, "~" + kk(x.ref) + " ₭", h("small", { class: "muted", style: "display:block", text: /craft/.test(x.why) ? "coût du craft" : x.why === "douteuse" ? "ses derniers jours" : "objets similaires" }),
+          x.main && x.main.v > x.ref * .5 ? h("small", { style: "display:block;color:var(--bad)" }, "surtout : ", h("button", { type: "button", class: "link", onclick: () => openSheet(x.main.id), text: item(x.main.id)[0] + " (" + kk(x.main.v) + " ₭)" })) : null),
         h("td", {}, h("span", { class: "chip warn", text: x.why + " · ×" + (x.ref ? (x.p >= x.ref ? Math.round(x.p / x.ref) : "1/" + Math.round(x.ref / x.p)) : "?") })),
         h("td", {}, quickObs(x.id))))))),
     list.length > suspN ? h("div", { class: "row", style: "justify-content:center" }, h("button", { type: "button", class: "btn", onclick: () => { suspN += 50; render(); } }, "Afficher plus (" + (list.length - suspN) + " restants)")) : null);
@@ -515,6 +542,7 @@ const pick = (o, basis) => !o ? null : basis === "lo" ? o.lo : basis === "hi" ? 
 const nowPrice = o => !o ? null : (o.cur ?? midOf(o));
 function myObs(id, d) { return ((SH && ME ? (RAW[id] || {})[ME] : S.prices[id]) || []).find(o => o.d === d) || null; }
 function addObs(id, lo, hi, d = today(), cur) {
+  PRICE_VER++;
   if (lo == null && hi == null) return false;
   if (CFG.supabaseUrl && SB && !ME) { toast("Connexion au groupe en cours : réessaie dans un instant"); return false; }
   if (lo == null) lo = hi; if (hi == null) hi = lo;
