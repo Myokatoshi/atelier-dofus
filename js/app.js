@@ -3107,23 +3107,28 @@ function viewCotes() {
 
 let djF = { q: "", min: "", max: "", an: false, sort: "kh", n: 40, open: new Set() };
 const djMin = d => +(S.settings.djmin || {})[d.id] || (KMD && KMD.params.min) || 30;
+// Anomalie choisie : celle du donjon si réglée, sinon le réglage général, sinon l'anomalie actuelle d'Orukam
+const djAnSet = d => { const v = (S.settings.djan || {})[d.id]; return v != null ? v : S.settings.djanAll != null ? S.settings.djanAll : null; };
+const djAn = d => { const v = djAnSet(d); return v != null ? v : d.an || 0; };
 // Valeur d'un passage : drops attendus (Kamamaster) × prospection / 100 × personnages, aux prix d'Orukam
 function djCalc(d) {
   const pp = ppOf(), ch = Math.max(1, Math.min(8, +S.settings.djc || 1)), min = djMin(d);
+  // Les quantités de Kamamaster comprennent l'anomalie actuelle : on la retire, puis on applique celle choisie
+  const an = djAn(d), fa = (1 + an / 100) / (1 + (d.an || 0) / 100);
   let tot = 0, missing = 0;
   const drops = d.drops.map(([id, q, rate, mons]) => {
-    const o = priceAt(id), p = o ? nowPrice(o) : null, qq = q * pp / 100 * ch;
+    const o = priceAt(id), p = o ? nowPrice(o) : null, qq = q * fa * pp / 100 * ch;
     if (p == null) missing++; else tot += qq * p;
-    return { id, q: qq, rate: Math.min(100, rate * pp / 100), mons, p, v: p == null ? null : qq * p, o };
+    return { id, q: qq, rate: Math.min(100, rate * fa * pp / 100), mons, p, v: p == null ? null : qq * p, o };
   }).sort((a, b) => (b.v ?? -1) - (a.v ?? -1));
-  return { tot, kh: tot * 60 / min, min, drops, missing };
+  return { tot, kh: tot * 60 / min, min, drops, missing, an };
 }
 function viewDonjons() {
   ensureKmDungeons();
   if (!KMD) return h("div", { class: "loading", text: "Chargement des donjons d'Orukam…" });
   if (!KMD.list.length) return h("div", { class: "empty" }, h("strong", { text: "Données des donjons indisponibles" }), h("span", { text: "Elles seront récupérées au prochain passage sur Kamamaster." }));
   const nq = norm(djF.q || "");
-  let rows = KMD.list.filter(d => (!nq || norm(d.n).includes(nq) || d.boss.some(b => norm(b).includes(nq))) && (!djF.min || (d.lv ?? 0) >= +djF.min) && (!djF.max || (d.lv ?? 999) <= +djF.max) && (!djF.an || d.an > 0))
+  let rows = KMD.list.filter(d => (!nq || norm(d.n).includes(nq) || d.boss.some(b => norm(b).includes(nq))) && (!djF.min || (d.lv ?? 0) >= +djF.min) && (!djF.max || (d.lv ?? 999) <= +djF.max) && (!djF.an || djAn(d) > 0))
     .map(d => ({ d, c: djCalc(d) }));
   rows.sort(djF.sort === "lv" ? (a, b) => (b.d.lv ?? 0) - (a.d.lv ?? 0) || b.c.kh - a.c.kh : (a, b) => b.c.kh - a.c.kh);
   const q = h("input", { type: "search", id: "q-donjons", placeholder: "Donjon ou boss", value: djF.q, "aria-label": "Chercher un donjon" });
@@ -3131,6 +3136,7 @@ function viewDonjons() {
   const lv = (key, ph) => { const el = h("input", { type: "number", id: "dj-" + key, min: 1, max: 200, placeholder: ph, value: djF[key], "aria-label": ph }); el.addEventListener("change", () => { djF[key] = el.value; render(); }); return el; };
   const anCb = h("input", { type: "checkbox", id: "dj-an", checked: djF.an }); anCb.addEventListener("change", () => { djF.an = anCb.checked; render(); });
   const ppIn = numInput(ppOf(), v => { const n = Math.round(+String(v).replace(/\s/g, "")); S.settings.pp = n > 0 ? Math.min(1000, n) : 100; persist("plan"); }, { sm: true, label: "Prospection", id: "dj-pp" });
+  const anAllIn = numInput(S.settings.djanAll ?? "", v => { const t = String(v).replace("%", "").trim(); const n = Math.round(+t); S.settings.djanAll = t === "" || isNaN(n) ? null : Math.max(0, Math.min(500, n)); persist("plan"); }, { sm: true, ph: "actuelle", label: "Anomalie pour tous les donjons, en %", id: "dj-an-all" });
   const chIn = numInput(S.settings.djc || 1, v => { const n = Math.round(+v); S.settings.djc = n >= 1 ? Math.min(8, n) : 1; persist("plan"); }, { sm: true, label: "Personnages", id: "dj-ch" });
   const sortSeg = h("span", { class: "seg", role: "group", "aria-label": "Tri" }, [["kh", "Kamas / heure"], ["lv", "Niveau"]].map(([v, l]) =>
     h("button", { type: "button", "aria-pressed": djF.sort === v ? "true" : "false", onclick: () => { djF.sort = v; render(); } }, l)));
@@ -3143,10 +3149,13 @@ function viewDonjons() {
         h("span", { class: "rank", text: i + 1 }),
         h("span", { class: "djn" }, h("strong", { text: d.n }), h("small", { class: "muted", text: "niv. " + (d.lv ?? "?") + " · " + d.rooms + " salle" + (d.rooms > 1 ? "s" : "") + (d.x != null ? " · [" + d.x + ", " + d.y + "]" : "") + (d.boss.length ? " · " + d.boss.join(", ") : "") })),
         h("span", { class: "djd" }, c.drops.slice(0, 3).map(x => icon(x.id, 26))),
-        h("span", { class: "djc" }, d.an ? h("span", { class: "chip kamas", text: "Anomalie +" + d.an + " %" }) : null,
+        h("span", { class: "djc" }, c.an ? h("span", { class: "chip kamas", title: djAnSet(d) != null ? "Anomalie choisie (actuelle : " + (d.an || 0) + " %)" : "Anomalie actuelle d'Orukam", text: "Anomalie +" + c.an + " %" + (djAnSet(d) != null ? " ✎" : "") }) : null,
           c.drops[0] && c.tot && oddOf(c.drops[0].id, c.drops[0].o) && c.drops[0].v / c.tot > .5 ? h("span", { class: "chip warn", title: item(c.drops[0].id)[0] + " : " + oddText(c.drops[0].id), text: "à vérifier" }) : null),
         h("span", { class: "djv" }, h("strong", { text: kk(c.kh) + " ₭/h" }), h("small", { class: "muted", text: kk(c.tot) + " ₭ en " + c.min + " min" }))),
       h("div", { class: "djbody" },
+        h("div", { class: "row", style: "gap:8px" }, h("span", { class: "label", text: "Anomalie" }),
+          numInput((S.settings.djan || {})[d.id] ?? "", v => { const t = String(v).replace("%", "").trim(), n = Math.round(+t); const m = { ...(S.settings.djan || {}) }; if (t === "" || isNaN(n)) delete m[d.id]; else m[d.id] = Math.max(0, Math.min(500, n)); S.settings.djan = m; persist("plan"); }, { sm: true, ph: String(djAnSet(d) ?? (d.an || 0)), label: "Anomalie de ce donjon, en %", id: "dj-an-" + d.id }),
+          h("span", { class: "small muted", text: "% · " + ((S.settings.djan || {})[d.id] != null ? "choisie pour ce donjon" : S.settings.djanAll != null ? "réglage général" : "anomalie actuelle d'Orukam (" + (d.an || 0) + " %)") })),
         h("div", { class: "row", style: "gap:8px" }, h("span", { class: "label", text: "Durée d'un passage" }), minIn, h("span", { class: "small muted", text: "minutes" + ((S.settings.djmin || {})[d.id] ? "" : " (estimation Kamamaster)") })),
         h("div", { class: "tablewrap" }, h("table", {},
           h("thead", {}, h("tr", {}, h("th", { text: "Drop" }), h("th", { class: "n hide-m", text: "Taux" }), h("th", { class: "n", text: "Par passage" }), h("th", { class: "n hide-m", text: "Prix" }), h("th", { class: "n", text: "Valeur" }))),
@@ -3165,9 +3174,10 @@ function viewDonjons() {
     h("section", { class: "panel" },
       h("div", { class: "row between" }, h("h2", { text: "Donjons rentables d'Orukam" }), h("span", { class: "chip", text: rows.length + " donjons" })),
       h("div", { class: "row", style: "gap:8px" },
-        h("span", { class: "label", text: "Prospection" }), ppIn, h("span", { class: "label", text: "Personnages" }), chIn, h("span", { class: "label", text: "Tri" }), sortSeg),
+        h("span", { class: "label", text: "Prospection" }), ppIn, h("span", { class: "label", text: "Personnages" }), chIn,
+        h("span", { class: "label", text: "Anomalie" }), anAllIn, h("span", { class: "small muted", text: "%" }), h("span", { class: "label", text: "Tri" }), sortSeg),
       h("div", { class: "filters" }, h("div", { class: "search" }, q), lv("min", "Niv. min"), lv("max", "Niv. max"), h("label", { class: "check" }, anCb, "En anomalie seulement")),
-      h("p", { class: "note", text: "Valeur des drops attendus par passage (calcul de Kamamaster pour une équipe de 4, bonus d'anomalie compris), ajustée à ta prospection et au nombre de tes personnages, aux prix d'Orukam : relevé du groupe s'il existe, sinon cote Kamamaster (hors cotes douteuses). Règle la durée d'un passage dans chaque donjon pour un kamas/heure à ton rythme. Les âmes et ressources de quête ne sont pas comptées." })),
+      h("p", { class: "note", text: "Valeur des drops attendus par passage (calcul de Kamamaster pour une équipe de 4), avec l'anomalie de ton choix (réglage général ou par donjon ; vide = anomalie actuelle d'Orukam), ajustée à ta prospection et au nombre de tes personnages, aux prix d'Orukam : relevé du groupe s'il existe, sinon cote Kamamaster (hors cotes douteuses). Règle la durée d'un passage dans chaque donjon pour un kamas/heure à ton rythme. Les âmes et ressources de quête ne sont pas comptées." })),
     rows.length ? h("div", { class: "djlist" }, rows.slice(0, djF.n).map(card)) : h("div", { class: "empty" }, h("strong", { text: "Aucun donjon ne correspond" }), h("span", { text: "Change la recherche ou les filtres." })),
     rows.length > djF.n ? h("div", { class: "row", style: "justify-content:center" }, h("button", { type: "button", class: "btn", onclick: () => { djF.n += 40; render(); } }, "Afficher plus (" + (rows.length - djF.n) + " restants)")) : null);
 }
