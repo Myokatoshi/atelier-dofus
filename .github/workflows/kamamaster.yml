@@ -1,6 +1,6 @@
 # Secours : rafraîchit les fichiers data/km/ du site avec les données d'Orukam publiées par Kamamaster (lancement manuel).
 name: Prix Kamamaster
-# Plus de passage planifié : la récupération se fait désormais dans Supabase (fonction « kamamaster », toutes les 2 h).
+# Plus de passage planifié : la récupération se fait désormais dans Supabase (fonction « kamamaster », toutes les heures).
 # Ce workflow ne sert plus qu'en secours, lancé à la main, pour rafraîchir les fichiers data/km/ du site.
 on:
   workflow_dispatch:

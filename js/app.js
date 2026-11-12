@@ -387,7 +387,7 @@ const obsOf = id => prices()[id] || [];
 // (hors cotes douteuses, écartées à la récupération : voir tools/fetch_kamamaster.py)
 let KM = null, KMH = null, kmhLoading = null;
 // Historique quotidien des prix Kamamaster (90 jours), chargé à la demande pour les courbes
-// Données Kamamaster : table km_data de Supabase (remplie toutes les 2 h par la fonction serveur « kamamaster »)
+// Données Kamamaster : table km_data de Supabase (remplie toutes les heures par la fonction serveur « kamamaster »)
 // quand on est connecté, sinon fichiers data/km/*.json du site (secours)
 let kmCheckedAt = 0, KMC = null, kmSeen = {}, kmGen = 0;
 const kmOnline = () => !!(SB && ME && SH && SH.live);
@@ -1386,7 +1386,7 @@ function viewPrix() {
   const kmBox = KM ? h("section", { class: "panel" }, h("div", { class: "row between" },
     h("div", { style: "display:grid;gap:3px;max-width:75ch" },
       h("strong", { text: "Prix Kamamaster · " + KM.server }),
-      h("span", { class: "note", text: fmt.format(Object.keys(KM.prices).length) + " objets, mis à jour le " + new Date(KM.fetched).toLocaleDateString("fr-FR", { day: "numeric", month: "long" }) + " (vérifiés toutes les 2 heures sur kamamaster.fr). Ils servent seulement pour les objets que le groupe n'a jamais relevés : un prix unique, utilisé comme basse, haute et actuel. Une cote qui s'écarte de plus de 3 fois de ses derniers jours est écartée comme douteuse" + (KM.doubt && Object.keys(KM.doubt).length ? " (" + Object.keys(KM.doubt).length + " en ce moment)" : "") + ". Aussi récupérés : " + Object.keys(KM.coefs || {}).length + " coefficients de brisage, les zones en anomalie et l'historique des prix (courbes)." })),
+      h("span", { class: "note", text: fmt.format(Object.keys(KM.prices).length) + " objets, mis à jour le " + new Date(KM.fetched).toLocaleDateString("fr-FR", { day: "numeric", month: "long" }) + " (vérifiés toutes les heures sur kamamaster.fr). Ils servent seulement pour les objets que le groupe n'a jamais relevés : un prix unique, utilisé comme basse, haute et actuel. Une cote qui s'écarte de plus de 3 fois de ses derniers jours est écartée comme douteuse" + (KM.doubt && Object.keys(KM.doubt).length ? " (" + Object.keys(KM.doubt).length + " en ce moment)" : "") + ". Aussi récupérés : " + Object.keys(KM.coefs || {}).length + " coefficients de brisage, les zones en anomalie et l'historique des prix (courbes)." })),
     (() => { const c = h("input", { type: "checkbox", id: "km-on", checked: S.settings.km !== false }); c.addEventListener("change", () => { S.settings.km = c.checked; persist("plan"); render(); }); return h("label", { class: "check" }, c, "Utiliser ces prix"); })())) : null;
   const tourN = tourCandidates().ids.length;
   return h("div", { class: "stack" },
@@ -3042,7 +3042,7 @@ function viewBrisage() {
 
 // =====================================================================
 // Orukam : cotes HDV de tout le serveur, tendances et donjons rentables
-// (prix du groupe en direct + données publiées par Kamamaster, vérifiées toutes les 2 heures)
+// (prix du groupe en direct + données publiées par Kamamaster, vérifiées toutes les heures)
 // =====================================================================
 let KMD = null, kmdLoading = null, kmRedraw = false;
 function ensureKmDungeons() {
@@ -3125,11 +3125,11 @@ function viewServeur() {
     h("div", { class: "tiles" },
       h("div", { class: "tile" }, h("span", { class: "label", text: "Objets cotés" }), h("span", { class: "v", text: fmt.format(ids.length) }), h("span", { class: "small muted", text: "prix du groupe et de Kamamaster" })),
       h("div", { class: "tile kamas" }, h("span", { class: "label", text: "Relevés du groupe aujourd'hui" }), h("span", { class: "v", text: todayN }), h("span", { class: "small muted", text: SH ? "reçus en direct" : "mode local" })),
-      h("div", { class: "tile" }, h("span", { class: "label", text: "Prix Kamamaster changés" }), h("span", { class: "v", style: "font-size:1.25rem", text: KM ? agoTime(KMC?.changed || KM.fetched) : "—" }), h("span", { class: "small muted", text: KMC ? "vérifié " + agoTime(KMC.checked) + " · toutes les 2 h" : "vérifié toutes les 2 h" })),
+      h("div", { class: "tile" }, h("span", { class: "label", text: "Prix Kamamaster changés" }), h("span", { class: "v", style: "font-size:1.25rem", text: KM ? agoTime(KMC?.changed || KM.fetched) : "—" }), h("span", { class: "small muted", text: KMC ? "vérifié " + agoTime(KMC.checked) + " · toutes les heures" : "vérifié toutes les heures" })),
       (() => { const n = kmSuspects().length; return h("a", { class: "tile", href: "#prix", style: "text-decoration:none;color:inherit", onclick: () => setTimeout(() => document.getElementById("a-verifier")?.scrollIntoView({ behavior: "smooth" }), 300) }, h("span", { class: "label", text: "Cotes à vérifier" }), h("span", { class: "v", style: n ? "color:var(--bad)" : null, text: n }), h("span", { class: "small muted", text: n ? "prix Kamamaster suspects → les relever" : "aucune cote suspecte" })); })(),
       h("div", { class: "tile" }, h("span", { class: "label", text: "Zones en anomalie" }), h("span", { class: "v", text: anom.length }), h("span", { class: "small muted", text: "bonus de drop en cours" + (KM && KM.anomaliesAt ? " · changé " + agoTime(KM.anomaliesAt) : "") }))),
     h("section", { class: "panel" },
-      h("p", { class: "note", style: "margin:0", text: "Les relevés du groupe arrivent en direct : dès qu'un membre enregistre un prix, il s'affiche chez tout le monde. Les données de Kamamaster (prix d'Orukam, brisage, anomalies, donjons) sont vérifiées toutes les 2 heures : Kamamaster ne les met lui-même à jour qu'environ une fois par jour, parfois moins, et il n'existe pas d'accès direct au serveur du jeu. Dès que le groupe a relevé un objet, son prix passe avant celui de Kamamaster ; les cotes Kamamaster qui s'écartent de plus de 3 fois de leurs derniers jours sont écartées comme douteuses. Source : kamamaster.fr." })),
+      h("p", { class: "note", style: "margin:0", text: "Les relevés du groupe arrivent en direct : dès qu'un membre enregistre un prix, il s'affiche chez tout le monde. Les données de Kamamaster (prix d'Orukam, brisage, anomalies, donjons) sont vérifiées toutes les heureseures : Kamamaster ne les met lui-même à jour qu'environ une fois par jour, parfois moins, et il n'existe pas d'accès direct au serveur du jeu. Dès que le groupe a relevé un objet, son prix passe avant celui de Kamamaster ; les cotes Kamamaster qui s'écartent de plus de 3 fois de leurs derniers jours sont écartées comme douteuses. Source : kamamaster.fr." })),
     h("div", { class: "grid2 even" },
       h("section", { class: "panel" }, h("div", { class: "row between" }, h("h2", { text: "▲ Plus fortes hausses" }), h("span", { class: "chip", text: span >= 1 ? "sur " + win + " j" : "bientôt" })), moverList(ups, span >= 1 ? "Aucune hausse notable." : noTrend)),
       h("section", { class: "panel" }, h("div", { class: "row between" }, h("h2", { text: "▼ Plus fortes baisses" }), h("span", { class: "chip", text: span >= 1 ? "sur " + win + " j" : "bientôt" })), moverList(downs, span >= 1 ? "Aucune baisse notable." : noTrend))),
@@ -3582,7 +3582,7 @@ function viewCarte() {
     h("section", { class: "panel" },
       h("div", { class: "row between" }, h("h2", { text: "Carte d'Orukam" }), wSel),
       h("div", { class: "row", style: "gap:14px;flex-wrap:wrap" }, h("label", { class: "check" }, anCb, "Zones en anomalie"), ...layerChecks, h("label", { class: "check" }, realCb, "Vraie carte")),
-      KM ? h("p", { class: "small muted", style: "margin:0", text: "Anomalies vérifiées toutes les 2 heures" + (KM.anomaliesAt ? " · dernier changement " + agoTime(KM.anomaliesAt) : "") + (KMC ? " · dernière vérification " + agoTime(KMC.checked) : "") }) : null,
+      KM ? h("p", { class: "small muted", style: "margin:0", text: "Anomalies vérifiées toutes les heureseures" + (KM.anomaliesAt ? " · dernier changement " + agoTime(KM.anomaliesAt) : "") + (KMC ? " · dernière vérification " + agoTime(KMC.checked) : "") }) : null,
       h("div", { class: "row", style: "gap:8px" }, jobSeg),
       h("div", { class: "filters" }, h("div", { class: "search" }, q)),
       h("div", { class: "reslist" }, list.map(r => { const i = mapF.sel.indexOf(r[0]), n = inWorld(r[0]);

@@ -179,11 +179,11 @@ alter table public.km_data enable row level security;
 drop policy if exists "données kamamaster lisibles par les membres" on public.km_data;
 create policy "données kamamaster lisibles par les membres" on public.km_data for select to authenticated using (true);
 
--- Toutes les 2 heures (à la 17e minute) ; la fonction répond tout de suite et travaille en arrière-plan
+-- Toutes les heures (à la 17e minute) ; la fonction répond tout de suite et travaille en arrière-plan
 create extension if not exists pg_net;
 create extension if not exists pg_cron;
-select cron.unschedule('kamamaster-2h') where exists (select 1 from cron.job where jobname = 'kamamaster-2h');
-select cron.schedule('kamamaster-2h', '17 */2 * * *', $$
+select cron.unschedule(jobname) from cron.job where jobname in ('kamamaster-2h', 'kamamaster-horaire');
+select cron.schedule('kamamaster-horaire', '17 * * * *', $$
   select net.http_post(url := 'https://jvzwoialynhvhwkccgba.supabase.co/functions/v1/kamamaster',
                        headers := '{"Content-Type": "application/json"}'::jsonb, body := '{}'::jsonb);
 $$);

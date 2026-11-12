@@ -1,5 +1,5 @@
 // Fonction serveur « kamamaster » : récupère les données publiées par Kamamaster pour Orukam et les range
-// dans la table km_data (lue par l'appli). Appelée toutes les 2 heures par pg_cron (migration 010).
+// dans la table km_data (lue par l'appli). Appelée toutes les heures par pg_cron (migration 010).
 // Même logique que tools/fetch_kamamaster.py :
 //  - à chaque passage : prix HDV et zones en anomalie (2 appels) ;
 //  - si les prix ont changé ou si le dernier passage complet date de 6 h ou plus : coefficients de brisage et donjons ;
