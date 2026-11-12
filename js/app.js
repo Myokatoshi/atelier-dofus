@@ -663,6 +663,7 @@ function find(q, opts = {}) {
     if (opts.craftOnly && !e.craft) continue;
     if (opts.type && e.type !== opts.type) continue;
     if (opts.sup != null && (D.types[e.type] || [0, 0])[1] !== opts.sup) continue;
+    if (opts.types && !opts.types.includes(e.type)) continue;
     if (opts.min != null && e.lvl < opts.min) continue;
     if (opts.max != null && e.lvl > opts.max) continue;
     if (words.every(w => e.key.includes(w))) out.push({ ...e, score: e.key === n ? 0 : e.key.startsWith(n) ? 1 : 2 });
@@ -3060,6 +3061,12 @@ function dollPanel(b, jet) {
   const save = patch => { Object.assign(b, patch); persist("builds"); render(); };
   const slotBtn = ([sp, i, label]) => {
     const id = slotItem(b, sp, i), on = bSlot && bSlot.sp === sp && bSlot.i === i, fm = id && b.fm && b.fm[id];
+    if (dollMode === "skin") { // apparence : l'apparat choisi, sinon la pièce équipée en grisé
+      const sk = skinOf(b, sp, i), can = !!SKIN_SLOTS[sp];
+      return h("button", { type: "button", class: "slot" + (sk ? " skinned" : " dim") + (on ? " on" : ""), disabled: !can, title: sk ? item(sk)[0] : can ? label + " : choisir un apparat" : label + " : pas d'apparat",
+        "aria-label": sk ? item(sk)[0] : label + (can ? " sans apparat" : ""), onclick: () => { bSlot = on ? null : { sp, i }; render(); if (bSlot) setTimeout(() => document.getElementById("slot-edit")?.scrollIntoView({ block: "nearest", behavior: "smooth" }), 30); } },
+        sk ? icon(sk, 46) : id ? icon(id, 46) : [ghostIcon(sp), h("span", { class: "slot-l", text: label.split(" ")[0] })]);
+    }
     return h("button", { type: "button", class: "slot" + (id ? "" : " nil") + (on ? " on" : ""), title: id ? item(id)[0] + " · niv. " + item(id)[1] : label, "aria-label": (id ? item(id)[0] : label + " vide"),
       onclick: () => { bSlot = on ? null : { sp, i }; render(); if (bSlot) setTimeout(() => document.getElementById("slot-edit")?.scrollIntoView({ block: "nearest", behavior: "smooth" }), 30); } },
       id ? icon(id, 46) : [ghostIcon(sp), h("span", { class: "slot-l", text: label.split(" ")[0] })], fm ? h("span", { class: "slot-fm", text: "FM" }) : null);
@@ -3077,7 +3084,15 @@ function dollPanel(b, jet) {
   const sexSeg = h("span", { class: "seg", role: "group", "aria-label": "Sexe" }, [["m", "♂"], ["f", "♀"]].map(([v, l]) => h("button", { type: "button", "aria-pressed": (b.sexe || "m") === v ? "true" : "false", "aria-label": v === "m" ? "Masculin" : "Féminin", onclick: () => save({ sexe: v }) }, l)));
   // Éditeur de la case ouverte : choix de l'objet, forgemagie
   let editor = null;
-  if (bSlot) {
+  if (bSlot && dollMode === "skin") { // choix de l'apparat de la case
+    const { sp, i } = bSlot, sk = skinOf(b, sp, i), label = SLOT_NAMES[sp] || "Case";
+    editor = SKIN_SLOTS[sp] ? h("div", { class: "slot-edit", id: "slot-edit" },
+      h("div", { class: "row between" }, sk ? itemLink(sk, "Apparat · " + label) : h("h3", { style: "margin:0", text: "Apparat : " + label.toLowerCase() }),
+        h("div", { class: "row", style: "gap:6px" }, sk ? h("button", { type: "button", class: "btn sm", onclick: () => { setSkin(b, sp, i, null); render(); } }, "Retirer l'apparat") : null,
+          h("button", { type: "button", class: "x", "aria-label": "Fermer", onclick: () => { bSlot = null; render(); } }, "×"))),
+      searchBox("Chercher un apparat (" + label.toLowerCase() + ")…", { types: SKIN_SLOTS[sp], all: true, limit: 40 }, nid => { setSkin(b, sp, i, nid); render(); }, "q-skin"),
+      h("small", { class: "muted", text: "Ou parcours tous les cosmétiques avec leurs prix dans Équipement › Cosmétiques." })) : null;
+  } else if (bSlot) {
     const { sp, i } = bSlot, id = slotItem(b, sp, i), lvl = b.perso && b.perso.lvl ? b.perso.lvl : 200;
     const put = nid => {
       if (b.items.includes(nid)) { toast(item(nid)[0] + " est déjà équipé"); return; }
@@ -3098,6 +3113,7 @@ function dollPanel(b, jet) {
   }
   return h("section", { class: "panel doll-panel" },
     h("div", { class: "row", style: "gap:8px" }, br ? h("img", { src: headSrc(b), alt: "", width: 34, height: 34, style: "border-radius:8px" }) : null, breedSel, sexSeg,
+      h("span", { class: "seg", role: "group", "aria-label": "Affichage" }, [["equip", "Équipement"], ["skin", "Apparence"]].map(([v, l]) => h("button", { type: "button", "aria-pressed": dollMode === v ? "true" : "false", onclick: () => { dollMode = v; bSlot = null; render(); } }, l))),
       h("span", { class: "small muted", text: "Touche une case pour choisir ou changer la pièce." })),
     h("div", { class: "doll" },
       h("div", { class: "doll-col" }, DOLL.left.map(slotBtn)), center, h("div", { class: "doll-col" }, DOLL.right.map(slotBtn)),
@@ -3132,6 +3148,77 @@ function fmSection(b, jet) {
     })));
 }
 const FM_OPEN = new Set();
+
+// =====================================================================
+// Cosmétiques : apparats, objets vivants, montures d'apparat ; garde-robe par build (b.skin = {"case-n°": objet})
+// =====================================================================
+const SKIN_CATS = [["", "Tous"], ["246", "Chapeaux"], ["247", "Capes"], ["248", "Boucliers"], ["249", "Familiers"], ["250", "Montiliers"], ["324", "Montures"],
+  ["251", "Armes"], ["113", "Objets vivants"], ["304", "Panoplies"], ["252", "Divers"]];
+const SKIN_TYPE_SET = new Set(SKIN_CATS.slice(1).map(([t]) => +t));
+// Cases d'équipement qui acceptent un apparat : case -> types d'apparat
+const SKIN_SLOTS = { 10: [246, 113], 11: [247, 113], 1: [113], 3: [113], 4: [113], 5: [113], 7: [248], 12: [249, 250, 324], 2: [251] };
+const SLOT_NAMES = { 10: "Chapeau", 11: "Cape", 1: "Amulette", 3: "Anneau", 4: "Ceinture", 5: "Bottes", 7: "Bouclier", 12: "Familier / monture", 2: "Arme" };
+const skinSlotsFor = id => Object.entries(SKIN_SLOTS).filter(([, ts]) => ts.includes(item(id)[2])).map(([sp]) => +sp);
+const skinOf = (b, sp, i) => (b.skin || {})[sp + "-" + i];
+function setSkin(b, sp, i, id) { b.skin = { ...(b.skin || {}) }; if (id) b.skin[sp + "-" + i] = id; else delete b.skin[sp + "-" + i]; persist("builds"); }
+let COSM = null;
+const cosmIds = () => COSM || (COSM = Object.keys(D.items).map(Number).filter(id => SKIN_TYPE_SET.has(item(id)[2])));
+let cosF = { cat: "", q: "", sort: "nom", n: 60, prix: false };
+let dollMode = "equip"; // poupée : équipement ou apparence
+function viewCosmetiques() {
+  const b = S.builds.find(x => x.id === buildSel) || S.builds[S.builds.length - 1];
+  if (b) buildSel = b.id;
+  const pr = id => { const o = priceAt(id); return o ? nowPrice(o) : null; };
+  const nq = norm(cosF.q || "");
+  let list = cosmIds().filter(id => (!cosF.cat || item(id)[2] === +cosF.cat) && (!nq || norm(item(id)[0]).includes(nq)) && (!cosF.prix || pr(id) != null));
+  const byName = (x, y) => item(x)[0].localeCompare(item(y)[0], "fr");
+  list.sort({ nom: byName, niv: (x, y) => item(y)[1] - item(x)[1] || byName(x, y), pmin: (x, y) => (pr(x) ?? 1e15) - (pr(y) ?? 1e15) || byName(x, y), pmax: (x, y) => (pr(y) ?? -1) - (pr(x) ?? -1) || byName(x, y) }[cosF.sort] || byName);
+  const counts = {}; for (const id of cosmIds()) counts[item(id)[2]] = (counts[item(id)[2]] || 0) + 1;
+  const catSel = h("select", { id: "cos-cat", "aria-label": "Catégorie" }, SKIN_CATS.map(([v, l]) => h("option", { value: v, selected: cosF.cat === v }, l + " (" + (v ? counts[v] || 0 : cosmIds().length) + ")")));
+  catSel.addEventListener("change", () => { cosF.cat = catSel.value; cosF.n = 60; render(); });
+  const sortSel = h("select", { id: "cos-sort", "aria-label": "Trier" }, [["nom", "Nom"], ["niv", "Niveau"], ["pmin", "Prix croissant"], ["pmax", "Prix décroissant"]].map(([v, l]) => h("option", { value: v, selected: cosF.sort === v }, l)));
+  sortSel.addEventListener("change", () => { cosF.sort = sortSel.value; render(); });
+  const q = h("input", { type: "search", id: "q-cos", placeholder: "Chercher un apparat, une monture…", value: cosF.q, "aria-label": "Chercher" });
+  q.addEventListener("input", () => { cosF.q = q.value; cosF.n = 60; clearTimeout(q._t); q._t = setTimeout(render, 250); });
+  const prixCb = h("input", { type: "checkbox", checked: cosF.prix }); prixCb.addEventListener("change", () => { cosF.prix = prixCb.checked; render(); });
+  // Garde-robe du build choisi
+  let wardrobe = null;
+  if (b) {
+    const bs = h("select", { id: "cos-build", "aria-label": "Build" }, S.builds.map(x => h("option", { value: x.id, selected: x.id === b.id }, x.name)));
+    bs.addEventListener("change", () => { buildSel = bs.value; render(); });
+    const worn = Object.entries(b.skin || {}).filter(([, id]) => D.items[id]);
+    const tot = worn.reduce((t, [, id]) => t + (pr(id) || 0), 0), noPrice = worn.filter(([, id]) => pr(id) == null).length;
+    wardrobe = h("section", { class: "panel" },
+      h("div", { class: "row between" }, h("h2", { text: "Garde-robe" }), h("div", { class: "row", style: "gap:8px" }, h("span", { class: "label", text: "Build" }), bs,
+        h("button", { type: "button", class: "btn sm primary", onclick: () => { dollMode = "skin"; location.hash = "#builds"; } }, "Voir sur le personnage"))),
+      worn.length ? h("div", { class: "chips" }, worn.map(([k, id]) => { const [sp] = k.split("-").map(Number);
+        return h("span", { class: "chip skinchip" }, icon(id, 24), h("span", {}, h("b", { text: item(id)[0] }), " · " + (SLOT_NAMES[sp] || "")),
+          h("button", { type: "button", class: "x", "aria-label": "Retirer " + item(id)[0], onclick: () => { const [s2, i2] = k.split("-").map(Number); setSkin(b, s2, i2, null); render(); } }, "×")); }))
+        : h("p", { class: "muted", text: "Aucun apparat sur ce build. Choisis-en ci-dessous avec « Mettre sur le build »." }),
+      worn.length ? h("p", { class: "small muted", text: "Coût de la garde-robe à l'HDV : " + kk(tot) + " ₭" + (noPrice ? " + " + noPrice + " sans prix" : "") }) : null);
+  }
+  const put = (id, sp) => { const i = 0; setSkin(b, sp, i, id); toast(item(id)[0] + " mis sur « " + b.name + " » (" + SLOT_NAMES[sp] + ")"); render(); };
+  const shown = list.slice(0, cosF.n);
+  return h("div", { class: "stack" },
+    wardrobe || h("div", { class: "empty" }, h("strong", { text: "Pas encore de build" }), h("span", { text: "Crée ou importe un build dans Builds pour lui composer une garde-robe. Tu peux déjà parcourir les cosmétiques." })),
+    h("section", { class: "panel" },
+      h("div", { class: "row between" }, h("h2", { text: "Cosmétiques" }), h("span", { class: "small muted", text: fmt.format(list.length) + " objet" + (list.length > 1 ? "s" : "") })),
+      h("div", { class: "filters" }, h("div", { class: "search" }, q), catSel, sortSel, h("label", { class: "check small" }, prixCb, "Avec un prix HDV")),
+      shown.length ? h("div", { class: "cosgrid" }, shown.map(id => {
+        const slots = skinSlotsFor(id), p = pr(id), worn = b && Object.values(b.skin || {}).includes(id);
+        let action = null;
+        if (b && slots.length === 1) action = h("button", { type: "button", class: "btn sm" + (worn ? "" : " primary"), disabled: worn, onclick: () => put(id, slots[0]) }, worn ? "Porté" : "Mettre sur le build");
+        else if (b && slots.length > 1) { const s2 = h("select", { "aria-label": "Case pour " + item(id)[0] }, h("option", { value: "" }, worn ? "Porté · changer de case" : "Mettre sur…"), slots.map(sp => h("option", { value: sp }, SLOT_NAMES[sp]))); s2.addEventListener("change", () => { if (s2.value) put(id, +s2.value); }); action = s2; }
+        return h("div", { class: "coscard" + (worn ? " worn" : "") },
+          h("button", { type: "button", class: "cosimg", "aria-label": "Fiche de " + item(id)[0], onclick: () => openSheet(id) }, icon(id, 64)),
+          h("strong", { class: "cosn", text: item(id)[0] }),
+          h("small", { class: "muted", text: typeName(id) + (item(id)[1] > 1 ? " · niv. " + item(id)[1] : "") }),
+          h("span", { class: "chip " + (p != null ? "kamas" : ""), text: p != null ? k(p) + " ₭" : "pas de prix" }),
+          action);
+      })) : h("div", { class: "empty" }, h("strong", { text: "Aucun cosmétique ne correspond" }), h("span", { text: "Change la recherche ou la catégorie." })),
+      list.length > shown.length ? h("div", { class: "row", style: "justify-content:center" }, h("button", { type: "button", class: "btn", onclick: () => { cosF.n += 120; render(); } }, "Afficher plus (" + fmt.format(list.length - shown.length) + " restants)")) : null,
+      h("p", { class: "note", text: "Apparats, objets vivants, familiers, montiliers et montures d'apparat du jeu, avec leurs icônes Dofus 3 et le prix d'Orukam (relevé du groupe, sinon Kamamaster). Les cosmétiques ne changent pas les stats. Le rendu 3D du personnage habillé n'existe pas en accès public : la poupée du build montre les icônes des apparats choisis (bouton « Apparence »)." })));
+}
 
 // =====================================================================
 // Comparateur de builds : pièces, statistiques, coût, panoplies
@@ -4240,7 +4327,7 @@ const IC = {
 const svgI = name => { const el = s("svg", { class: "i", viewBox: "0 0 24 24", "aria-hidden": "true" }); for (const d of IC[name].split(" M")) el.append(s("path", { d: d.startsWith("M") ? d : "M" + d })); return el; };
 const TABS = [
   ["accueil", "Accueil", "home", "--c-home"], ["plan", "Plan de craft", "hammer", "--c-craft", "c-plan"], ["rentabilite", "Rentabilité", "trend", "--c-gold"],
-  ["prix", "Prix HDV", "coins", "--c-gold", "c-prix"], ["tournee", "Tournée HDV", "route", "--c-gold", "c-tour"], ["journal", "Journal", "ledger", "--c-journal"], ["alertes", "Alertes", "bell", "--c-gold", "c-alert"], ["farm", "Farm", "leaf", "--c-farm"], ["metiers", "Métiers", "up", "--c-craft"], ["brisage", "Brisage", "rune", "--c-alm"], ["serveur", "Vue d'ensemble", "globe", "--c-oru"], ["almanax", "Almanax", "calendar", "--c-alm"], ["carte", "Carte", "map", "--c-oru"], ["cotes", "Cotes HDV", "chart", "--c-oru"], ["tendances", "Tendances", "trend", "--c-oru"], ["donjons", "Donjons", "castle", "--c-oru"], ["builds", "Builds", "shield", "--c-build", "c-builds"], ["comparer", "Comparer", "compare", "--c-build"],
+  ["prix", "Prix HDV", "coins", "--c-gold", "c-prix"], ["tournee", "Tournée HDV", "route", "--c-gold", "c-tour"], ["journal", "Journal", "ledger", "--c-journal"], ["alertes", "Alertes", "bell", "--c-gold", "c-alert"], ["farm", "Farm", "leaf", "--c-farm"], ["metiers", "Métiers", "up", "--c-craft"], ["brisage", "Brisage", "rune", "--c-alm"], ["serveur", "Vue d'ensemble", "globe", "--c-oru"], ["almanax", "Almanax", "calendar", "--c-alm"], ["carte", "Carte", "map", "--c-oru"], ["cotes", "Cotes HDV", "chart", "--c-oru"], ["tendances", "Tendances", "trend", "--c-oru"], ["donjons", "Donjons", "castle", "--c-oru"], ["builds", "Builds", "shield", "--c-build", "c-builds"], ["comparer", "Comparer", "compare", "--c-build"], ["cosmetiques", "Cosmétiques", "shield", "--c-build"],
   ["stock", "Inventaire", "bag", "--c-stock", "c-stock"], ["encyclopedie", "Encyclopédie", "book", "--c-ency"], ["compte", "Compte", "user", "--c-save"],
 ];
 // Sections regroupées : menu latéral (bureau), barre du bas + sous-onglets (téléphone)
@@ -4249,7 +4336,7 @@ const GROUPS = [
   ["marche", "Marché", "coins", "--c-gold", ["prix", "tournee", "rentabilite", "journal", "alertes"]],
   ["orukam", "Orukam", "globe", "--c-oru", ["serveur", "cotes", "tendances", "donjons", "carte", "brisage"]],
   ["production", "Production", "hammer", "--c-craft", ["plan", "metiers", "farm", "stock"]],
-  ["equipement", "Équipement", "shield", "--c-build", ["builds", "comparer", "encyclopedie"]],
+  ["equipement", "Équipement", "shield", "--c-build", ["builds", "comparer", "cosmetiques", "encyclopedie"]],
   ["compte", "Compte", "user", "--c-save", ["compte"]],
 ];
 const tabOf = v => TABS.find(t => t[0] === v);
@@ -4259,7 +4346,7 @@ try { lastInGroup = JSON.parse(localStorage.getItem("atelier-nav") || "{}"); } c
 // Icônes du jeu pour les menus (objets de Dofus, planche d'icônes locale) ; dessin de secours sinon
 const GI = { accueil: 548, almanax: 21014, marche: 8425, prix: 8425, tournee: 14978, rentabilite: 745, journal: 678, alertes: 1339,
   orukam: 737, serveur: 737, cotes: 489, tendances: 1328, donjons: 8437, carte: 15378, brisage: 1519,
-  production: 147, plan: 147, metiers: 14146, farm: 289, stock: 1699, equipement: 2411, builds: 2411, comparer: 22444, encyclopedie: 2337, compte: 11270 };
+  production: 147, plan: 147, metiers: 14146, farm: 289, stock: 1699, equipement: 2411, builds: 2411, comparer: 22444, cosmetiques: 8069, encyclopedie: 2337, compte: 11270 };
 const gameIcon = (key, ic, px) => GI[key] && D && D.items[GI[key]] && item(GI[key])[3] >= 0 ? icon(GI[key], px, "gi") : svgI(ic);
 function navLink(v, cls) {
   const [, label, ic, c, cnt] = tabOf(v);
@@ -4318,6 +4405,7 @@ function heroFor(v) {
     brisage: ["Brisage", "Les équipements à crafter puis briser pour revendre les runes, aux prix d'Orukam.", "rune", [...new Set(Object.values(RUNES).map(r => r[1]))].filter(id => priceAt(id)).slice(0, 8)],
     comparer: ["Comparer deux builds", "Pièces, statistiques et coût côte à côte, pour choisir la meilleure variante.", "compare", [...new Set(S.builds.flatMap(b => b.items))]],
     builds: ["Builds", "Importe un build, vois ses stats, son coût et ce qu'il faut farmer.", "shield", bsel ? bsel.items : []],
+    cosmetiques: ["Cosmétiques", "Apparats, objets vivants et montures d'apparat, avec leur prix à Orukam, et la garde-robe de tes builds.", "shield", cosmIds().filter(id => item(id)[3] >= 0 && item(id)[2] === 246).slice(0, 8)],
     stock: ["Inventaire", "Ce que tu as sous la main, valorisé au prix du groupe.", "bag", Object.keys(S.stock).map(Number)],
     encyclopedie: ["Encyclopédie", fmt.format(INDEX.length) + " objets, " + fmt.format(Object.keys(D.recipes).length) + " recettes, effets, drops et panoplies.", "book", []],
     tournee: ["Tournée HDV", TOUR && TOUR.i < TOUR.ids.length ? "Objet " + (TOUR.i + 1) + " sur " + TOUR.ids.length + " · HDV " + hdvName(hdvOf(TOUR.ids[TOUR.i])) : "Relève à la chaîne les prix qui manquent, rangés par hôtel des ventes.", "route", TOUR && TOUR.i < TOUR.ids.length ? TOUR.ids.slice(TOUR.i, TOUR.i + 8) : tourCandidates().ids],
@@ -4381,7 +4469,7 @@ function decorate(root, v) {
 // =====================================================================
 // Rendu et navigation
 // =====================================================================
-const VIEWS = { tendances: viewTendances, almanax: viewAlmanax, carte: viewCarte, serveur: viewServeur, cotes: viewCotes, donjons: viewDonjons, brisage: viewBrisage, comparer: viewComparer, alertes: viewAlertes, metiers: viewMetiers, journal: viewJournal, tournee: viewTournee, farm: viewFarm, builds: viewBuilds, accueil: viewAccueil, plan: viewPlan, rentabilite: viewRentabilite, prix: viewPrix, stock: viewStock, encyclopedie: viewEncyclopedie, compte: viewSauvegarde };
+const VIEWS = { tendances: viewTendances, almanax: viewAlmanax, carte: viewCarte, serveur: viewServeur, cotes: viewCotes, donjons: viewDonjons, brisage: viewBrisage, comparer: viewComparer, alertes: viewAlertes, metiers: viewMetiers, journal: viewJournal, tournee: viewTournee, farm: viewFarm, builds: viewBuilds, cosmetiques: viewCosmetiques, accueil: viewAccueil, plan: viewPlan, rentabilite: viewRentabilite, prix: viewPrix, stock: viewStock, encyclopedie: viewEncyclopedie, compte: viewSauvegarde };
 function renderCounts() {
   const set = (id, n) => { const el = document.getElementById(id); if (el) { el.textContent = n; el.dataset.z = n ? "0" : "1"; } };
   set("c-plan", S.targets.length);

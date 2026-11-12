@@ -578,7 +578,7 @@ details.panel > summary::-webkit-details-marker { display: none; }
 .slot:hover { border-color: var(--c-build); }
 .slot.on { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent); }
 .slot .ghost { position: absolute; inset: 0; margin: auto; filter: grayscale(1) brightness(.8); opacity: .22; }
-.slot.nil .slot-l { position: relative; font-size: .56rem; max-width: 100%; overflow: hidden; font-weight: 800; text-transform: uppercase; letter-spacing: .04em; text-align: center; line-height: 1.1; opacity: .7; }
+.slot .slot-l { position: relative; font-size: .56rem; max-width: 100%; overflow: hidden; font-weight: 800; text-transform: uppercase; letter-spacing: .04em; text-align: center; line-height: 1.1; opacity: .7; }
 .slot .ico { background-color: transparent !important; box-shadow: none !important; }
 .slot-fm { position: absolute; right: -4px; top: -6px; font: 800 .58rem var(--f-body); padding: 1px 4px; border-radius: 6px; background: var(--kamas); color: #241a00; }
 .doll-c { position: relative; display: grid; place-items: center; min-height: 260px; }
@@ -598,7 +598,7 @@ tr.fm-exo td { background: color-mix(in srgb, var(--kamas) 8%, transparent); }
   .doll { gap: 6px; padding: 8px; }
   .slot { width: 46px; height: 46px; border-radius: 10px; }
   .slot .ico { transform: scale(.82); }
-  .slot.nil .slot-l { font-size: .48rem; letter-spacing: 0; }
+  .slot .slot-l { font-size: .48rem; letter-spacing: 0; }
   .doll-c { min-height: 200px; }
   .doll-row { gap: 4px; }
   .dmg { white-space: normal; }
@@ -658,3 +658,17 @@ ul.fx li.chl { display: flex; }
 .fs2.ok { box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--good) 45%, transparent); }
 .dc-st .chl { gap: 3px; justify-content: center; }
 @media (max-width: 720px) { .fs2grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+/* Cosmétiques */
+[data-sec="cosmetiques"] { --sec: var(--c-build); }
+.cosgrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px; }
+.coscard { display: grid; justify-items: center; align-content: start; gap: 5px; padding: 10px; border-radius: 14px; background: var(--sunk); border: 1px solid var(--line); text-align: center; }
+.coscard.worn { border-color: var(--good); box-shadow: 0 0 0 1px var(--good); }
+.coscard .cosimg { padding: 4px; border: 0; border-radius: 14px; cursor: pointer; background: radial-gradient(circle at 50% 40%, #2f4540, transparent 70%); }
+.coscard .cosimg .ico { background-color: transparent !important; box-shadow: none !important; }
+.coscard .cosn { font-size: .88rem; line-height: 1.2; overflow-wrap: anywhere; }
+.coscard select, .coscard .btn { width: 100%; max-width: 100%; }
+.chip.skinchip { display: inline-flex; align-items: center; gap: 6px; }
+.slot.dim .ico { filter: grayscale(.9) brightness(.6); opacity: .55; }
+.slot.skinned { border-color: var(--c-alm); box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--c-alm) 40%, transparent); }
+.slot:disabled { cursor: default; opacity: .6; }
+@media (max-width: 720px) { .cosgrid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
