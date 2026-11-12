@@ -460,12 +460,14 @@ function delObs(id, d) {
 
 // Coût de fabrication en fourchette, à une date donnée.
 // Pour chaque ingrédient on retient la voie la moins chère : l'acheter à l'HDV ou le fabriquer.
-function coster(at) {
+// Coût d'un objet : acheter ou fabriquer (voie la moins chère). Par défaut en fourchette (basse – haute) ;
+// avec now = true, au prix actuel (achat immédiat, comme dans l'onglet Métiers)
+function coster(at, now = false) {
   const memo = new Map();
   function best(id, depth, stack) {
     if (memo.has(id)) return memo.get(id);
     const p = priceAt(id, at);
-    const buy = p ? { lo: p.lo, hi: p.hi, missing: 0, route: "buy" } : null;
+    const buy = p ? (now ? { lo: nowPrice(p), hi: nowPrice(p), missing: 0, route: "buy" } : { lo: p.lo, hi: p.hi, missing: 0, route: "buy" }) : null;
     let craft = null;
     if (recipe(id) && depth < 6 && !stack.has(id)) { stack.add(id); craft = craftOf(id, depth, stack); stack.delete(id); }
     let res;
@@ -2178,7 +2180,7 @@ function viewMetiers() {
   const daySel = h("select", { id: "metier-day", "aria-label": "Jour de craft" }, days.map((x, i) => h("option", { value: i, selected: i === dayIdx }, x.label)));
   daySel.addEventListener("change", () => { metierDay = +daySel.value; render(); });
   const nextB = upcoming[0] || null;
-  const C = coster();
+  const C = coster(undefined, true); // prix actuels : achat des ingrédients et revente au même moment
   const plan = xpPlan(job, lv, to, bonus, mode, C, B);
   const totN = plan.steps.reduce((t, s) => t + s.n, 0), unknown = plan.steps.filter(s => s.c == null);
   const totC = plan.steps.reduce((t, s) => t + (s.c ?? 0) * s.n, 0);
@@ -2223,7 +2225,7 @@ function viewMetiers() {
           h("span", { class: "v", style: "font-size:1.2rem", text: nextB ? nextB.start.toLocaleDateString("fr-FR", { day: "numeric", month: "long" }) : "—" }),
           h("span", { class: "small muted", text: nextB ? nextB.fx.map(fxLabel).join(", ") + " · dans " + daysTo(nextB.start) + " j" : "aucun autre bonus prévu" }),
           nextB && days.findIndex(x => +x.d === +nextB.start) > 0 && dayIdx === 0 ? h("button", { type: "button", class: "btn sm", style: "justify-self:start;margin-top:4px", onclick: () => { metierDay = days.findIndex(x => +x.d === +nextB.start); render(); } }, "Calculer pour ce jour") : null)),
-      h("p", { class: "note", text: "Calcul du simulateur d'XP de DofusDB : une recette rapporte d'autant plus d'XP que son niveau est proche du tien, plus du tout au-delà de 100 niveaux d'écart, et certains objets rapportent moins (pains, potions, alliages…). Jour de craft : son bonus d'Almanax est inclus : XP en plus, ingrédients économisés (coût et liste d'achat réduits), objets fabriqués en plus (revente augmentée, en moyenne). Autre bonus d'XP : parchemin, équipement… « Le moins cher » choisit à chaque niveau la recette au meilleur coût d'ingrédients par XP ; « Le plus rentable », celle qui coûte le moins par XP une fois revendue (coût moins revente, taxe déduite) ; « Le moins de crafts », celle qui rapporte le plus d'XP." })),
+      h("p", { class: "note", text: "Prix utilisés : prix actuel de chaque objet (sinon milieu de la fourchette), pour l'achat des ingrédients comme pour la revente. Calcul du simulateur d'XP de DofusDB : une recette rapporte d'autant plus d'XP que son niveau est proche du tien, plus du tout au-delà de 100 niveaux d'écart, et certains objets rapportent moins (pains, potions, alliages…). Jour de craft : son bonus d'Almanax est inclus : XP en plus, ingrédients économisés (coût et liste d'achat réduits), objets fabriqués en plus (revente augmentée, en moyenne). Autre bonus d'XP : parchemin, équipement… « Le moins cher » choisit à chaque niveau la recette au meilleur coût d'ingrédients par XP ; « Le plus rentable », celle qui coûte le moins par XP une fois revendue (coût moins revente, taxe déduite) ; « Le moins de crafts », celle qui rapporte le plus d'XP." })),
     h("div", { class: "grid2 wide-left" },
       h("section", { class: "panel" },
         h("div", { class: "row between" }, h("h2", { text: "Plan de montée" }),
