@@ -510,3 +510,41 @@ tr.today td { background: color-mix(in srgb, var(--kamas) 10%, transparent); }
 .xpbar span { position: relative; padding: 0 12px; font: 700 .8rem var(--f-body); color: var(--fg); text-shadow: 0 1px 2px rgb(0 0 0 / .6); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .selbox { display: inline-flex; align-items: center; gap: 8px; } .selbox select { min-width: 0; max-width: 100%; }
 @media (min-width: 1100px) { .tiles:has(> :nth-child(5)) { grid-template-columns: repeat(5, minmax(0, 1fr)); } }
+
+/* ===== Téléphone : rien ne dépasse de l'écran, aucun défilement de gauche à droite ===== */
+@media (max-width: 720px) {
+  /* Sous-onglets sur plusieurs lignes */
+  .subtabs { flex-wrap: wrap; overflow: visible; }
+  .subtabs a { padding: 6px 11px; font-size: .82rem; }
+  /* Boutons à choix et étiquettes : passent à la ligne */
+  .seg { display: flex; flex-wrap: wrap; max-width: 100%; height: auto; }
+  .seg button { white-space: normal; flex: 1 1 auto; }
+  .chip { white-space: normal; max-width: 100%; }
+  .row[style*="nowrap"] { flex-wrap: wrap !important; }
+  .btn { white-space: normal; }
+  h1, h2, h3, p, small, strong, .nm, .note, .label { overflow-wrap: anywhere; }
+  .filters > *, .row > select, .filters select { max-width: 100%; }
+  /* Tableaux en cartes empilées */
+  .tablewrap { overflow-x: visible; }
+  .tablewrap table, .tablewrap tbody { display: block; width: 100%; }
+  .tablewrap thead { display: none; }
+  .tablewrap tr { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 6px 16px; padding: 10px 2px; border-bottom: 1px solid var(--line); }
+  .tablewrap tr.today { background: color-mix(in srgb, var(--kamas) 10%, transparent); border-radius: 10px; padding-inline: 8px; }
+  .tablewrap td { display: block; padding: 0; border: 0; text-align: left !important; white-space: normal; min-width: 0; }
+  .tablewrap td.mc { flex: 1 1 100%; order: -1; }
+  .tablewrap td.st { order: -2; flex: 0 0 auto; align-self: center; }
+  .tablewrap td.st + td.mc, .tablewrap td.st ~ td.mc { flex: 1 1 calc(100% - 50px); }
+  .tablewrap td[data-label]:not(.mc)::before { content: attr(data-label); display: block; font: 800 .6rem var(--f-body); text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin-bottom: 2px; }
+  .tablewrap td:empty { display: none; }
+  .tablewrap td .spark { max-width: 100%; }
+  input.cell.sm { width: 74px; }
+}
+.fld { display: inline-flex; align-items: center; gap: 6px; max-width: 100%; }
+@media (max-width: 720px) {
+  .fld { display: inline-grid; grid-auto-flow: row; gap: 3px; align-items: start; }
+  .fld:has(> .seg), .fld:has(> select) { flex: 1 1 100%; }
+  .fld > .seg, .fld > select { width: 100%; }
+  .fld:has(> span.small) { grid-template-columns: auto auto; } .fld:has(> span.small) > .label { grid-column: 1 / -1; }
+}
+@media (max-width: 720px) { .tablewrap td.hide-m, .hide-m { display: none !important; } }
+@media (max-width: 720px) { .filters input[type="number"] { width: 108px; font-size: .9rem; } input.cell.sm { width: 96px; } }

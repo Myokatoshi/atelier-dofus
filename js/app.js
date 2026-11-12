@@ -3738,7 +3738,40 @@ function heroFor(v) {
     h("span", { class: "hi" }, svgI(H[2])),
     h("div", { class: "txt" }, h("h1", { text: H[0] }), h("p", { text: H[1] })));
 }
+// Tableaux en cartes sur téléphone : chaque cellule reçoit l'intitulé de sa colonne (affiché au-dessus de la valeur),
+// la cellule de l'objet prend toute la largeur. Appliqué à chaque changement de l'affichage (vues et fiches).
+function labelTables(root) {
+  for (const t of root.querySelectorAll(".tablewrap table:not([data-lab])")) {
+    t.dataset.lab = "1";
+    const heads = [...t.querySelectorAll("thead th")].map(th => th.textContent.trim());
+    for (const tr of t.querySelectorAll("tbody tr")) {
+      const tds = [...tr.children];
+      let main = tds.find(td => td.querySelector(".itemline,.link,strong")) || tds[0];
+      tds.forEach((td, i) => {
+        if (heads[i] && !td.dataset.label) td.dataset.label = heads[i];
+        if (td.children.length === 1 && td.firstElementChild.classList.contains("star")) td.classList.add("st");
+      });
+      if (main) main.classList.add("mc");
+    }
+  }
+}
+// Réglages : chaque intitulé est regroupé avec son champ (et l'unité qui suit) pour ne jamais être séparés
+// quand la ligne passe à la ligne ; sur téléphone, l'intitulé se met au-dessus du champ
+function groupFields(root) {
+  for (const lab of root.querySelectorAll(".row > span.label, .filters > span.label")) {
+    if (lab.parentElement.classList.contains("fld")) continue;
+    const next = lab.nextElementSibling;
+    if (!next || next.classList.contains("label") || !next.matches("input, select, .seg, label, button, span.row")) continue;
+    const box = document.createElement("span"); box.className = "fld";
+    lab.before(box); box.append(lab);
+    let n = box.nextElementSibling;
+    while (n && !n.classList.contains("label") && (n.matches("input, select, .seg, button") || (n.matches("span.small") && n.textContent.trim().length <= 12))) { const m = n.nextElementSibling; box.append(n); n = m; if (box.children.length > 3) break; }
+  }
+}
+let labT = 0;
+new MutationObserver(() => { if (labT) return; labT = requestAnimationFrame(() => { labT = 0; labelTables(document); groupFields(document.getElementById("sheet")); }); }).observe(document.body, { childList: true, subtree: true });
 function decorate(root, v) {
+  groupFields(root); labelTables(root); // avant que le focus soit rendu au champ en cours de saisie
   const tab = TABS.find(t => t[0] === v);
   root.querySelectorAll(".empty").forEach(e => { if (!e.querySelector(".ei")) e.prepend(h("span", { class: "ei" }, svgI(tab ? tab[2] : "home"))); });
 }
