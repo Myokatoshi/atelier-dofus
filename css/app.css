@@ -504,3 +504,8 @@ tr.today td { background: color-mix(in srgb, var(--kamas) 10%, transparent); }
 .reschip.on { border-color: var(--rc); background: color-mix(in srgb, var(--rc) 18%, var(--surface)); }
 .reschip small { font-weight: 600; }
 .seg.wrap { flex-wrap: wrap; height: auto; }
+.reschip.off { opacity: .45; }
+.xpbar { position: relative; height: 26px; border-radius: 99px; background: var(--sunk); border: 1px solid var(--line); overflow: hidden; display: flex; align-items: center; }
+.xpbar .xpfill { position: absolute; inset: 0 auto 0 0; background: linear-gradient(90deg, color-mix(in srgb, var(--sec) 55%, transparent), var(--sec)); }
+.xpbar span { position: relative; padding: 0 12px; font: 700 .8rem var(--f-body); color: var(--fg); text-shadow: 0 1px 2px rgb(0 0 0 / .6); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.selbox { display: inline-flex; align-items: center; gap: 8px; } .selbox select { min-width: 0; max-width: 100%; }

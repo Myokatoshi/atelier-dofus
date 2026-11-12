@@ -390,7 +390,7 @@ function loadKm() {
   // Heure de la dernière vérification sur Kamamaster (toutes les 2 h) et du dernier changement des prix
   fetch("data/km/orukam-check.json", { cache: "no-cache" }).then(r => r.ok ? r.json() : null).then(j => { if (j && j.checked && (!KMC || j.checked !== KMC.checked)) { KMC = j; if (view === "serveur") render(); } }).catch(() => {});
   return fetch("data/km/orukam.json", { cache: "no-cache" }).then(r => r.ok ? r.json() : null).then(j => {
-    if (!j || !j.prices || (KM && j.fetched === KM.fetched)) return;
+    if (!j || !j.prices || (KM && j.fetched === KM.fetched && j.anomaliesAt === KM.anomaliesAt)) return;
     const first = !KM;
     KM = j;
     // Nouvelles données : l'historique et les donjons seront rechargés à la demande
@@ -939,7 +939,24 @@ function markCrafted(t) {
 // =====================================================================
 const almKey = d => pad(d.getDate()) + "/" + pad(d.getMonth() + 1);
 const almDate = key => { const [dd, mm] = key.split("/").map(Number); return dd + " " + MOIS[mm - 1]; };
-function almanaxFor(d) { const key = almKey(d); return D.almanax.find(a => a[0] === key); }
+// Offrande du jour : [JJ/MM, objet, quantité, titre, texte] ; les jours d'événement, celle de l'événement (data/xp.json)
+function almanaxFor(d) {
+  const key = almKey(d), base = D.almanax.find(a => a[0] === key);
+  if (XPR && XPR.almrew) { const e = almOn(d)[0], r = e && e[3] && XPR.almrew[e[3]]; if (r && r[3]) return [key, r[3], r[4], e[0], e[1]]; }
+  return base;
+}
+// Récompense de l'offrande pour le niveau du personnage (formules de DofusDB) : { kamas, xp }
+const charLevel = () => Math.max(1, Math.min(200, Math.round(+S.settings.lvl || 200)));
+function almReward(d) {
+  if (!XPR || !XPR.almrew) return null;
+  const e = almOn(d).find(a => a[3] && XPR.almrew[a[3]]); if (!e) return null;
+  const [opt, dur, rs] = XPR.almrew[e[3]], L = charLevel();
+  const r = rs.find(x => L >= x[0] && L <= x[1]); if (!r) return { kamas: 0, xp: 0 };
+  const N = r[3] ? L : opt, kamas = Math.floor((N * N + 20 * N - 20) * r[2] * dur);
+  const xpAt = n => n * (100 + 2 * n) ** 2 / 20 * dur * r[4];
+  const xp = Math.floor(L > opt ? .7 * xpAt(Math.min(L, 1.5 * opt)) + .3 * xpAt(opt) : xpAt(L));
+  return { kamas, xp };
+}
 function almanaxCard() {
   const now = new Date(), a = almanaxFor(now);
   if (!a) return h("section", { class: "panel" }, h("h2", { text: "Almanax" }), h("p", { class: "muted", text: "Pas d'entrée pour aujourd'hui." }));
@@ -954,7 +971,9 @@ function almanaxCard() {
         h("button", { type: "button", class: "link", onclick: () => openSheet(a[1]) }, h("h3", {}, h("span", { class: "nm", text: a[2] + " × " + item(a[1])[0] }))),
         h("div", { class: "chips" },
           h("span", { class: "chip " + (have >= a[2] ? "job" : "warn"), text: have >= a[2] ? "En stock (" + have + ")" : "En stock : " + have + " / " + a[2] }),
-          h("span", { class: "chip kamas", text: o ? "≈ " + k(midOf(o) * a[2]) + " ₭ à l'HDV" : "prix inconnu" })),
+          h("span", { class: "chip kamas", text: o ? "Offrande ≈ " + k(nowPrice(o) * a[2]) + " ₭ à l'HDV" : "prix inconnu" }),
+          (() => { const rw = almReward(now); return rw ? h("span", { class: "chip job", title: "Récompense pour un personnage niveau " + charLevel() + " (réglable dans Almanax)", text: "Récompense : " + k(rw.kamas) + " ₭ · " + kk(rw.xp) + " XP" }) : null; })(),
+          (() => { const rw = almReward(now); if (!rw || !o) return null; const b = rw.kamas - nowPrice(o) * Math.max(0, a[2] - have); return h("span", { class: "chip " + (b >= 0 ? "job" : "warn"), text: "Bilan " + (b >= 0 ? "+" : "") + k(b) + " ₭" }); })()),
         almDay(now).map(b => h("div", {}, h("p", {}, h("strong", { text: b.title + ". " }), h("span", { class: "muted", text: b.text })),
           b.fx.length ? h("div", { class: "chips", style: "margin-top:4px" }, b.fx.map(fxChip)) : null)))),
     (() => { // Bonus de métier des 30 prochains jours
@@ -962,7 +981,7 @@ function almanaxCard() {
       return up.length ? h("div", { style: "display:grid;gap:6px" }, h("span", { class: "label", text: "Bonus de métier à venir" }),
         h("div", { class: "chips" }, up.map(({ d, f }) => h("span", { class: "chip " + (f.kind === "xp" ? "kamas" : "job"), text: (dayStart(d) - dayStart(now) === 0 ? "Aujourd'hui" : d.toLocaleDateString("fr-FR", { day: "numeric", month: "short" })) + " · " + fxJobs(f) + " · " + fxLabel(f) })))) : null; })(),
     h("div", { class: "row between" }, h("span", { class: "label", text: "Les 7 prochains jours" }),
-      h("span", { class: "chip kamas", text: "À acheter : ≈ " + k(weekCost) + " ₭" + (weekMissing ? " (+ " + weekMissing + " sans prix)" : "") })),
+      h("span", { class: "chip kamas", text: "À acheter : ≈ " + k(weekCost) + " ₭" + (weekMissing ? " (+ " + weekMissing + " sans prix)" : "") + (() => { const t = days.reduce((s2, [d]) => s2 + (almReward(d)?.kamas || 0), 0); return t ? " · reçus ≈ " + k(t) + " ₭" : ""; })() })),
     h("div", { class: "almlist" }, days.map(([d, x], i) => {
       const st = S.stock[x[1]] || 0, p = priceAt(x[1]);
       return h("div", { class: "r" + (i === 0 ? " today" : "") },
@@ -1245,15 +1264,34 @@ document.addEventListener("paste", e => {
   if (f) { e.preventDefault(); importCapture(f); }
 });
 
-let prixSort = "nom";
+// Tri et catégorie de la liste des prix (gardés dans les réglages)
+const PRIX_SORTS = [["nom", "Nom (A → Z)"], ["nomd", "Nom (Z → A)"], ["prixa", "Prix croissant"], ["prixd", "Prix décroissant"], ["type", "Type"], ["niveau", "Niveau décroissant"],
+  ["age", "À revérifier en priorité"], ["recent", "Relevés les plus récents"], ["hausse", "Plus fortes hausses (7 j)"], ["baisse", "Plus fortes baisses (7 j)"]];
 function viewPrix() {
-  const ids = Object.keys(prices()).map(Number).filter(id => obsOf(id).length);
+  const allIds = Object.keys(prices()).map(Number).filter(id => obsOf(id).length && D.items[id]);
+  const prixSort = S.settings.prixSort || "nom", prixCat = S.settings.prixCat || "";
+  const ids = allIds.filter(id => !prixCat || String(item(id)[2]) === String(prixCat));
+  const byName = (a, b) => item(a.id)[0].localeCompare(item(b.id)[0], "fr");
+  const PS = {
+    nom: byName, nomd: (a, b) => -byName(a, b),
+    prixa: (a, b) => (nowPrice(a.last) ?? 0) - (nowPrice(b.last) ?? 0) || byName(a, b), prixd: (a, b) => (nowPrice(b.last) ?? 0) - (nowPrice(a.last) ?? 0) || byName(a, b),
+    type: (a, b) => typeName(a.id).localeCompare(typeName(b.id), "fr") || byName(a, b), niveau: (a, b) => item(b.id)[1] - item(a.id)[1] || byName(a, b),
+    age: (a, b) => (a.last.d < b.last.d ? -1 : a.last.d > b.last.d ? 1 : byName(a, b)), recent: (a, b) => (a.last.d > b.last.d ? -1 : a.last.d < b.last.d ? 1 : byName(a, b)),
+    hausse: (a, b) => (b.varp ?? -1e9) - (a.varp ?? -1e9) || byName(a, b), baisse: (a, b) => (a.varp ?? 1e9) - (b.varp ?? 1e9) || byName(a, b),
+  };
   const rows = ids.map(id => {
     const o = obsOf(id), last = o[o.length - 1];
     const prev = [...o].reverse().find(x => ageDays(x.d) >= 7 && x.d < last.d);
     const varp = prev ? (midOf(last) - midOf(prev)) / midOf(prev) * 100 : null;
     return { id, last, n: o.length, varp };
-  }).sort(prixSort === "age" ? (a, b) => a.last.d < b.last.d ? -1 : a.last.d > b.last.d ? 1 : item(a.id)[0].localeCompare(item(b.id)[0], "fr") : (a, b) => item(a.id)[0].localeCompare(item(b.id)[0], "fr"));
+  }).sort(PS[prixSort] || byName);
+  // Catégories présentes parmi les relevés, avec leur nombre
+  const cats = new Map(); for (const id of allIds) cats.set(item(id)[2], (cats.get(item(id)[2]) || 0) + 1);
+  const catSel = h("select", { id: "prix-cat", "aria-label": "Catégorie" }, h("option", { value: "" }, "Toutes les catégories (" + allIds.length + ")"),
+    [...cats.entries()].map(([t, n]) => [t, (D.types[t] || ["Autre"])[0], n]).sort((a, b) => a[1].localeCompare(b[1], "fr")).map(([t, nm, n]) => h("option", { value: t, selected: String(t) === String(prixCat) }, nm + " (" + n + ")")));
+  catSel.addEventListener("change", () => { S.settings.prixCat = catSel.value; persist("plan"); render(); });
+  const sortSel = h("select", { id: "prix-sort", "aria-label": "Trier" }, PRIX_SORTS.map(([v, l]) => h("option", { value: v, selected: prixSort === v }, l)));
+  sortSel.addEventListener("change", () => { S.settings.prixSort = sortSel.value; persist("plan"); render(); });
   const toShare = pendingShare();
   const kmBox = KM ? h("section", { class: "panel" }, h("div", { class: "row between" },
     h("div", { style: "display:grid;gap:3px;max-width:75ch" },
@@ -1272,9 +1310,8 @@ function viewPrix() {
     importPanel(),
     h("section", { class: "panel" },
       h("div", { class: "row between" }, h("h2", { text: SH ? "Prix du groupe à l'HDV" : "Prix relevés à l'HDV" }),
-        h("div", { class: "row", style: "gap:8px" }, h("span", { class: "chip", text: ids.length + " objets suivis" }),
-          h("span", { class: "seg", role: "group", "aria-label": "Tri" }, [["nom", "Par nom"], ["age", "À revérifier d'abord"]].map(([v, l]) =>
-            h("button", { type: "button", "aria-pressed": prixSort === v ? "true" : "false", onclick: () => { prixSort = v; render(); } }, l))))),
+        h("span", { class: "chip", text: ids.length + (ids.length !== allIds.length ? " / " + allIds.length : "") + " objets suivis" })),
+      h("div", { class: "filters" }, h("label", { class: "selbox" }, h("span", { class: "label", text: "Trier" }), sortSel), h("label", { class: "selbox" }, h("span", { class: "label", text: "Catégorie" }), catSel)),
       searchBox("Ajouter un relevé pour un objet", {}, id => openSheet(id), "q-prix"),
       rows.length ? h("div", { class: "tablewrap" }, h("table", {},
         h("thead", {}, h("tr", {}, h("th", { text: "Objet" }), h("th", { class: "n", text: "Dernière fourchette" }), h("th", { class: "n", text: "Prix actuel" }), h("th", { text: "Relevé" }), h("th", { text: "12 semaines" }), h("th", { class: "n", text: "Var. 7 j+" }), h("th", { text: "Ton relevé du jour (basse · haute · actuel)" }))),
@@ -2163,11 +2200,11 @@ function unitSrc(id) {
 }
 // Plan de montée : à chaque niveau, la recette la moins chère par XP, la plus rentable une fois revendue
 // (coût moins revente, par XP) ou celle qui rapporte le plus d'XP
-function xpPlan(job, from, to, bonus, mode, C, B = { eco: 0, fab: 0 }) {
+function xpPlan(job, from, to, bonus, mode, C, B = { eco: 0, fab: 0 }, startXp = null) {
   const recs = Object.keys(D.recipes).map(Number).filter(id => D.recipes[id][0] === job && xpRatio(id) > 0);
   const cost = new Map(), sell = new Map();
   for (const id of recs) { const c = C.craft(id), v = resale(id); cost.set(id, c.missing ? null : (c.lo + c.hi) / 2 * (1 - B.eco / 100)); sell.set(id, v == null ? null : v * (1 + B.fab / 100)); }
-  let xp = lvToXp(from); const target = lvToXp(Math.min(200, to)); const steps = [];
+  let xp = startXp != null ? startXp : lvToXp(from); const target = lvToXp(Math.min(200, to)); const steps = [];
   for (let guard = 0; xp < target && guard < 400; guard++) {
     const lv = xpToLv(xp);
     let best = null, most = null;
@@ -2209,14 +2246,22 @@ function viewMetiers() {
   const mode = S.settings.xpmode || "cost";
   const sel = h("select", { id: "metier-job", "aria-label": "Métier" }, jobs.map(j => h("option", { value: j, selected: j === job }, jobName(j))));
   sel.addEventListener("change", () => { S.settings.job = +sel.value; metierDay = 0; persist("plan"); render(); });
-  const lvIn = numInput(lv, v => { const n = Math.max(1, Math.min(200, Math.round(+v) || 1)); S.settings.jobs = { ...(S.settings.jobs || {}), [job]: n }; persist("plan"); }, { sm: true, label: "Niveau actuel du métier", id: "metier-lv" });
+  const lvIn = numInput(lv, v => { const n = Math.max(1, Math.min(200, Math.round(+v) || 1)); S.settings.jobs = { ...(S.settings.jobs || {}), [job]: n }; const jx = { ...(S.settings.jobxp || {}) }; delete jx[job]; S.settings.jobxp = jx; persist("plan"); }, { sm: true, label: "Niveau actuel du métier", id: "metier-lv" });
+  // XP actuelle (barre d'XP du métier en jeu) : total d'XP, le niveau s'en déduit ; sinon début du niveau
+  const xpSaved = (S.settings.jobxp || {})[job];
+  const xpNow = xpSaved != null && xpToLv(xpSaved) === lv ? xpSaved : lvToXp(lv);
+  const xpIn = numInput(xpSaved != null && xpToLv(xpSaved) === lv ? fmt.format(xpSaved) : "", v => {
+    const n = parseKamas(String(v)); const jx = { ...(S.settings.jobxp || {}) };
+    if (n == null || n <= 0) delete jx[job]; else { jx[job] = Math.min(lvToXp(200), Math.round(n)); S.settings.jobs = { ...(S.settings.jobs || {}), [job]: xpToLv(jx[job]) }; }
+    S.settings.jobxp = jx; persist("plan"); }, { sm: true, ph: fmt.format(lvToXp(lv)), label: "XP actuelle du métier", id: "metier-xp" });
+  const lvStart = lvToXp(lv), lvEnd = lvToXp(Math.min(200, lv + 1)), pct = lv >= 200 ? 100 : Math.max(0, Math.min(100, (xpNow - lvStart) / (lvEnd - lvStart) * 100));
   const toIn = numInput(to, v => { const n = Math.max(2, Math.min(200, Math.round(+v) || 200)); S.settings.jobt = { ...(S.settings.jobt || {}), [job]: n }; persist("plan"); }, { sm: true, label: "Niveau visé", id: "metier-to" });
   const bonusIn = numInput(extra || "", v => { const n = Math.round(+String(v).replace("%", "").trim()); S.settings.xpbonus = n > 0 ? Math.min(500, n) : 0; persist("plan"); }, { sm: true, ph: "0", label: "Autre bonus d'XP en %", id: "metier-bonus" });
   const daySel = h("select", { id: "metier-day", "aria-label": "Jour de craft" }, days.map((x, i) => h("option", { value: i, selected: i === dayIdx }, x.label)));
   daySel.addEventListener("change", () => { metierDay = +daySel.value; render(); });
   const nextB = upcoming[0] || null;
   const C = coster(undefined, true); // prix actuels : achat des ingrédients et revente au même moment
-  const plan = xpPlan(job, lv, to, bonus, mode, C, B);
+  const plan = xpPlan(job, lv, to, bonus, mode, C, B, xpNow);
   const totN = plan.steps.reduce((t, s) => t + s.n, 0), unknown = plan.steps.filter(s => s.c == null);
   const totC = plan.steps.reduce((t, s) => t + (s.c ?? 0) * s.n, 0);
   const totV = plan.steps.reduce((t, s) => t + (s.v ?? 0) * s.n, 0), noSell = plan.steps.filter(s => s.v == null);
@@ -2233,7 +2278,7 @@ function viewMetiers() {
   let rows = Object.entries(D.recipes).filter(([id, r]) => r[0] === job && item(+id)[1] <= lv).map(([id]) => {
     id = +id; const c = C.craft(id), mid = c.missing ? null : (c.lo + c.hi) / 2 * (1 - B.eco / 100), x = craftXp(id, lv, bonus);
     const v0 = resale(id), v = v0 == null ? null : v0 * (1 + B.fab / 100);
-    return { id, lvl: item(id)[1], c, mid, x, v, b: mid != null && v != null ? v * (1 - taxRate()) - mid : null, perK: mid != null && x ? mid / x * 1000 : null, next: x ? Math.ceil((lvToXp(lv + 1) - lvToXp(lv)) / x) : null };
+    return { id, lvl: item(id)[1], c, mid, x, v, b: mid != null && v != null ? v * (1 - taxRate()) - mid : null, perK: mid != null && x ? mid / x * 1000 : null, next: x ? Math.ceil((lvToXp(lv + 1) - xpNow) / x) : null };
   });
   const total = rows.length;
   if (!metierF.all) rows = rows.filter(r => r.x > 0 && r.lvl >= lv - 40);
@@ -2245,15 +2290,18 @@ function viewMetiers() {
     h("section", { class: "panel" },
       h("div", { class: "row between" }, h("h2", { text: "Monter un métier" }), sel),
       h("div", { class: "row", style: "gap:8px" },
-        h("span", { class: "label", text: "Niveau actuel" }), lvIn, h("span", { class: "label", text: "Objectif" }), toIn,
+        h("span", { class: "label", text: "Niveau actuel" }), lvIn, h("span", { class: "label", text: "XP actuelle" }), xpIn, h("span", { class: "label", text: "Objectif" }), toIn,
         h("span", { class: "label", text: "Jour de craft" }), daySel,
         h("span", { class: "label", text: "Autre bonus d'XP" }), bonusIn, h("span", { class: "small muted", text: "%" }),
         h("span", { class: "label", text: "Recettes" }), modeSeg),
+      h("div", { class: "xpbar", title: "Barre d'XP du métier : saisis l'XP affichée en jeu pour un calcul exact" },
+        h("div", { class: "xpfill", style: "width:" + pct.toFixed(1) + "%" }),
+        h("span", { text: "Niveau " + lv + (lv < 200 ? " · " + fmt.format(Math.round(xpNow - lvStart)) + " / " + fmt.format(lvEnd - lvStart) + " XP (" + Math.floor(pct) + " %) · encore " + fmt.format(lvEnd - xpNow) + " XP pour le niveau " + (lv + 1) : " · niveau maximum") + (xpSaved == null || xpToLv(xpSaved) !== lv ? " · indique ton XP actuelle pour un calcul exact" : "") })),
       h("div", { class: "row", style: "gap:6px" }, h("span", { class: "label", text: "Bonus Almanax inclus" }),
         B.list.length ? B.list.map(({ e, f }) => h("span", { class: "chip " + (f.kind === "xp" ? "kamas" : "job"), title: e.title + " : " + e.text, text: fxLabel(f) + (["xp", "eco", "fab"].includes(f.kind) ? "" : " (non chiffré)") })) : h("span", { class: "small muted", text: "aucun ce jour-là" }),
         extra ? h("span", { class: "chip", text: "Autre bonus d'XP +" + extra + " %" }) : null),
       h("div", { class: "tiles" },
-        h("div", { class: "tile" }, h("span", { class: "label", text: "Crafts nécessaires" }), h("span", { class: "v", text: plan.stuck ? "—" : fmt.format(totN) }), h("span", { class: "small muted", text: kk(Math.max(0, lvToXp(to) - lvToXp(lv))) + " XP du niveau " + lv + " au " + to + " · " + plan.steps.length + " étape" + (plan.steps.length > 1 ? "s" : "") })),
+        h("div", { class: "tile" }, h("span", { class: "label", text: "Crafts nécessaires" }), h("span", { class: "v", text: plan.stuck ? "—" : fmt.format(totN) }), h("span", { class: "small muted", text: kk(Math.max(0, lvToXp(to) - xpNow)) + " XP du niveau " + lv + (xpNow > lvStart ? " (" + Math.floor(pct) + " %)" : "") + " au " + to + " · " + plan.steps.length + " étape" + (plan.steps.length > 1 ? "s" : "") })),
         h("div", { class: "tile" }, h("span", { class: "label", text: "Coût des ingrédients" }), h("span", { class: "v", text: kk(totC) + (unknown.length ? "+" : "") }), h("span", { class: "small muted", text: unknown.length ? unknown.length + " étape(s) sans prix complet" : "aux prix d'Orukam" })),
         h("div", { class: "tile kamas" }, h("span", { class: "label", text: "Bilan après revente" }), h("span", { class: "v " + (bilan >= 0 ? "pos" : "neg"), text: (bilan >= 0 ? "+" : "") + kk(bilan) }), h("span", { class: "small muted", text: "revente " + kk(totV) + " ₭ − taxe HDV " + (S.settings.tax || 0) + " % (" + kk(totTax) + " ₭) − ingrédients" + (noSell.length ? " · " + noSell.length + " craft(s) sans prix de vente" : "") })),
         h("div", { class: "tile" }, h("span", { class: "label", text: "Prochain bonus · " + jobName(job) }),
@@ -2288,7 +2336,7 @@ function viewMetiers() {
       h("div", { class: "row between" }, h("h2", { text: jobName(job) + " · recettes au niveau " + lv }),
         h("div", { class: "row", style: "gap:8px" }, h("label", { class: "check" }, (() => { const c = h("input", { type: "checkbox", id: "metier-all", checked: metierF.all }); c.addEventListener("change", () => { metierF.all = c.checked; render(); }); return c; })(), "Toutes (" + total + ")"), sortSeg)),
       rows.length ? h("div", { class: "tablewrap" }, h("table", {},
-        h("thead", {}, h("tr", {}, h("th", { text: "Recette" }), h("th", { class: "n", text: "Niv." }), h("th", { class: "n", text: "XP / craft" }), h("th", { class: "n hide-m", text: "Crafts / niveau" }), h("th", { class: "n", text: "Coût / craft" }), h("th", { class: "n hide-m", text: "Revente" }), h("th", { class: "n", text: "Bilan / craft" }), h("th", { class: "n hide-m", text: "Coût / 1 000 XP" }), h("th", { class: "hide-m" }))),
+        h("thead", {}, h("tr", {}, h("th", { text: "Recette" }), h("th", { class: "n", text: "Niv." }), h("th", { class: "n", text: "XP / craft" }), h("th", { class: "n hide-m", text: "Crafts jusqu'au niv. " + Math.min(200, lv + 1) }), h("th", { class: "n", text: "Coût / craft" }), h("th", { class: "n hide-m", text: "Revente" }), h("th", { class: "n", text: "Bilan / craft" }), h("th", { class: "n hide-m", text: "Coût / 1 000 XP" }), h("th", { class: "hide-m" }))),
         h("tbody", {}, rows.slice(0, 80).map(r => h("tr", {},
           h("td", {}, itemLink(r.id, xpRatio(r.id) !== 1 ? "XP × " + String(xpRatio(r.id)).replace(".", ",") : recipe(r.id)[1].length + " ingrédients", 28)),
           h("td", { class: "n", text: r.lvl }),
@@ -2301,7 +2349,7 @@ function viewMetiers() {
           h("td", { class: "hide-m" }, h("button", { type: "button", class: "btn sm", onclick: () => { addTarget(r.id); toast(item(r.id)[0] + " ajouté au plan"); } }, "+ Plan")))))),
         ) : h("div", { class: "empty" }, h("strong", { text: "Aucune recette à ce niveau" }), h("span", { text: "Indique ton niveau dans ce métier, ou coche « Toutes »." })),
       rows.length > 80 ? h("p", { class: "note", text: "Seules les 80 premières recettes sont affichées." }) : null,
-      h("p", { class: "note", text: "Formules et coefficients d'XP : simulateur de dofusdb.fr. Crafts / niveau : nombre de crafts de cette recette pour passer au niveau suivant." })),
+      h("p", { class: "note", text: "Formules et coefficients d'XP : simulateur de dofusdb.fr. Dernière colonne : nombre de crafts de cette recette pour passer au niveau suivant, depuis ton XP actuelle." })),
     almanaxJobsPanel(job));
 }
 
@@ -2987,7 +3035,7 @@ function viewServeur() {
       h("div", { class: "tile" }, h("span", { class: "label", text: "Objets cotés" }), h("span", { class: "v", text: fmt.format(ids.length) }), h("span", { class: "small muted", text: "prix du groupe et de Kamamaster" })),
       h("div", { class: "tile kamas" }, h("span", { class: "label", text: "Relevés du groupe aujourd'hui" }), h("span", { class: "v", text: todayN }), h("span", { class: "small muted", text: SH ? "reçus en direct" : "mode local" })),
       h("div", { class: "tile" }, h("span", { class: "label", text: "Prix Kamamaster changés" }), h("span", { class: "v", style: "font-size:1.25rem", text: KM ? agoTime(KMC?.changed || KM.fetched) : "—" }), h("span", { class: "small muted", text: KMC ? "vérifié " + agoTime(KMC.checked) + " · toutes les 2 h" : "vérifié toutes les 2 h" })),
-      h("div", { class: "tile" }, h("span", { class: "label", text: "Zones en anomalie" }), h("span", { class: "v", text: anom.length }), h("span", { class: "small muted", text: "bonus de drop en cours" }))),
+      h("div", { class: "tile" }, h("span", { class: "label", text: "Zones en anomalie" }), h("span", { class: "v", text: anom.length }), h("span", { class: "small muted", text: "bonus de drop en cours" + (KM && KM.anomaliesAt ? " · changé " + agoTime(KM.anomaliesAt) : "") }))),
     h("section", { class: "panel" },
       h("p", { class: "note", style: "margin:0", text: "Les relevés du groupe arrivent en direct : dès qu'un membre enregistre un prix, il s'affiche chez tout le monde. Les données de Kamamaster (prix d'Orukam, brisage, anomalies, donjons) sont vérifiées toutes les 2 heures : Kamamaster ne les met lui-même à jour qu'environ une fois par jour, parfois moins, et il n'existe pas d'accès direct au serveur du jeu. Dès que le groupe a relevé un objet, son prix passe avant celui de Kamamaster ; les cotes Kamamaster qui s'écartent de plus de 3 fois de leurs derniers jours sont écartées comme douteuses. Source : kamamaster.fr." })),
     h("div", { class: "grid2 even" },
@@ -3161,8 +3209,8 @@ function viewAlmanax() {
   tSel.addEventListener("change", () => { almV.t = tSel.value; render(); });
   const moveM = n => { almV.m = new Date(almV.m.getFullYear(), almV.m.getMonth() + n, 1); render(); };
   const searching = !!(nq || almV.t);
-  let cost = 0, miss = 0;
-  for (const r of rows) if (r.a && r.d >= t0) { const p = priceAt(r.a[1]), need = Math.max(0, r.a[2] - (S.stock[r.a[1]] || 0)); if (need) { if (p) cost += need * nowPrice(p); else miss++; } }
+  let cost = 0, miss = 0, gain = 0;
+  for (const r of rows) if (r.a && r.d >= t0) { gain += almReward(r.d)?.kamas || 0; const p = priceAt(r.a[1]), need = Math.max(0, r.a[2] - (S.stock[r.a[1]] || 0)); if (need) { if (p) cost += need * nowPrice(p); else miss++; } }
   return h("div", { class: "stack" },
     h("section", { class: "panel" },
       h("div", { class: "row between" },
@@ -3171,114 +3219,191 @@ function viewAlmanax() {
           h("button", { type: "button", class: "btn sm", onclick: () => moveM(-1), "aria-label": "Mois précédent" }, "‹"),
           h("button", { type: "button", class: "btn sm", onclick: () => { almV.m = new Date(now.getFullYear(), now.getMonth(), 1); render(); } }, "Ce mois-ci"),
           h("button", { type: "button", class: "btn sm", onclick: () => moveM(1), "aria-label": "Mois suivant" }, "›"))),
-      h("div", { class: "filters" }, h("div", { class: "search" }, q), tSel),
-      h("p", { class: "note", text: "Offrande et bonus de chaque jour. Certains jours, un événement remplace le bonus habituel. Coût des offrandes à venir affichées, hors stock : ≈ " + k(cost) + " ₭" + (miss ? " (+ " + miss + " sans prix)" : "") + ". Source : DofusDB et données du jeu." })),
+      h("div", { class: "filters" }, h("div", { class: "search" }, q), tSel,
+        h("span", { class: "label", text: "Niveau du perso" }), numInput(charLevel(), v => { const n = Math.round(+v); S.settings.lvl = n >= 1 ? Math.min(200, n) : 200; persist("plan"); }, { sm: true, label: "Niveau de ton personnage", id: "alm-lvl" })),
+      h("p", { class: "note", text: "Offrande, récompense de la quête (kamas et XP pour un personnage niveau " + charLevel() + ", formules de DofusDB), bilan (kamas reçus moins l'offrande à acheter, hors stock) et bonus de chaque jour. Certains jours, un événement remplace le bonus habituel et son offrande. Sur les jours à venir affichés : offrandes à acheter ≈ " + k(cost) + " ₭" + (miss ? " (+ " + miss + " sans prix)" : "") + ", kamas reçus ≈ " + k(gain) + " ₭. Source : DofusDB et données du jeu." })),
     rows.length ? h("div", { class: "almcal" }, rows.map(r => {
       const n = Math.round((dayStart(r.d) - t0) / 864e5), st = r.a ? S.stock[r.a[1]] || 0 : 0, p = r.a ? priceAt(r.a[1]) : null;
       return h("section", { class: "panel almday" + (n === 0 ? " today" : n < 0 ? " past" : "") },
         h("div", { class: "almd" }, h("strong", { text: r.d.toLocaleDateString("fr-FR", { weekday: "short", day: "numeric", month: "short" }) }),
           h("small", { class: "muted", text: n === 0 ? "aujourd'hui" : n === 1 ? "demain" : n > 0 ? "dans " + n + " j" : "passé" })),
-        r.a ? h("div", { class: "almo" }, itemLink(r.a[1], "× " + r.a[2] + " · " + (st >= r.a[2] ? "✓ en stock" : p ? "≈ " + kk(nowPrice(p) * (r.a[2] - st)) + " ₭" : "prix inconnu"), 30)) : h("div", { class: "almo muted", text: "—" }),
+        r.a ? h("div", { class: "almo" }, itemLink(r.a[1], "× " + r.a[2] + " · " + (st >= r.a[2] ? "✓ en stock" : p ? "≈ " + kk(nowPrice(p) * (r.a[2] - st)) + " ₭" : "prix inconnu"), 30),
+          (() => { const rw = almReward(r.d); if (!rw) return null; const cost = p ? nowPrice(p) * Math.max(0, r.a[2] - st) : null, b = cost == null ? null : rw.kamas - cost;
+            return h("div", { class: "chips", style: "margin-top:6px" }, h("span", { class: "chip job", text: "+" + k(rw.kamas) + " ₭ · " + kk(rw.xp) + " XP" }),
+              b != null ? h("span", { class: "chip " + (b >= 0 ? "job" : "warn"), text: "bilan " + (b >= 0 ? "+" : "") + kk(b) + " ₭" }) : null); })()) : h("div", { class: "almo muted", text: "—" }),
         h("div", { class: "almb" }, r.b.map(b => h("div", {}, h("strong", { text: b.title }), h("small", { class: "muted", style: "display:block", text: b.text }),
           b.fx.length ? h("div", { class: "chips", style: "margin-top:4px" }, b.fx.map(fxChip)) : null))));
     })) : h("div", { class: "empty" }, h("strong", { text: "Aucun jour ne correspond" }), h("span", { text: "Change la recherche ou le type de bonus." })));
 }
 
 // =====================================================================
-// Carte interactive : ressources récoltables et zones en anomalie (Orukam)
+// Carte interactive : vraies cartes du jeu, ressources récoltables, zones en anomalie, zaaps et repères
 // =====================================================================
 let MAPD = null, mapLoading = null;
 function ensureMap() {
   if (MAPD || mapLoading) return mapLoading;
+  const empty = () => ({ worlds: [], byW: new Map(), res: [], spawns: {}, hints: [], resById: new Map(), subW: new Map() });
   mapLoading = fetch("data/map.json").then(r => r.ok ? r.json() : null).then(d => {
-    if (!d) { MAPD = { cells: [], res: [], spawns: {}, idx: new Map(), sub: new Map() }; return; }
-    d.idx = new Map(); d.sub = new Map();
-    let x0 = 1e9, x1 = -1e9, y0 = 1e9, y1 = -1e9;
-    for (const [x, y, sa] of d.cells) { d.idx.set(x + "," + y, sa); if (!d.sub.has(sa)) d.sub.set(sa, []); d.sub.get(sa).push([x, y]); x0 = Math.min(x0, x); x1 = Math.max(x1, x); y0 = Math.min(y0, y); y1 = Math.max(y1, y); }
-    d.box = [x0, x1, y0, y1];
+    if (!d || !d.worlds) { MAPD = empty(); return; }
+    d.byW = new Map(); d.subW = new Map();
+    for (const w of d.worlds) d.byW.set(w.id, { ...w, cells: [], idx: new Map(), sub: new Map(), box: [1e9, -1e9, 1e9, -1e9] });
+    for (const [x, y, sa, wid] of d.cells) {
+      const W = d.byW.get(wid); if (!W) continue;
+      W.cells.push([x, y, sa]); W.idx.set(x + "," + y, sa);
+      if (!W.sub.has(sa)) W.sub.set(sa, []); W.sub.get(sa).push([x, y]);
+      const b = W.box; b[0] = Math.min(b[0], x); b[1] = Math.max(b[1], x); b[2] = Math.min(b[2], y); b[3] = Math.max(b[3], y);
+      if (!d.subW.has(sa)) d.subW.set(sa, wid);
+    }
     d.resById = new Map(d.res.map(r => [r[0], r]));
     MAPD = d; if (view === "carte") render();
-  }).catch(() => { MAPD = { cells: [], res: [], spawns: {}, idx: new Map(), sub: new Map(), box: [0, 1, 0, 1], resById: new Map() }; });
+  }).catch(() => { MAPD = empty(); });
   return mapLoading;
 }
 const MAP_COLORS = ["#ffd166", "#4cc9f0", "#f72585", "#90be6d", "#f8961e", "#c77dff"];
-let mapF = { sel: [], job: "", q: "", an: true, cell: null };
-try { const s = JSON.parse(localStorage.getItem("atelier-carte") || "null"); if (s && Array.isArray(s.sel)) mapF.sel = s.sel.slice(0, 6); } catch {}
-const saveMapSel = () => { try { localStorage.setItem("atelier-carte", JSON.stringify({ sel: mapF.sel })); } catch {} };
-let MAPV = null; // transformation : { s : pixels par carte, ox, oy }
+// Calques de repères : zaaps, autres transports, ateliers, HDV et banques
+const HINT_LAYERS = [["zaap", "Zaaps", h => /^zaap/i.test(h[5])], ["trans", "Transports", h => h[3] === 9 && !/^zaap/i.test(h[5])],
+  ["atelier", "Ateliers", h => h[3] === 3], ["hdv", "HDV et banques", h => h[3] === 2 || /banque/i.test(h[5])]];
+let mapF = { sel: [], job: "", q: "", an: true, cell: null, world: 1, layers: { zaap: true } };
+try { const s = JSON.parse(localStorage.getItem("atelier-carte") || "null"); if (s) { if (Array.isArray(s.sel)) mapF.sel = s.sel.slice(0, 6); if (s.world) mapF.world = s.world; if (s.layers) mapF.layers = s.layers; } } catch {}
+const saveMapSel = () => { try { localStorage.setItem("atelier-carte", JSON.stringify({ sel: mapF.sel, world: mapF.world, layers: mapF.layers })); } catch {} };
+let MAPV = null; // transformation : { s : pixels par carte en largeur, ox, oy }
+const MW = () => (MAPD && (MAPD.byW.get(mapF.world) || MAPD.byW.get(1))) || null;
 const subName2 = sa => (F && F.subs[sa] ? F.subs[sa][0] : "Zone " + sa);
 const areaOf = sa => (F && F.subs[sa] ? F.subs[sa][1] : sa);
+const hintOn = h => HINT_LAYERS.some(([k, , f]) => mapF.layers[k] && f(h));
+const worldHints = () => MAPD.hints.filter(h => h[2] === MW().id);
+const worldSpawns = rid => (MAPD.spawns[rid] || []).filter(s => (s[3] || 1) === MW().id);
 function mapCellInfo(x, y) {
-  const sa = MAPD.idx.get(x + "," + y);
-  const res = mapF.sel.map((rid, i) => { const sp = (MAPD.spawns[rid] || []).find(s => s[0] === x && s[1] === y); return sp ? { rid, q: sp[2], c: MAP_COLORS[i] } : null; }).filter(Boolean);
-  return { x, y, sa, an: sa != null ? anomalyOf(sa) : 0, res };
+  const W = MW(), sa = W.idx.get(x + "," + y);
+  const res = mapF.sel.map((rid, i) => { const sp = worldSpawns(rid).find(s => s[0] === x && s[1] === y); return sp ? { rid, q: sp[2], c: MAP_COLORS[i] } : null; }).filter(Boolean);
+  const hints = worldHints().filter(h => h[0] === x && h[1] === y).map(h => h[5]);
+  return { x, y, sa, an: sa != null ? anomalyOf(sa) : 0, res, hints };
+}
+// Tuiles de 250 px (data/worldmap/<carte>/<échelle>/<n>.webp, reprises de DofusDB) ; une case (x, y) fait
+// s pixels de large et s × R de haut à l'écran (R = hauteur / largeur d'une case de la carte)
+const TILES = new Map(), HINT_IMG = new Map();
+const mapR = () => { const W = MW(); return W ? W.mapHeight / W.mapWidth : 1; };
+let mapRaf = 0;
+function mapRedraw() { if (mapRaf) return; mapRaf = requestAnimationFrame(() => { mapRaf = 0; const cv = document.querySelector(".mapcv"); if (cv && MAPV) drawMap(cv); }); }
+function tileImg(wid, sc, n) {
+  const key = wid + "/" + sc + "/" + n;
+  let im = TILES.get(key);
+  if (!im) { im = new Image(); im.onload = mapRedraw; im.onerror = () => { im.bad = true; }; im.src = "data/worldmap/" + key + ".webp"; TILES.set(key, im); }
+  return im;
+}
+function hintImg(g) {
+  let im = HINT_IMG.get(g);
+  if (!im) { im = new Image(); im.onload = mapRedraw; im.src = "data/hints/" + g + ".png"; HINT_IMG.set(g, im); }
+  return im;
 }
 function drawMap(cv) {
-  const dpr = window.devicePixelRatio || 1, W = cv.clientWidth, H = cv.clientHeight;
-  if (cv.width !== Math.round(W * dpr) || cv.height !== Math.round(H * dpr)) { cv.width = Math.round(W * dpr); cv.height = Math.round(H * dpr); }
+  const W = MW(); if (!W) return;
+  const dpr = window.devicePixelRatio || 1, Wd = cv.clientWidth, Ht = cv.clientHeight;
+  if (cv.width !== Math.round(Wd * dpr) || cv.height !== Math.round(Ht * dpr)) { cv.width = Math.round(Wd * dpr); cv.height = Math.round(Ht * dpr); }
   const ctx = cv.getContext("2d"); ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   const css = getComputedStyle(document.documentElement);
-  ctx.fillStyle = css.getPropertyValue("--bg").trim() || "#0f1517"; ctx.fillRect(0, 0, W, H);
-  const { s, ox, oy } = MAPV, gap = s > 7 ? 1 : 0;
-  const vis = (x, y) => { const px = ox + x * s, py = oy + y * s; return px > -s && py > -s && px < W && py < H; };
-  for (const [x, y, sa] of MAPD.cells) {
-    if (!vis(x, y)) continue;
-    const a = areaOf(sa), hue = (a * 47) % 360;
-    ctx.fillStyle = `hsl(${hue} 18% ${mapF.sel.length ? 17 : 21}%)`;
-    ctx.fillRect(ox + x * s, oy + y * s, s - gap, s - gap);
+  ctx.fillStyle = "#0b1a24"; ctx.fillRect(0, 0, Wd, Ht);
+  const { s, ox, oy } = MAPV, R = mapR(), sy = s * R, gap = s > 9 ? 1 : 0;
+  const X = x => ox + x * s, Y = y => oy + y * sy;
+  const vis = (x, y) => { const px = X(x), py = Y(y); return px > -s && py > -sy && px < Wd && py < Ht; };
+  // Fond : vraie carte, sinon schéma des zones
+  let tilesOk = false;
+  if (mapF.real !== false && W.scales && W.scales.length) {
+    const want = s / W.mapWidth * dpr;
+    const sc = W.scales.find(v => v >= want) || W.scales[W.scales.length - 1];
+    const cols = Math.ceil(W.totalWidth * sc / 250), rows = Math.ceil(W.totalHeight * sc / 250);
+    const toCX = px => (px / sc - W.origineX) / W.mapWidth, toCY = py => (py / sc - W.origineY) / W.mapHeight;
+    const tx0 = Math.max(0, Math.floor(((-ox / s) * W.mapWidth + W.origineX) * sc / 250)), tx1 = Math.min(cols - 1, Math.floor((((Wd - ox) / s) * W.mapWidth + W.origineX) * sc / 250));
+    const ty0 = Math.max(0, Math.floor(((-oy / sy) * W.mapHeight + W.origineY) * sc / 250)), ty1 = Math.min(rows - 1, Math.floor((((Ht - oy) / sy) * W.mapHeight + W.origineY) * sc / 250));
+    ctx.imageSmoothingQuality = "high";
+    for (let ty = ty0; ty <= ty1; ty++) for (let tx = tx0; tx <= tx1; tx++) {
+      const im = tileImg(W.id, sc, ty * cols + tx + 1);
+      const x0 = X(toCX(tx * 250)), y0 = Y(toCY(ty * 250)), x1 = X(toCX(tx * 250 + 250)), y1 = Y(toCY(ty * 250 + 250));
+      if (im.complete && im.naturalWidth) { ctx.drawImage(im, x0, y0, x1 - x0 + .5, y1 - y0 + .5); tilesOk = true; continue; }
+      // En attendant : la même zone prise dans une échelle plus petite déjà chargée
+      for (const lo of W.scales.filter(v => v < sc).reverse()) {
+        const c2 = Math.ceil(W.totalWidth * lo / 250), k2 = lo / sc, gx = Math.floor(tx * 250 * k2 / 250), gy = Math.floor(ty * 250 * k2 / 250);
+        const i2 = TILES.get(W.id + "/" + lo + "/" + (gy * c2 + gx + 1));
+        if (i2 && i2.complete && i2.naturalWidth) { ctx.drawImage(i2, tx * 250 * k2 - gx * 250, ty * 250 * k2 - gy * 250, 250 * k2, 250 * k2, x0, y0, x1 - x0 + .5, y1 - y0 + .5); tilesOk = true; break; }
+      }
+    }
   }
+  if (!tilesOk) for (const [x, y, sa] of W.cells) {
+    if (!vis(x, y)) continue;
+    ctx.fillStyle = `hsl(${(areaOf(sa) * 47) % 360} 18% 21%)`;
+    ctx.fillRect(X(x), Y(y), s - gap, sy - gap);
+  }
+  if (mapF.sel.length) { ctx.fillStyle = "rgba(5,10,14,.38)"; ctx.fillRect(0, 0, Wd, Ht); }
   // Zones en anomalie
-  const anom = mapF.an && KM ? Object.entries(KM.anomalies || {}) : [];
+  const anom = mapF.an && KM ? Object.entries(KM.anomalies || {}).filter(([sid]) => W.sub.has(+sid)) : [];
   for (const [sid, b] of anom) {
-    ctx.fillStyle = b >= 100 ? "rgba(242,95,80,.62)" : "rgba(242,140,90,.5)";
-    for (const [x, y] of MAPD.sub.get(+sid) || []) if (vis(x, y)) ctx.fillRect(ox + x * s, oy + y * s, s - gap, s - gap);
+    ctx.fillStyle = b >= 100 ? "rgba(242,70,60,.45)" : "rgba(242,130,70,.38)";
+    for (const [x, y] of W.sub.get(+sid)) if (vis(x, y)) ctx.fillRect(X(x), Y(y), s, sy);
+  }
+  if (s >= 16) {
+    ctx.strokeStyle = "rgba(255,255,255,.08)"; ctx.lineWidth = 1; ctx.beginPath();
+    for (let x = Math.floor(-ox / s); X(x) < Wd; x++) { ctx.moveTo(X(x) + .5, 0); ctx.lineTo(X(x) + .5, Ht); }
+    for (let y = Math.floor(-oy / sy); Y(y) < Ht; y++) { ctx.moveTo(0, Y(y) + .5); ctx.lineTo(Wd, Y(y) + .5); }
+    ctx.stroke();
   }
   // Ressources choisies
   mapF.sel.forEach((rid, i) => {
-    const list = MAPD.spawns[rid] || []; if (!list.length) return;
+    const list = worldSpawns(rid); if (!list.length) return;
     const mx = Math.max(...list.map(p => p[2]));
-    ctx.fillStyle = MAP_COLORS[i];
     for (const [x, y, q] of list) {
       if (!vis(x, y)) continue;
-      const r = Math.max(1.6, (s / 2 - 1) * (0.45 + 0.55 * Math.sqrt(q / mx)));
-      ctx.beginPath(); ctx.arc(ox + x * s + s / 2, oy + y * s + s / 2, r, 0, 7); ctx.fill();
+      const r = Math.max(2.2, (Math.min(s, sy) / 2 - 1) * (0.45 + 0.55 * Math.sqrt(q / mx)));
+      ctx.beginPath(); ctx.arc(X(x) + s / 2, Y(y) + sy / 2, r, 0, 7);
+      ctx.fillStyle = MAP_COLORS[i]; ctx.fill(); ctx.lineWidth = 1.2; ctx.strokeStyle = "rgba(0,0,0,.7)"; ctx.stroke();
     }
   });
-  // Pourcentage des anomalies, au centre de la zone
-  ctx.textAlign = "center"; ctx.textBaseline = "middle"; ctx.font = "800 13px " + (css.getPropertyValue("--f-body") || "sans-serif");
-  for (const [sid, b] of anom) {
-    const cells = MAPD.sub.get(+sid) || []; if (!cells.length) continue;
-    const cx = cells.reduce((t, c) => t + c[0], 0) / cells.length, cy = cells.reduce((t, c) => t + c[1], 0) / cells.length;
-    const px = ox + cx * s + s / 2, py = oy + cy * s + s / 2;
-    if (px < 0 || py < 0 || px > W || py > H) continue;
-    ctx.lineWidth = 4; ctx.strokeStyle = "rgba(0,0,0,.75)"; ctx.strokeText("+" + b + " %", px, py); ctx.fillStyle = "#fff"; ctx.fillText("+" + b + " %", px, py);
+  // Repères (zaaps, transports, ateliers, HDV)
+  const hs = Math.max(16, Math.min(30, Math.min(s, sy) * .9));
+  for (const h of worldHints()) {
+    if (!hintOn(h) || !vis(h[0], h[1])) continue;
+    const im = hintImg(h[4]), cx = X(h[0]) + s / 2, cy = Y(h[1]) + sy / 2;
+    if (im.complete && im.naturalWidth) ctx.drawImage(im, cx - hs / 2, cy - hs / 2, hs, hs);
+    else { ctx.beginPath(); ctx.arc(cx, cy, 5, 0, 7); ctx.fillStyle = "#6fd3ff"; ctx.fill(); }
   }
-  // Carte sélectionnée
-  if (mapF.cell) { ctx.strokeStyle = "#fff"; ctx.lineWidth = 2; ctx.strokeRect(ox + mapF.cell[0] * s - 1, oy + mapF.cell[1] * s - 1, s + 1, s + 1); }
+  // Pourcentage des anomalies
+  ctx.textAlign = "center"; ctx.textBaseline = "middle"; ctx.font = "800 14px " + (css.getPropertyValue("--f-body") || "sans-serif");
+  for (const [sid, b] of anom) {
+    const cells = W.sub.get(+sid);
+    const cx = cells.reduce((t, c) => t + c[0], 0) / cells.length, cy = cells.reduce((t, c) => t + c[1], 0) / cells.length;
+    const px = X(cx) + s / 2, py = Y(cy) + sy / 2;
+    if (px < 0 || py < 0 || px > Wd || py > Ht) continue;
+    ctx.lineWidth = 4; ctx.strokeStyle = "rgba(0,0,0,.8)"; ctx.strokeText("+" + b + " %", px, py); ctx.fillStyle = "#fff"; ctx.fillText("+" + b + " %", px, py);
+  }
+  if (mapF.cell) { ctx.strokeStyle = "#fff"; ctx.lineWidth = 2; ctx.strokeRect(X(mapF.cell[0]) - 1, Y(mapF.cell[1]) - 1, s + 1, sy + 1); }
 }
-function mapFit(cv, box) {
-  const [x0, x1, y0, y1] = box, W = cv.clientWidth, H = cv.clientHeight;
-  const s = Math.max(2, Math.min(W / (x1 - x0 + 3), H / (y1 - y0 + 3)));
-  MAPV = { s, ox: W / 2 - (x0 + x1 + 1) / 2 * s, oy: H / 2 - (y0 + y1 + 1) / 2 * s };
+function mapFit(cv) {
+  // Cadrage sur l'image de la carte (certaines cartes ont des cases éloignées : intérieurs, salles)
+  const M = MW(), img = M.totalWidth && mapF.real !== false ? [-M.origineX / M.mapWidth, (M.totalWidth - M.origineX) / M.mapWidth - 1, -M.origineY / M.mapHeight, (M.totalHeight - M.origineY) / M.mapHeight - 1] : null;
+  const [x0, x1, y0, y1] = img || M.box, W = cv.clientWidth, H = cv.clientHeight, R = mapR();
+  const s = Math.max(2, Math.min(W / (x1 - x0 + 3), H / ((y1 - y0 + 3) * R)));
+  MAPV = { s, ox: W / 2 - (x0 + x1 + 1) / 2 * s, oy: H / 2 - (y0 + y1 + 1) / 2 * s * R };
 }
-function mapCenter(x, y, s) { const cv = document.querySelector(".mapcv"); if (!cv || !MAPV) return; const S2 = Math.max(MAPV.s, s || 16); MAPV = { s: S2, ox: cv.clientWidth / 2 - (x + .5) * S2, oy: cv.clientHeight / 2 - (y + .5) * S2 }; drawMap(cv); }
+function mapCenter(x, y, s) { const cv = document.querySelector(".mapcv"); if (!cv || !MAPV) return; const S2 = Math.max(MAPV.s, s || 16); MAPV = { s: S2, ox: cv.clientWidth / 2 - (x + .5) * S2, oy: cv.clientHeight / 2 - (y + .5) * S2 * mapR() }; drawMap(cv); }
+function mapZoom(cv, px, py, f) { const s = Math.max(2, Math.min(90, MAPV.s * f)); MAPV = { s, ox: px - (px - MAPV.ox) * s / MAPV.s, oy: py - (py - MAPV.oy) * s / MAPV.s }; drawMap(cv); }
 function setupMap(cv, tip) {
-  if (!MAPV) mapFit(cv, MAPD.box);
+  if (!MAPV) mapFit(cv);
   drawMap(cv);
   const pts = new Map(); let moved = false, pinch = null;
-  const cellAt = (cx, cy) => { const r = cv.getBoundingClientRect(); return [Math.floor((cx - r.left - MAPV.ox) / MAPV.s), Math.floor((cy - r.top - MAPV.oy) / MAPV.s)]; };
-  const zoomAt = (cx, cy, f) => { const r = cv.getBoundingClientRect(), px = cx - r.left, py = cy - r.top; const s = Math.max(2, Math.min(60, MAPV.s * f)); MAPV = { s, ox: px - (px - MAPV.ox) * s / MAPV.s, oy: py - (py - MAPV.oy) * s / MAPV.s }; drawMap(cv); };
+  const cellAt = (cx, cy) => { const r = cv.getBoundingClientRect(); return [Math.floor((cx - r.left - MAPV.ox) / MAPV.s), Math.floor((cy - r.top - MAPV.oy) / (MAPV.s * mapR()))]; };
+  const zoomAt = (cx, cy, f) => { const r = cv.getBoundingClientRect(); mapZoom(cv, cx - r.left, cy - r.top, f); };
   cv.addEventListener("wheel", e => { e.preventDefault(); zoomAt(e.clientX, e.clientY, e.deltaY < 0 ? 1.2 : 1 / 1.2); }, { passive: false });
   cv.addEventListener("pointerdown", e => { cv.setPointerCapture(e.pointerId); pts.set(e.pointerId, [e.clientX, e.clientY]); moved = false; if (pts.size === 2) { const [a, b] = [...pts.values()]; pinch = Math.hypot(a[0] - b[0], a[1] - b[1]); } });
   cv.addEventListener("pointermove", e => {
     const p = pts.get(e.pointerId);
-    if (!p) { // survol : infobulle
+    if (!p) {
       const [x, y] = cellAt(e.clientX, e.clientY), inf = mapCellInfo(x, y);
-      if (inf.sa == null) { tip.hidden = true; return; }
+      if (inf.sa == null && !inf.hints.length) { tip.hidden = true; return; }
       tip.hidden = false; const r = cv.getBoundingClientRect();
       tip.style.left = Math.min(e.clientX - r.left + 14, cv.clientWidth - 230) + "px"; tip.style.top = (e.clientY - r.top + 14) + "px";
-      tip.replaceChildren(...[h("strong", { text: subName2(inf.sa) + " [" + x + "," + y + "]" }), inf.an ? h("div", { style: "color:var(--bad)", text: "Anomalie +" + inf.an + " %" }) : null].filter(Boolean),
-        ...inf.res.map(rr => h("div", {}, h("span", { style: "color:" + rr.c, text: "● " }), MAPD.resById.get(+rr.rid)?.[1] + " × " + rr.q)));
+      tip.replaceChildren(...[h("strong", { text: (inf.sa != null ? subName2(inf.sa) + " " : "") + "[" + x + "," + y + "]" }),
+        inf.an ? h("div", { style: "color:var(--bad)", text: "Anomalie +" + inf.an + " %" }) : null,
+        ...inf.hints.map(n => h("div", { style: "color:#6fd3ff", text: "◆ " + n })),
+        ...inf.res.map(rr => h("div", {}, h("span", { style: "color:" + rr.c, text: "● " }), MAPD.resById.get(+rr.rid)?.[1] + " × " + rr.q))].filter(Boolean));
       return;
     }
     const nx = e.clientX, ny = e.clientY;
@@ -3291,7 +3416,7 @@ function setupMap(cv, tip) {
   });
   const up = e => {
     const had = pts.has(e.pointerId); pts.delete(e.pointerId); if (pts.size < 2) pinch = null;
-    if (had && !moved && e.type === "pointerup") { const [x, y] = cellAt(e.clientX, e.clientY); if (MAPD.idx.has(x + "," + y)) { mapF.cell = [x, y]; render(); } }
+    if (had && !moved && e.type === "pointerup") { const [x, y] = cellAt(e.clientX, e.clientY); if (MW().idx.has(x + "," + y)) { mapF.cell = [x, y]; render(); } }
   };
   cv.addEventListener("pointerup", up); cv.addEventListener("pointercancel", up);
   cv.addEventListener("pointerleave", () => { tip.hidden = true; });
@@ -3300,6 +3425,8 @@ function viewCarte() {
   ensureMap();
   if (!F) ensureFarm().then(d => { if (d && view === "carte") render(); });
   if (!MAPD) return h("div", { class: "loading", text: "Chargement de la carte…" });
+  const W = MW();
+  if (!W) return h("div", { class: "empty" }, h("strong", { text: "Carte indisponible" }), h("span", { text: "Les données de la carte n'ont pas pu être chargées." }));
   const jobs = [...new Set(MAPD.res.map(r => r[2]).filter(Boolean))].sort((a, b) => a.localeCompare(b, "fr"));
   const nq = norm(mapF.q || "");
   const list = MAPD.res.filter(r => (!mapF.job || r[2] === mapF.job) && (!nq || norm(r[1]).includes(nq)));
@@ -3309,50 +3436,78 @@ function viewCarte() {
   const jobSeg = h("span", { class: "seg wrap", role: "group", "aria-label": "Métier" }, [["", "Tous"], ...jobs.map(j => [j, j])].map(([v, l]) =>
     h("button", { type: "button", "aria-pressed": mapF.job === v ? "true" : "false", onclick: () => { mapF.job = v; render(); } }, l)));
   const anCb = h("input", { type: "checkbox", id: "carte-an", checked: mapF.an }); anCb.addEventListener("change", () => { mapF.an = anCb.checked; render(); });
-  const cv = h("canvas", { class: "mapcv", "aria-label": "Carte du monde : glisser pour déplacer, molette ou deux doigts pour zoomer" });
+  // Choix de la carte (Monde des Douze, Incarnam, Frigost…)
+  const worlds = [...MAPD.byW.values()].filter(w => w.cells.length).sort((a, b) => (a.id === 1 ? -1 : b.id === 1 ? 1 : a.name.localeCompare(b.name, "fr")));
+  const wSel = h("select", { id: "carte-monde", "aria-label": "Carte" }, worlds.map(w => {
+    const z = MAPD.hints.filter(x => x[2] === w.id && /^zaap/i.test(x[5])).length, an = KM ? Object.keys(KM.anomalies || {}).filter(sid => w.sub.has(+sid)).length : 0;
+    return h("option", { value: w.id, selected: w.id === W.id }, w.name + (z ? " · " + z + " zaap" + (z > 1 ? "s" : "") : "") + (an ? " · anomalie" : ""));
+  }));
+  wSel.addEventListener("change", () => { mapF.world = +wSel.value; mapF.cell = null; MAPV = null; saveMapSel(); render(); });
+  const layerChecks = HINT_LAYERS.map(([k, label, f]) => { const n = MAPD.hints.filter(x => x[2] === W.id && f(x)).length;
+    const c = h("input", { type: "checkbox", id: "carte-l-" + k, checked: !!mapF.layers[k], disabled: !n });
+    c.addEventListener("change", () => { mapF.layers = { ...mapF.layers, [k]: c.checked }; saveMapSel(); render(); });
+    return h("label", { class: "check" + (n ? "" : " muted") }, c, label + " (" + n + ")"); });
+  const realCb = h("input", { type: "checkbox", id: "carte-real", checked: mapF.real !== false }); realCb.addEventListener("change", () => { mapF.real = realCb.checked; render(); });
+  const cv = h("canvas", { class: "mapcv", "aria-label": "Carte : glisser pour déplacer, molette ou deux doigts pour zoomer" });
   const tip = h("div", { class: "maptip", hidden: true });
   const wrap = h("div", { class: "mapwrap" }, cv, tip,
     h("div", { class: "mapzoom" },
-      h("button", { type: "button", class: "btn sm", "aria-label": "Zoomer", onclick: () => { const W = cv.clientWidth / 2, H2 = cv.clientHeight / 2, s = Math.min(60, MAPV.s * 1.4); MAPV = { s, ox: W - (W - MAPV.ox) * s / MAPV.s, oy: H2 - (H2 - MAPV.oy) * s / MAPV.s }; drawMap(cv); } }, "+"),
-      h("button", { type: "button", class: "btn sm", "aria-label": "Dézoomer", onclick: () => { const W = cv.clientWidth / 2, H2 = cv.clientHeight / 2, s = Math.max(2, MAPV.s / 1.4); MAPV = { s, ox: W - (W - MAPV.ox) * s / MAPV.s, oy: H2 - (H2 - MAPV.oy) * s / MAPV.s }; drawMap(cv); } }, "−"),
-      h("button", { type: "button", class: "btn sm", onclick: () => { mapFit(cv, MAPD.box); drawMap(cv); } }, "Tout")));
+      h("button", { type: "button", class: "btn sm", "aria-label": "Zoomer", onclick: () => mapZoom(cv, cv.clientWidth / 2, cv.clientHeight / 2, 1.4) }, "+"),
+      h("button", { type: "button", class: "btn sm", "aria-label": "Dézoomer", onclick: () => mapZoom(cv, cv.clientWidth / 2, cv.clientHeight / 2, 1 / 1.4) }, "−"),
+      h("button", { type: "button", class: "btn sm", onclick: () => { mapFit(cv); drawMap(cv); } }, "Tout")));
   requestAnimationFrame(() => { if (cv.isConnected) setupMap(cv, tip); });
-  // Zones principales des ressources choisies
+  // Meilleures zones des ressources choisies (sur cette carte)
   const zones = new Map();
-  mapF.sel.forEach((rid, i) => { for (const [x, y, qq] of MAPD.spawns[rid] || []) { const sa = MAPD.idx.get(x + "," + y); if (sa == null) continue; const z = zones.get(sa) || { sa, q: 0, n: 0, by: {} }; z.q += qq; z.n++; z.by[i] = (z.by[i] || 0) + qq; zones.set(sa, z); } });
+  mapF.sel.forEach((rid, i) => { for (const [x, y, qq] of worldSpawns(rid)) { const sa = W.idx.get(x + "," + y); if (sa == null) continue; const z = zones.get(sa) || { sa, q: 0, n: 0, by: {} }; z.q += qq; z.n++; z.by[i] = (z.by[i] || 0) + qq; zones.set(sa, z); } });
   const topZones = [...zones.values()].sort((a, b) => (b.q * (1 + anomalyOf(b.sa) / 100)) - (a.q * (1 + anomalyOf(a.sa) / 100))).slice(0, 10);
-  const anom = KM ? Object.entries(KM.anomalies || {}).sort((a, b) => b[1] - a[1]) : [];
+  // Zaap le plus proche d'une zone (distance en cases, sur cette carte)
+  const zaaps = MAPD.hints.filter(x => x[2] === W.id && /^zaap/i.test(x[5]));
+  const nearZaap = sa => { const c = W.sub.get(+sa) || []; if (!c.length || !zaaps.length) return null; const cx = c.reduce((t, p) => t + p[0], 0) / c.length, cy = c.reduce((t, p) => t + p[1], 0) / c.length;
+    let best = null; for (const z of zaaps) { const d = Math.abs(z[0] - cx) + Math.abs(z[1] - cy); if (!best || d < best.d) best = { z, d }; } return best; };
+  const zaapName = z => { const sa = W.idx.get(z[0] + "," + z[1]); return (sa != null ? subName2(sa) : "Zaap") + " [" + z[0] + "," + z[1] + "]"; };
+  const anomAll = KM ? Object.entries(KM.anomalies || {}).sort((a, b) => b[1] - a[1]) : [];
   const cellInf = mapF.cell ? mapCellInfo(mapF.cell[0], mapF.cell[1]) : null;
-  const centerOn = sa => { const c = MAPD.sub.get(+sa) || []; if (!c.length) return; const cx = c.reduce((t, p) => t + p[0], 0) / c.length, cy = c.reduce((t, p) => t + p[1], 0) / c.length; mapCenter(Math.round(cx), Math.round(cy), 14); document.querySelector(".mapwrap")?.scrollIntoView({ block: "center", behavior: "smooth" }); };
+  const centerOn = sa => {
+    const wid = MAPD.subW.get(+sa); if (wid && wid !== mapF.world) { mapF.world = wid; MAPV = null; saveMapSel(); render(); }
+    const c = MW().sub.get(+sa) || []; if (!c.length) return;
+    const cx = c.reduce((t, p) => t + p[0], 0) / c.length, cy = c.reduce((t, p) => t + p[1], 0) / c.length;
+    requestAnimationFrame(() => { mapCenter(Math.round(cx), Math.round(cy), 14); document.querySelector(".mapwrap")?.scrollIntoView({ block: "center", behavior: "smooth" }); });
+  };
+  const inWorld = rid => worldSpawns(rid).length;
   return h("div", { class: "stack" },
     h("section", { class: "panel" },
-      h("div", { class: "row between" }, h("h2", { text: "Carte d'Orukam" }), h("label", { class: "check" }, anCb, "Zones en anomalie (" + anom.length + ")")),
+      h("div", { class: "row between" }, h("h2", { text: "Carte d'Orukam" }), wSel),
+      h("div", { class: "row", style: "gap:14px;flex-wrap:wrap" }, h("label", { class: "check" }, anCb, "Zones en anomalie"), ...layerChecks, h("label", { class: "check" }, realCb, "Vraie carte")),
+      KM ? h("p", { class: "small muted", style: "margin:0", text: "Anomalies vérifiées toutes les 2 heures" + (KM.anomaliesAt ? " · dernier changement " + agoTime(KM.anomaliesAt) : "") + (KMC ? " · dernière vérification " + agoTime(KMC.checked) : "") }) : null,
       h("div", { class: "row", style: "gap:8px" }, jobSeg),
       h("div", { class: "filters" }, h("div", { class: "search" }, q)),
-      h("div", { class: "reslist" }, list.map(r => { const i = mapF.sel.indexOf(r[0]);
-        return h("button", { type: "button", class: "reschip" + (i >= 0 ? " on" : ""), style: i >= 0 ? "--rc:" + MAP_COLORS[i] : null, "aria-pressed": i >= 0 ? "true" : "false", title: r[1] + " · niv. " + r[3] + " · " + (MAPD.spawns[r[0]] || []).length + " cartes", onclick: () => toggle(r[0]) },
+      h("div", { class: "reslist" }, list.map(r => { const i = mapF.sel.indexOf(r[0]), n = inWorld(r[0]);
+        return h("button", { type: "button", class: "reschip" + (i >= 0 ? " on" : "") + (n ? "" : " off"), style: i >= 0 ? "--rc:" + MAP_COLORS[i] : null, "aria-pressed": i >= 0 ? "true" : "false", title: r[1] + " · niv. " + r[3] + " · " + n + " carte(s) ici", onclick: () => toggle(r[0]) },
           icon(r[0], 22), h("span", { text: r[1] }), h("small", { class: "muted", text: r[3] })); })),
-      h("p", { class: "note", text: "Choisis jusqu'à 6 ressources : chaque point est une carte où elle pousse, plus gros quand il y en a beaucoup. Les zones en rouge sont en anomalie (bonus en %, mis à jour toutes les 2 heures). Glisse pour te déplacer, molette ou deux doigts pour zoomer, touche une carte pour son détail." })),
+      h("p", { class: "note", text: "Choisis jusqu'à 6 ressources : chaque point est une case où elle pousse, plus gros quand il y en a beaucoup (ressources estompées : absentes de cette carte). Zones en rouge : anomalie et son bonus. Repères du jeu : zaaps, transports, ateliers, HDV et banques. Glisse pour te déplacer, molette ou deux doigts pour zoomer, touche une case pour son détail." })),
     wrap,
     h("div", { class: "grid2 even" },
       h("section", { class: "panel" },
-        h("h2", { text: cellInf ? subName2(cellInf.sa) + " [" + cellInf.x + "," + cellInf.y + "]" : "Carte choisie" }),
+        h("h2", { text: cellInf ? (cellInf.sa != null ? subName2(cellInf.sa) + " " : "") + "[" + cellInf.x + "," + cellInf.y + "]" : "Case choisie" }),
         cellInf ? h("div", { style: "display:grid;gap:8px" },
           h("div", { class: "chips" }, F && F.subs[cellInf.sa] ? h("span", { class: "chip", text: "niv. " + F.subs[cellInf.sa][2] }) : null,
-            cellInf.an ? h("span", { class: "chip warn", text: "Anomalie +" + cellInf.an + " %" }) : h("span", { class: "chip", text: "pas d'anomalie" })),
+            cellInf.an ? h("span", { class: "chip warn", text: "Anomalie +" + cellInf.an + " %" }) : h("span", { class: "chip", text: "pas d'anomalie" }),
+            ...cellInf.hints.map(n => h("span", { class: "chip job", text: n }))),
+          (() => { const nz = cellInf.sa != null ? nearZaap(cellInf.sa) : null; return nz ? h("p", { class: "small", text: "Zaap le plus proche : " + zaapName(nz.z) + " · " + Math.round(nz.d) + " case" + (nz.d >= 2 ? "s" : "") }) : null; })(),
           cellInf.res.length ? cellInf.res.map(rr => h("div", { class: "row between" }, h("span", {}, h("span", { style: "color:" + rr.c, text: "● " }), itemLink(+rr.rid, null, 24)), h("strong", { text: "× " + rr.q }))) :
-            h("p", { class: "muted", text: mapF.sel.length ? "Aucune des ressources choisies sur cette carte." : "Choisis des ressources pour voir ce qui pousse ici." })) :
-          h("p", { class: "muted", text: "Touche ou clique une carte pour voir sa zone, son anomalie et ses ressources." })),
+            h("p", { class: "muted", text: mapF.sel.length ? "Aucune des ressources choisies sur cette case." : "Choisis des ressources pour voir ce qui pousse ici." })) :
+          h("p", { class: "muted", text: "Touche ou clique une case pour voir sa zone, son anomalie, ses repères et ses ressources." })),
       h("section", { class: "panel" },
         h("h2", { text: mapF.sel.length ? "Meilleures zones" : "Zones en anomalie" }),
-        mapF.sel.length ? (topZones.length ? h("div", { class: "tablewrap" }, h("table", {}, h("tbody", {}, topZones.map(z => h("tr", {},
-          h("td", {}, h("button", { type: "button", class: "link", onclick: () => centerOn(z.sa) }, h("strong", { text: subName2(z.sa) })), h("small", { class: "muted", style: "display:block", text: z.n + " carte" + (z.n > 1 ? "s" : "") + (F && F.subs[z.sa] ? " · niv. " + F.subs[z.sa][2] : "") })),
+        mapF.sel.length ? (topZones.length ? h("div", { class: "tablewrap" }, h("table", {}, h("tbody", {}, topZones.map(z => { const nz = nearZaap(z.sa); return h("tr", {},
+          h("td", {}, h("button", { type: "button", class: "link", onclick: () => centerOn(z.sa) }, h("strong", { text: subName2(z.sa) })),
+            h("small", { class: "muted", style: "display:block", text: z.n + " case" + (z.n > 1 ? "s" : "") + (F && F.subs[z.sa] ? " · niv. " + F.subs[z.sa][2] : "") + (nz ? " · zaap " + zaapName(nz.z) + " à " + Math.round(nz.d) + " case" + (nz.d >= 2 ? "s" : "") : "") })),
           h("td", {}, Object.entries(z.by).map(([i, qq]) => h("span", { class: "small", style: "margin-right:8px;white-space:nowrap" }, h("span", { style: "color:" + MAP_COLORS[i], text: "● " }), "× " + qq))),
-          h("td", { class: "n" }, anomalyOf(z.sa) ? h("span", { class: "chip warn", text: "+" + anomalyOf(z.sa) + " %" }) : null)))))) : h("p", { class: "muted", text: "Aucun emplacement connu." }))
-          : anom.length ? h("div", { style: "display:grid;gap:6px" }, anom.map(([sid, b]) => h("div", { class: "row between" },
-            h("button", { type: "button", class: "link", onclick: () => centerOn(sid) }, subName2(+sid)), h("span", { class: "chip warn", text: "+" + b + " %" })))) : h("p", { class: "muted", text: "Aucune zone en anomalie en ce moment." }),
-        h("p", { class: "note", text: mapF.sel.length ? "Classées par quantité totale, bonus d'anomalie compris. Clique une zone pour la centrer." : "Clique une zone pour la centrer sur la carte." }))),
-    h("p", { class: "note", text: "Cartes du monde : DofusDB. Emplacements des ressources et anomalies : Kamamaster (" + (KM ? KM.server : "Orukam") + ")." }));
+          h("td", { class: "n" }, anomalyOf(z.sa) ? h("span", { class: "chip warn", text: "+" + anomalyOf(z.sa) + " %" }) : null)); })))) : h("p", { class: "muted", text: "Aucun emplacement connu sur cette carte." }))
+          : anomAll.length ? h("div", { style: "display:grid;gap:6px" }, anomAll.map(([sid, b]) => h("div", { class: "row between" },
+            h("button", { type: "button", class: "link", onclick: () => centerOn(sid) }, subName2(+sid) + (MAPD.subW.get(+sid) && MAPD.subW.get(+sid) !== 1 ? " · " + (MAPD.byW.get(MAPD.subW.get(+sid))?.name || "") : "")), h("span", { class: "chip warn", text: "+" + b + " %" })))) : h("p", { class: "muted", text: "Aucune zone en anomalie en ce moment." }),
+        h("p", { class: "note", text: mapF.sel.length ? "Classées par quantité totale, bonus d'anomalie compris, avec le zaap le plus proche. Clique une zone pour la centrer." : "Clique une zone pour la centrer sur la carte (et changer de carte si besoin)." }))),
+    h("p", { class: "note", text: "Cartes du jeu, images et repères : DofusDB. Emplacements des ressources (Monde des Douze) et anomalies : Kamamaster (" + (KM ? KM.server : "Orukam") + ")." }));
 }
 
 // =====================================================================

@@ -15,8 +15,8 @@ Usage : python3 tools/fetch_kamamaster.py [Orukam]
 
 - <serveur>-check.json : {"checked": dernière vérification, "changed": dernier changement des prix, "full": dernier passage complet}
 
-Lancé toutes les 2 heures par .github/workflows/kamamaster.yml : 1 appel (prix HDV) ; les 3 autres
-(brisage, anomalies, donjons) seulement si les prix ont changé ou si le dernier passage complet date de 6 h ou plus.
+Lancé toutes les 2 heures par .github/workflows/kamamaster.yml : 2 appels (prix HDV, zones en anomalie) ;
+les 2 autres (brisage, donjons) seulement si les prix ont changé ou si le dernier passage complet date de 6 h ou plus.
 Un fichier de données n'est réécrit que si ses données ont changé.
 """
 import json, sys, time, urllib.parse, urllib.request
@@ -38,6 +38,16 @@ def get(path, **params):
     data = json.load(urllib.request.urlopen(urllib.request.Request(url, headers=UA), timeout=180))
     time.sleep(2)  # rester discret
     return data
+
+
+def fetch_anomalies(server):
+    """Zones en anomalie (bonus % > 0) ; None si Kamamaster ne répond pas."""
+    try:
+        return {str(z["subAreaId"]): z["bonusPercent"] for z in get("map/anomaly-zones", server=server).get("zones", [])
+                if (z.get("bonusPercent") or 0) > 0}
+    except Exception as e:
+        print("Anomalies indisponibles :", e)
+        return None
 
 
 def main():
@@ -68,6 +78,12 @@ def main():
     last_full = check.get("full")
     recent = last_full and now - datetime.strptime(last_full, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc) < FULL_EVERY
     if old_raw == prices and recent:
+        # Les anomalies changent plus souvent que les prix : elles sont vérifiées à chaque passage (1 appel)
+        an = fetch_anomalies(server)
+        if an is not None and an != old.get("anomalies"):
+            old["anomalies"], old["anomaliesAt"] = an, stamp
+            json.dump(old, open(main_file, "w", encoding="utf-8"), ensure_ascii=False, separators=(",", ":"))
+            print(f"{server} : anomalies mises à jour ({len(an)} zone(s))")
         json.dump({"checked": stamp, "changed": old.get("fetched"), "full": last_full}, open(check_file, "w"), separators=(",", ":"))
         print(f"{server} : prix inchangés depuis le {old.get('fetched')} (vérifié le {stamp})")
         return
@@ -100,13 +116,10 @@ def main():
         print("Coefficients indisponibles :", e)
 
     # 3. Zones en anomalie (bonus %)
-    anomalies = {}
-    try:
-        for z in get("map/anomaly-zones", server=server).get("zones", []):
-            if (z.get("bonusPercent") or 0) > 0:
-                anomalies[str(z["subAreaId"])] = z["bonusPercent"]
-    except Exception as e:
-        print("Anomalies indisponibles :", e)
+    anomalies = fetch_anomalies(server)
+    if anomalies is None:
+        anomalies = (old or {}).get("anomalies", {})
+    anomalies_at = (old or {}).get("anomaliesAt") if old and old.get("anomalies") == anomalies else stamp
 
     # 4. Donjons : drops attendus par passage, avec les réglages par défaut de Kamamaster
     dungeons = None
@@ -141,7 +154,7 @@ def main():
         return True
 
     changed = save(out_dir / f"{slug}.json", {"server": server, "source": "https://kamamaster.fr",
-                   "prices": dict(sorted(prices.items(), key=lambda kv: int(kv[0]))), "coefs": coefs, "anomalies": anomalies,
+                   "prices": dict(sorted(prices.items(), key=lambda kv: int(kv[0]))), "coefs": coefs, "anomalies": anomalies, "anomaliesAt": anomalies_at,
                    "doubt": dict(sorted(doubt.items(), key=lambda kv: int(kv[0])))})
     if dungeons:
         save(out_dir / f"{slug}-donjons.json", {"server": server, "source": "https://kamamaster.fr",

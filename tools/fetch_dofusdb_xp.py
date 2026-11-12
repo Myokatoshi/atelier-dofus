@@ -6,7 +6,9 @@ Usage : python3 tools/fetch_dofusdb_xp.py
 Écrit data/xp.json : {"source", "fetched",
                       "types": {id_type: ratio %},   types d'objets dont l'XP de craft diffère de 100 %
                       "items": {id_objet: ratio %},  objets dont l'XP de craft diffère (prioritaire sur le type)
-                      "almanax": [[nom, texte, [dates]]]}  tous les bonus de l'Almanax, dont plusieurs par jour
+                      "almanax": [[nom, texte, [dates], id_objectif]],
+                      "almrew": {id_objectif: [niveau optimal, durée, [[niv. min, niv. max, coef. kamas, kamas selon niveau du perso, coef. XP]],
+                                               objet de l'offrande, quantité]}}  tous les bonus de l'Almanax, dont plusieurs par jour
                                    (événements datés) ; date « JJ/MM/AAAA » (événement, remplace le bonus
                                    habituel ce jour-là) ou « JJ/MM/* » ; sans les bonus de remplacement de Théodoran
 Formule (simulateur d'XP de DofusDB) : XP d'un craft de niveau R au niveau de métier M =
@@ -27,7 +29,7 @@ UA = {"User-Agent": "AtelierDofus/1.0 (outil privé d'un groupe d'amis)"}
 def page(path, params):
     out, skip = [], 0
     while True:
-        q = urllib.parse.urlencode({**params, "$limit": 50, "$skip": skip}, safe="$[]")
+        q = urllib.parse.urlencode({**params, "$limit": 50, "$skip": skip}, safe="$[]", doseq=True)
         d = json.load(urllib.request.urlopen(urllib.request.Request(API + path + "?" + q, headers=UA), timeout=60))
         out += d["data"]
         skip += len(d["data"])
@@ -48,9 +50,29 @@ def main():
             continue
         dates = [d for d in x.get("dates") or [] if d.endswith("/*") or int(d.split("/")[2]) >= year]
         if dates:
-            almanax.append([x["name"]["fr"], clean(x["desc"]["fr"]), dates])
+            almanax.append([x["name"]["fr"], clean(x["desc"]["fr"]), dates, x.get("objectiveId")])
+    # Récompense de la quête de l'offrande : objectif -> étape de quête -> récompenses par tranche de niveau
+    # kamas = ⌊(N² + 20 N − 20) × coef. kamas × durée⌋, N = niveau du perso ou niveau optimal (formule de DofusDB)
+    def by_ids(path, key, ids):
+        out = []
+        ids = sorted(set(i for i in ids if i))
+        for i in range(0, len(ids), 40):
+            out += page(path, {f"{key}[$in][]": ids[i:i + 40]})
+        return out
+    objl = by_ids("quest-objectives", "id", [a[3] for a in almanax])
+    objs = {o["id"]: o["stepId"] for o in objl}
+    offer = {o["id"]: [(o.get("parameters") or {}).get("parameter1"), (o.get("parameters") or {}).get("parameter2")] for o in objl}
+    steps = {st["id"]: st for st in by_ids("quest-steps", "id", objs.values())}
+    rews = {}
+    for r in by_ids("quest-step-rewards", "stepId", steps.keys()):
+        rews.setdefault(r["stepId"], []).append([r["levelMin"], r["levelMax"], r["kamasRatio"], bool(r.get("kamasScaleWithPlayerLevel")), r["experienceRatio"]])
+    almrew = {}
+    for oid, sid in objs.items():
+        st = steps.get(sid)
+        if st:
+            almrew[str(oid)] = [st.get("optimalLevel"), st.get("duration"), sorted(rews.get(sid, []))] + offer.get(oid, [None, None])
     out = {"source": "https://dofusdb.fr", "fetched": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-           "types": dict(sorted(types.items(), key=lambda kv: int(kv[0]))), "items": dict(sorted(items.items(), key=lambda kv: int(kv[0]))), "almanax": almanax}
+           "types": dict(sorted(types.items(), key=lambda kv: int(kv[0]))), "items": dict(sorted(items.items(), key=lambda kv: int(kv[0]))), "almanax": almanax, "almrew": almrew}
     json.dump(out, open(ROOT / "data" / "xp.json", "w", encoding="utf-8"), separators=(",", ":"))
     print(f"{len(types)} types et {len(items)} objets avec un coefficient d'XP particulier, {len(almanax)} bonus d'Almanax")
 

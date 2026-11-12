@@ -7,7 +7,7 @@ Application installable (PWA) pour un groupe d'amis sur Dofus 3 :
 - **Orukam** : cotes HDV de tout le serveur avec tendances, donjons rentables en kamas/heure, brisage et zones en anomalie (données publiées par [Kamamaster](https://kamamaster.fr), vérifiées toutes les 2 heures) ;
 - **métiers** : plan de montée jusqu'au niveau visé (crafts, coût, liste d'achat) avec le calcul d'XP de [DofusDB](https://dofusdb.fr) et les bonus de l'Almanax ;
 - **Almanax** : calendrier de l'année (offrandes, bonus, événements, bonus de métier) ;
-- **carte interactive** d'Orukam : emplacements des ressources et zones en anomalie avec leur bonus ;
+- **carte interactive** : vraies cartes du jeu (Monde des Douze, Incarnam, Frigost…), zaaps, ateliers, HDV, emplacements des ressources et zones en anomalie d'Orukam avec leur bonus ;
 - **alertes de prix**, y compris en notification quand l'appli est fermée ;
 - **plan de craft** et liste de courses ;
 - **liste de farm** : zones, monstres, taux de drop, donjons ;
