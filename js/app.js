@@ -3160,6 +3160,7 @@ function sparkSeries(ser, days = 30) {
   const lim = iso(new Date(parseD(today()).getTime() - days * 864e5));
   const pts = ser.filter(([d]) => d >= lim);
   if (!pts.length) return svg;
+  if (pts.length > 1) { const t = pts[pts.length - 1][1] - pts[0][1]; if (t) svg.classList.add(t > 0 ? "up" : "down"); }
   const t0 = parseD(lim).getTime(), t1 = parseD(today()).getTime();
   const vals = pts.map(p => p[1]), mn = Math.min(...vals), mx = Math.max(...vals), sp = mx - mn || 1;
   const x = d => 3 + (parseD(d).getTime() - t0) / (t1 - t0 || 1) * (W - 6), y = v => mx === mn ? H / 2 : H - 4 - (v - mn) / sp * (H - 8);
@@ -3739,7 +3740,9 @@ function lineChart(series, opt = {}) {
 function itemChart(ser, from, to) {
   const W = 300, H = 130, L = 4, R = 4, T = 16, B = 32;
   const pts = ser.filter(([d]) => d >= from && d <= to);
-  const svg = s("svg", { class: "ichart", viewBox: `0 0 ${W} ${H}`, "aria-hidden": "true" });
+  // Couleur de la tendance sur la période : vert si le prix monte, rouge s'il baisse
+  const trend = pts.length > 1 ? Math.sign(pts[pts.length - 1][1] - pts[0][1]) : 0;
+  const svg = s("svg", { class: "ichart" + (trend > 0 ? " up" : trend < 0 ? " down" : ""), viewBox: `0 0 ${W} ${H}`, "aria-hidden": "true" });
   if (!pts.length) { svg.append(s("text", { class: "axis", x: W / 2, y: H / 2, "text-anchor": "middle" }, "pas de prix sur la période")); return svg; }
   const t0 = parseD(from).getTime(), t1 = parseD(to).getTime() || t0 + 1;
   const vals = pts.map(p => p[1]); let mn = Math.min(...vals), mx = Math.max(...vals);
@@ -3808,7 +3811,7 @@ function viewTendances() {
         h("label", { class: "check small", title: "Superposer dans la comparaison" }, (() => { const c = h("input", { type: "checkbox", checked: trF.cmp.includes(r.id) }); c.addEventListener("change", () => toggleCmp(r.id)); return c; })(), "Comparer")),
       h("div", { class: "row between", style: "gap:6px" },
         h("strong", { style: "color:var(--kamas);font-size:1.1rem", text: r.now != null ? k(r.now) + " ₭" : "—" }),
-        h("span", { class: "chip " + (r.v == null ? "" : r.v > 0.5 ? "job" : r.v < -0.5 ? "warn" : ""), text: r.v == null ? "pas assez d'historique" : (r.v > 0 ? "▲ +" : r.v < 0 ? "▼ " : "") + r.v.toFixed(1).replace(".", ",") + " % sur " + trF.days + " j" })),
+        h("span", { class: "chip " + (r.v == null ? "" : r.v > 0.5 ? "up" : r.v < -0.5 ? "down" : ""), text: r.v == null ? "pas assez d'historique" : (r.v > 0 ? "▲ +" : r.v < 0 ? "▼ " : "") + r.v.toFixed(1).replace(".", ",") + " % sur " + trF.days + " j" })),
       h("button", { type: "button", class: "ichart-btn", "aria-label": "Courbe complète de " + item(r.id)[0], onclick: () => openSheet(r.id) }, itemChart(r.ser, from, end)),
       h("small", { class: "muted", text: r.o ? srcLabel(r.o) : "aucun prix" })))) :
       h("div", { class: "empty" }, h("strong", { text: trF.fam === "fav" && !favs().length ? "Tu ne suis encore aucun objet" : "Aucun objet ne correspond" }), h("span", { text: trF.fam === "fav" ? "Ajoute des objets suivis avec l'étoile dans Cotes HDV." : "Change la recherche, la famille ou la catégorie." })),

@@ -562,3 +562,8 @@ tr.today td { background: color-mix(in srgb, var(--kamas) 10%, transparent); }
 details.panel > summary { cursor: pointer; list-style: none; }
 details.panel > summary::-webkit-details-marker { display: none; }
 @media (max-width: 720px) { .icards { grid-template-columns: minmax(0, 1fr); } }
+/* Hausse en vert, baisse en rouge (comme les autres modules) */
+.chip.up { background: var(--good-soft); color: var(--good); }
+.chip.down { background: var(--bad-soft); color: var(--bad); }
+.ichart.up { --sec: var(--good); } .ichart.down { --sec: var(--bad); }
+.spark.up path { stroke: var(--good); } .spark.up circle { fill: var(--good); } .spark.down path { stroke: var(--bad); } .spark.down circle { fill: var(--bad); }

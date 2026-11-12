@@ -5,7 +5,7 @@
 - À chaque changement de l'appli, incrémenter `VERSION` dans `sw.js` (sinon les utilisateurs gardent l'ancienne version en cache).
 - Commits signés avec l'adresse anonyme GitHub (configurée dans `.git/config` du dépôt), jamais l'adresse e-mail personnelle.
 - L'utilisateur ne veut pas gérer la technique : faire soi-même tout ce qui est possible, ne lui demander une action que si elle est nouvelle et indispensable.
-- L'interface est uniquement en thème sombre.
+- L'interface est uniquement en thème sombre. Couleurs de tendance partout : vert (`--good`, `.pos`, `.chip.up`) pour une hausse, rouge (`--bad`, `.neg`, `.chip.down`) pour une baisse, courbes comprises (`.ichart.up/.down`, `.spark.up/.down`).
 - Téléphone (≤ 720 px) : aucun défilement horizontal. Les tableaux `.tablewrap` deviennent des cartes empilées (`labelTables()` met l'intitulé de colonne dans `data-label`, la cellule de l'objet `.mc` prend toute la largeur, `.hide-m` masque les colonnes secondaires) ; `groupFields()` regroupe chaque `.label` avec son champ (`.fld`) ; sous-onglets, `.seg` et étiquettes passent à la ligne. Vérifier avec un audit Playwright (iPhone 13) : ni page plus large que l'écran, ni zone qui défile de gauche à droite.
 - Onglets (`GROUPS` dans js/app.js) : Accueil (accueil, almanax) ; Marché (prix, tournée, rentabilité, journal, alertes) ; Orukam (vue d'ensemble, cotes, tendances, donjons, carte, brisage) ; Production (plan, métiers, farm, inventaire) ; Équipement (builds, comparer, encyclopédie) ; Compte.
 
