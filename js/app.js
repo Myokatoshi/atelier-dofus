@@ -921,21 +921,26 @@ function almanaxCard() {
   let weekCost = 0, weekMissing = 0;
   for (const [, x] of days) { const p = priceAt(x[1]); const need = Math.max(0, x[2] - (S.stock[x[1]] || 0)); if (need) { if (p) weekCost += need * midOf(p); else weekMissing++; } }
   return h("section", { class: "panel alm-card" },
-    h("div", { class: "row between" }, h("h2", { text: "Almanax du " + now.toLocaleDateString("fr-FR", { weekday: "long", day: "numeric", month: "long" }) })),
+    h("div", { class: "row between" }, h("h2", { text: "Almanax du " + now.toLocaleDateString("fr-FR", { weekday: "long", day: "numeric", month: "long" }) }), h("a", { href: "#almanax", class: "small", text: "Calendrier complet" })),
     h("div", { class: "alm" }, h("span", { class: "halo" }, icon(a[1], 72, "big")),
       h("div", { style: "display:grid;gap:6px;min-width:0" },
         h("button", { type: "button", class: "link", onclick: () => openSheet(a[1]) }, h("h3", {}, h("span", { class: "nm", text: a[2] + " × " + item(a[1])[0] }))),
         h("div", { class: "chips" },
           h("span", { class: "chip " + (have >= a[2] ? "job" : "warn"), text: have >= a[2] ? "En stock (" + have + ")" : "En stock : " + have + " / " + a[2] }),
           h("span", { class: "chip kamas", text: o ? "≈ " + k(midOf(o) * a[2]) + " ₭ à l'HDV" : "prix inconnu" })),
-        h("p", {}, h("strong", { text: a[3] + ". " }), h("span", { class: "muted", text: a[4] })))),
+        almDay(now).map(b => h("div", {}, h("p", {}, h("strong", { text: b.title + ". " }), h("span", { class: "muted", text: b.text })),
+          b.fx.length ? h("div", { class: "chips", style: "margin-top:4px" }, b.fx.map(fxChip)) : null)))),
+    (() => { // Bonus de métier des 30 prochains jours
+      const up = []; for (let i = 0; i < 30 && up.length < 6; i++) { const d = new Date(now); d.setDate(now.getDate() + i); for (const b of almDay(d)) for (const f of b.fx) if (["xp", "eco", "fab", "fm"].includes(f.kind)) up.push({ d, f }); }
+      return up.length ? h("div", { style: "display:grid;gap:6px" }, h("span", { class: "label", text: "Bonus de métier à venir" }),
+        h("div", { class: "chips" }, up.map(({ d, f }) => h("span", { class: "chip " + (f.kind === "xp" ? "kamas" : "job"), text: (dayStart(d) - dayStart(now) === 0 ? "Aujourd'hui" : d.toLocaleDateString("fr-FR", { day: "numeric", month: "short" })) + " · " + fxJobs(f) + " · " + fxLabel(f) })))) : null; })(),
     h("div", { class: "row between" }, h("span", { class: "label", text: "Les 7 prochains jours" }),
       h("span", { class: "chip kamas", text: "À acheter : ≈ " + k(weekCost) + " ₭" + (weekMissing ? " (+ " + weekMissing + " sans prix)" : "") })),
     h("div", { class: "almlist" }, days.map(([d, x], i) => {
       const st = S.stock[x[1]] || 0, p = priceAt(x[1]);
       return h("div", { class: "r" + (i === 0 ? " today" : "") },
         h("span", { class: "day", text: JOURS[d.getDay()] + " " + d.getDate() + " " + MOIS[d.getMonth()] }),
-        itemLink(x[1], "×" + x[2] + (x[3] ? " · " + x[3] : ""), 26),
+        itemLink(x[1], "×" + x[2] + " · " + almDay(d).map(b => b.title + (b.fx.length ? " (" + b.fx.map(f => fxJobs(f) + " " + fxLabel(f).toLowerCase()).join(", ") + ")" : "")).join(" · "), 26),
         h("span", { class: "num small " + (st >= x[2] ? "pos" : ""), text: st >= x[2] ? "✓ en stock" : p ? "≈ " + kk(midOf(p) * (x[2] - st)) : "?" }));
     })));
 }
@@ -956,6 +961,7 @@ function profitRows() {
 }
 
 function viewAccueil() {
+  ensureXpRatios(); // calendrier complet de l'Almanax (événements datés, bonus de métier)
   const rows = profitRows().filter(r => r.m != null);
   const best = rows.filter(r => r.m > 0).sort((a, b) => b.m - a.m).slice(0, 6);
   const stale = Object.keys(prices()).map(Number).map(id => ({ id, o: priceAt(id) })).filter(x => x.o && ageDays(x.o.d) >= 7).sort((a, b) => a.o.d < b.o.d ? -1 : 1);
@@ -2008,7 +2014,7 @@ function viewJournal() {
 let XPR = null, xprLoading = null;
 function ensureXpRatios() {
   if (XPR || xprLoading) return xprLoading;
-  xprLoading = fetch("data/xp.json").then(r => r.ok ? r.json() : null).then(j => { XPR = j || { types: {}, items: {} }; if (view === "metiers") render(); }).catch(() => { XPR = { types: {}, items: {} }; });
+  xprLoading = fetch("data/xp.json").then(r => r.ok ? r.json() : null).then(j => { XPR = j || { types: {}, items: {} }; ALMJ = null; ALMDAY = new Map(); if (["metiers", "almanax", "accueil"].includes(view)) render(); }).catch(() => { XPR = { types: {}, items: {} }; });
   return xprLoading;
 }
 const lvToXp = n => n * (n - 1) * 10;
@@ -3082,6 +3088,237 @@ function viewDonjons() {
 }
 
 // =====================================================================
+// Almanax : calendrier complet (bonus du jour, événements datés, offrandes)
+// =====================================================================
+let ALM_JOBLIST = null;
+const almJobList = () => ALM_JOBLIST || (ALM_JOBLIST = Object.entries(D.jobs).filter(([j]) => j !== "1").map(([j, n]) => [+j, norm(n)]));
+// Bonus d'un jour : [{ title, text, fx }] (événement daté s'il y en a un, sinon bonus habituel)
+function almDay(d) {
+  const list = XPR && XPR.almanax ? almOn(d) : (() => { const a = almanaxFor(d); return a ? [[a[3], a[4]]] : []; })();
+  return list.map(([title, text]) => ({ title, text, fx: almEffects(text || "", almJobList()) }));
+}
+const fxJobs = f => f.all ? "Tous les métiers" : f.jobs.map(jobName).join(", ");
+const fxChip = f => h("span", { class: "chip " + (f.kind === "xp" ? "kamas" : "job"), text: fxJobs(f) + " · " + fxLabel(f) });
+
+let almV = { m: null, q: "", t: "" };
+function viewAlmanax() {
+  ensureXpRatios();
+  const now = new Date(), t0 = dayStart(now);
+  if (almV.m == null) almV.m = new Date(now.getFullYear(), now.getMonth(), 1);
+  const nq = norm(almV.q || "");
+  // Recherche : sur les 365 prochains jours ; sinon le mois affiché
+  let days = [];
+  if (nq || almV.t) { for (let i = 0; i < 366; i++) { const d = new Date(t0); d.setDate(t0.getDate() + i); days.push(d); } }
+  else { const m = almV.m; for (let d = new Date(m); d.getMonth() === m.getMonth(); d.setDate(d.getDate() + 1)) days.push(new Date(d)); }
+  const titles = new Set();
+  for (let i = 0; i < 366; i++) { const d = new Date(t0); d.setDate(t0.getDate() + i); for (const b of almDay(d)) titles.add(b.title); }
+  const rows = days.map(d => ({ d, a: almanaxFor(d), b: almDay(d) })).filter(r => {
+    if (almV.t && !r.b.some(b => b.title === almV.t)) return false;
+    if (!nq) return true;
+    const hay = norm([r.a ? item(r.a[1])[0] : "", ...r.b.map(b => b.title + " " + b.text)].join(" "));
+    return hay.includes(nq);
+  });
+  const q = h("input", { type: "search", id: "q-alm", placeholder: "Chercher : Bûcheron, butin, nom d'offrande…", value: almV.q, "aria-label": "Chercher dans l'Almanax" });
+  q.addEventListener("input", () => { almV.q = q.value; clearTimeout(q._t); q._t = setTimeout(render, 250); });
+  const tSel = h("select", { id: "alm-type", "aria-label": "Type de bonus" }, h("option", { value: "" }, "Tous les bonus"), [...titles].sort((a, b) => a.localeCompare(b, "fr")).map(x => h("option", { value: x, selected: almV.t === x }, x)));
+  tSel.addEventListener("change", () => { almV.t = tSel.value; render(); });
+  const moveM = n => { almV.m = new Date(almV.m.getFullYear(), almV.m.getMonth() + n, 1); render(); };
+  const searching = !!(nq || almV.t);
+  let cost = 0, miss = 0;
+  for (const r of rows) if (r.a && r.d >= t0) { const p = priceAt(r.a[1]), need = Math.max(0, r.a[2] - (S.stock[r.a[1]] || 0)); if (need) { if (p) cost += need * nowPrice(p); else miss++; } }
+  return h("div", { class: "stack" },
+    h("section", { class: "panel" },
+      h("div", { class: "row between" },
+        h("h2", { text: searching ? rows.length + " jour" + (rows.length > 1 ? "s" : "") + " sur un an" : almV.m.toLocaleDateString("fr-FR", { month: "long", year: "numeric" }) }),
+        searching ? null : h("div", { class: "row", style: "gap:6px" },
+          h("button", { type: "button", class: "btn sm", onclick: () => moveM(-1), "aria-label": "Mois précédent" }, "‹"),
+          h("button", { type: "button", class: "btn sm", onclick: () => { almV.m = new Date(now.getFullYear(), now.getMonth(), 1); render(); } }, "Ce mois-ci"),
+          h("button", { type: "button", class: "btn sm", onclick: () => moveM(1), "aria-label": "Mois suivant" }, "›"))),
+      h("div", { class: "filters" }, h("div", { class: "search" }, q), tSel),
+      h("p", { class: "note", text: "Offrande et bonus de chaque jour. Certains jours, un événement remplace le bonus habituel. Coût des offrandes à venir affichées, hors stock : ≈ " + k(cost) + " ₭" + (miss ? " (+ " + miss + " sans prix)" : "") + ". Source : DofusDB et données du jeu." })),
+    rows.length ? h("div", { class: "almcal" }, rows.map(r => {
+      const n = Math.round((dayStart(r.d) - t0) / 864e5), st = r.a ? S.stock[r.a[1]] || 0 : 0, p = r.a ? priceAt(r.a[1]) : null;
+      return h("section", { class: "panel almday" + (n === 0 ? " today" : n < 0 ? " past" : "") },
+        h("div", { class: "almd" }, h("strong", { text: r.d.toLocaleDateString("fr-FR", { weekday: "short", day: "numeric", month: "short" }) }),
+          h("small", { class: "muted", text: n === 0 ? "aujourd'hui" : n === 1 ? "demain" : n > 0 ? "dans " + n + " j" : "passé" })),
+        r.a ? h("div", { class: "almo" }, itemLink(r.a[1], "× " + r.a[2] + " · " + (st >= r.a[2] ? "✓ en stock" : p ? "≈ " + kk(nowPrice(p) * (r.a[2] - st)) + " ₭" : "prix inconnu"), 30)) : h("div", { class: "almo muted", text: "—" }),
+        h("div", { class: "almb" }, r.b.map(b => h("div", {}, h("strong", { text: b.title }), h("small", { class: "muted", style: "display:block", text: b.text }),
+          b.fx.length ? h("div", { class: "chips", style: "margin-top:4px" }, b.fx.map(fxChip)) : null))));
+    })) : h("div", { class: "empty" }, h("strong", { text: "Aucun jour ne correspond" }), h("span", { text: "Change la recherche ou le type de bonus." })));
+}
+
+// =====================================================================
+// Carte interactive : ressources récoltables et zones en anomalie (Orukam)
+// =====================================================================
+let MAPD = null, mapLoading = null;
+function ensureMap() {
+  if (MAPD || mapLoading) return mapLoading;
+  mapLoading = fetch("data/map.json").then(r => r.ok ? r.json() : null).then(d => {
+    if (!d) { MAPD = { cells: [], res: [], spawns: {}, idx: new Map(), sub: new Map() }; return; }
+    d.idx = new Map(); d.sub = new Map();
+    let x0 = 1e9, x1 = -1e9, y0 = 1e9, y1 = -1e9;
+    for (const [x, y, sa] of d.cells) { d.idx.set(x + "," + y, sa); if (!d.sub.has(sa)) d.sub.set(sa, []); d.sub.get(sa).push([x, y]); x0 = Math.min(x0, x); x1 = Math.max(x1, x); y0 = Math.min(y0, y); y1 = Math.max(y1, y); }
+    d.box = [x0, x1, y0, y1];
+    d.resById = new Map(d.res.map(r => [r[0], r]));
+    MAPD = d; if (view === "carte") render();
+  }).catch(() => { MAPD = { cells: [], res: [], spawns: {}, idx: new Map(), sub: new Map(), box: [0, 1, 0, 1], resById: new Map() }; });
+  return mapLoading;
+}
+const MAP_COLORS = ["#ffd166", "#4cc9f0", "#f72585", "#90be6d", "#f8961e", "#c77dff"];
+let mapF = { sel: [], job: "", q: "", an: true, cell: null };
+try { const s = JSON.parse(localStorage.getItem("atelier-carte") || "null"); if (s && Array.isArray(s.sel)) mapF.sel = s.sel.slice(0, 6); } catch {}
+const saveMapSel = () => { try { localStorage.setItem("atelier-carte", JSON.stringify({ sel: mapF.sel })); } catch {} };
+let MAPV = null; // transformation : { s : pixels par carte, ox, oy }
+const subName2 = sa => (F && F.subs[sa] ? F.subs[sa][0] : "Zone " + sa);
+const areaOf = sa => (F && F.subs[sa] ? F.subs[sa][1] : sa);
+function mapCellInfo(x, y) {
+  const sa = MAPD.idx.get(x + "," + y);
+  const res = mapF.sel.map((rid, i) => { const sp = (MAPD.spawns[rid] || []).find(s => s[0] === x && s[1] === y); return sp ? { rid, q: sp[2], c: MAP_COLORS[i] } : null; }).filter(Boolean);
+  return { x, y, sa, an: sa != null ? anomalyOf(sa) : 0, res };
+}
+function drawMap(cv) {
+  const dpr = window.devicePixelRatio || 1, W = cv.clientWidth, H = cv.clientHeight;
+  if (cv.width !== Math.round(W * dpr) || cv.height !== Math.round(H * dpr)) { cv.width = Math.round(W * dpr); cv.height = Math.round(H * dpr); }
+  const ctx = cv.getContext("2d"); ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  const css = getComputedStyle(document.documentElement);
+  ctx.fillStyle = css.getPropertyValue("--bg").trim() || "#0f1517"; ctx.fillRect(0, 0, W, H);
+  const { s, ox, oy } = MAPV, gap = s > 7 ? 1 : 0;
+  const vis = (x, y) => { const px = ox + x * s, py = oy + y * s; return px > -s && py > -s && px < W && py < H; };
+  for (const [x, y, sa] of MAPD.cells) {
+    if (!vis(x, y)) continue;
+    const a = areaOf(sa), hue = (a * 47) % 360;
+    ctx.fillStyle = `hsl(${hue} 18% ${mapF.sel.length ? 17 : 21}%)`;
+    ctx.fillRect(ox + x * s, oy + y * s, s - gap, s - gap);
+  }
+  // Zones en anomalie
+  const anom = mapF.an && KM ? Object.entries(KM.anomalies || {}) : [];
+  for (const [sid, b] of anom) {
+    ctx.fillStyle = b >= 100 ? "rgba(242,95,80,.62)" : "rgba(242,140,90,.5)";
+    for (const [x, y] of MAPD.sub.get(+sid) || []) if (vis(x, y)) ctx.fillRect(ox + x * s, oy + y * s, s - gap, s - gap);
+  }
+  // Ressources choisies
+  mapF.sel.forEach((rid, i) => {
+    const list = MAPD.spawns[rid] || []; if (!list.length) return;
+    const mx = Math.max(...list.map(p => p[2]));
+    ctx.fillStyle = MAP_COLORS[i];
+    for (const [x, y, q] of list) {
+      if (!vis(x, y)) continue;
+      const r = Math.max(1.6, (s / 2 - 1) * (0.45 + 0.55 * Math.sqrt(q / mx)));
+      ctx.beginPath(); ctx.arc(ox + x * s + s / 2, oy + y * s + s / 2, r, 0, 7); ctx.fill();
+    }
+  });
+  // Pourcentage des anomalies, au centre de la zone
+  ctx.textAlign = "center"; ctx.textBaseline = "middle"; ctx.font = "800 13px " + (css.getPropertyValue("--f-body") || "sans-serif");
+  for (const [sid, b] of anom) {
+    const cells = MAPD.sub.get(+sid) || []; if (!cells.length) continue;
+    const cx = cells.reduce((t, c) => t + c[0], 0) / cells.length, cy = cells.reduce((t, c) => t + c[1], 0) / cells.length;
+    const px = ox + cx * s + s / 2, py = oy + cy * s + s / 2;
+    if (px < 0 || py < 0 || px > W || py > H) continue;
+    ctx.lineWidth = 4; ctx.strokeStyle = "rgba(0,0,0,.75)"; ctx.strokeText("+" + b + " %", px, py); ctx.fillStyle = "#fff"; ctx.fillText("+" + b + " %", px, py);
+  }
+  // Carte sélectionnée
+  if (mapF.cell) { ctx.strokeStyle = "#fff"; ctx.lineWidth = 2; ctx.strokeRect(ox + mapF.cell[0] * s - 1, oy + mapF.cell[1] * s - 1, s + 1, s + 1); }
+}
+function mapFit(cv, box) {
+  const [x0, x1, y0, y1] = box, W = cv.clientWidth, H = cv.clientHeight;
+  const s = Math.max(2, Math.min(W / (x1 - x0 + 3), H / (y1 - y0 + 3)));
+  MAPV = { s, ox: W / 2 - (x0 + x1 + 1) / 2 * s, oy: H / 2 - (y0 + y1 + 1) / 2 * s };
+}
+function mapCenter(x, y, s) { const cv = document.querySelector(".mapcv"); if (!cv || !MAPV) return; const S2 = Math.max(MAPV.s, s || 16); MAPV = { s: S2, ox: cv.clientWidth / 2 - (x + .5) * S2, oy: cv.clientHeight / 2 - (y + .5) * S2 }; drawMap(cv); }
+function setupMap(cv, tip) {
+  if (!MAPV) mapFit(cv, MAPD.box);
+  drawMap(cv);
+  const pts = new Map(); let moved = false, pinch = null;
+  const cellAt = (cx, cy) => { const r = cv.getBoundingClientRect(); return [Math.floor((cx - r.left - MAPV.ox) / MAPV.s), Math.floor((cy - r.top - MAPV.oy) / MAPV.s)]; };
+  const zoomAt = (cx, cy, f) => { const r = cv.getBoundingClientRect(), px = cx - r.left, py = cy - r.top; const s = Math.max(2, Math.min(60, MAPV.s * f)); MAPV = { s, ox: px - (px - MAPV.ox) * s / MAPV.s, oy: py - (py - MAPV.oy) * s / MAPV.s }; drawMap(cv); };
+  cv.addEventListener("wheel", e => { e.preventDefault(); zoomAt(e.clientX, e.clientY, e.deltaY < 0 ? 1.2 : 1 / 1.2); }, { passive: false });
+  cv.addEventListener("pointerdown", e => { cv.setPointerCapture(e.pointerId); pts.set(e.pointerId, [e.clientX, e.clientY]); moved = false; if (pts.size === 2) { const [a, b] = [...pts.values()]; pinch = Math.hypot(a[0] - b[0], a[1] - b[1]); } });
+  cv.addEventListener("pointermove", e => {
+    const p = pts.get(e.pointerId);
+    if (!p) { // survol : infobulle
+      const [x, y] = cellAt(e.clientX, e.clientY), inf = mapCellInfo(x, y);
+      if (inf.sa == null) { tip.hidden = true; return; }
+      tip.hidden = false; const r = cv.getBoundingClientRect();
+      tip.style.left = Math.min(e.clientX - r.left + 14, cv.clientWidth - 230) + "px"; tip.style.top = (e.clientY - r.top + 14) + "px";
+      tip.replaceChildren(...[h("strong", { text: subName2(inf.sa) + " [" + x + "," + y + "]" }), inf.an ? h("div", { style: "color:var(--bad)", text: "Anomalie +" + inf.an + " %" }) : null].filter(Boolean),
+        ...inf.res.map(rr => h("div", {}, h("span", { style: "color:" + rr.c, text: "● " }), MAPD.resById.get(+rr.rid)?.[1] + " × " + rr.q)));
+      return;
+    }
+    const nx = e.clientX, ny = e.clientY;
+    if (pts.size === 2 && pinch) {
+      pts.set(e.pointerId, [nx, ny]); const [a, b] = [...pts.values()], d = Math.hypot(a[0] - b[0], a[1] - b[1]);
+      zoomAt((a[0] + b[0]) / 2, (a[1] + b[1]) / 2, d / pinch); pinch = d; moved = true; return;
+    }
+    const dx = nx - p[0], dy = ny - p[1]; if (Math.abs(dx) + Math.abs(dy) > 3) moved = true;
+    pts.set(e.pointerId, [nx, ny]); MAPV = { ...MAPV, ox: MAPV.ox + dx, oy: MAPV.oy + dy }; drawMap(cv);
+  });
+  const up = e => {
+    const had = pts.has(e.pointerId); pts.delete(e.pointerId); if (pts.size < 2) pinch = null;
+    if (had && !moved && e.type === "pointerup") { const [x, y] = cellAt(e.clientX, e.clientY); if (MAPD.idx.has(x + "," + y)) { mapF.cell = [x, y]; render(); } }
+  };
+  cv.addEventListener("pointerup", up); cv.addEventListener("pointercancel", up);
+  cv.addEventListener("pointerleave", () => { tip.hidden = true; });
+}
+function viewCarte() {
+  ensureMap();
+  if (!F) ensureFarm().then(d => { if (d && view === "carte") render(); });
+  if (!MAPD) return h("div", { class: "loading", text: "Chargement de la carte…" });
+  const jobs = [...new Set(MAPD.res.map(r => r[2]).filter(Boolean))].sort((a, b) => a.localeCompare(b, "fr"));
+  const nq = norm(mapF.q || "");
+  const list = MAPD.res.filter(r => (!mapF.job || r[2] === mapF.job) && (!nq || norm(r[1]).includes(nq)));
+  const toggle = rid => { const i = mapF.sel.indexOf(rid); if (i >= 0) mapF.sel.splice(i, 1); else { if (mapF.sel.length >= 6) mapF.sel.shift(); mapF.sel.push(rid); } saveMapSel(); render(); };
+  const q = h("input", { type: "search", id: "q-carte", placeholder: "Chercher une ressource", value: mapF.q, "aria-label": "Chercher une ressource" });
+  q.addEventListener("input", () => { mapF.q = q.value; clearTimeout(q._t); q._t = setTimeout(render, 250); });
+  const jobSeg = h("span", { class: "seg wrap", role: "group", "aria-label": "Métier" }, [["", "Tous"], ...jobs.map(j => [j, j])].map(([v, l]) =>
+    h("button", { type: "button", "aria-pressed": mapF.job === v ? "true" : "false", onclick: () => { mapF.job = v; render(); } }, l)));
+  const anCb = h("input", { type: "checkbox", id: "carte-an", checked: mapF.an }); anCb.addEventListener("change", () => { mapF.an = anCb.checked; render(); });
+  const cv = h("canvas", { class: "mapcv", "aria-label": "Carte du monde : glisser pour déplacer, molette ou deux doigts pour zoomer" });
+  const tip = h("div", { class: "maptip", hidden: true });
+  const wrap = h("div", { class: "mapwrap" }, cv, tip,
+    h("div", { class: "mapzoom" },
+      h("button", { type: "button", class: "btn sm", "aria-label": "Zoomer", onclick: () => { const W = cv.clientWidth / 2, H2 = cv.clientHeight / 2, s = Math.min(60, MAPV.s * 1.4); MAPV = { s, ox: W - (W - MAPV.ox) * s / MAPV.s, oy: H2 - (H2 - MAPV.oy) * s / MAPV.s }; drawMap(cv); } }, "+"),
+      h("button", { type: "button", class: "btn sm", "aria-label": "Dézoomer", onclick: () => { const W = cv.clientWidth / 2, H2 = cv.clientHeight / 2, s = Math.max(2, MAPV.s / 1.4); MAPV = { s, ox: W - (W - MAPV.ox) * s / MAPV.s, oy: H2 - (H2 - MAPV.oy) * s / MAPV.s }; drawMap(cv); } }, "−"),
+      h("button", { type: "button", class: "btn sm", onclick: () => { mapFit(cv, MAPD.box); drawMap(cv); } }, "Tout")));
+  requestAnimationFrame(() => { if (cv.isConnected) setupMap(cv, tip); });
+  // Zones principales des ressources choisies
+  const zones = new Map();
+  mapF.sel.forEach((rid, i) => { for (const [x, y, qq] of MAPD.spawns[rid] || []) { const sa = MAPD.idx.get(x + "," + y); if (sa == null) continue; const z = zones.get(sa) || { sa, q: 0, n: 0, by: {} }; z.q += qq; z.n++; z.by[i] = (z.by[i] || 0) + qq; zones.set(sa, z); } });
+  const topZones = [...zones.values()].sort((a, b) => (b.q * (1 + anomalyOf(b.sa) / 100)) - (a.q * (1 + anomalyOf(a.sa) / 100))).slice(0, 10);
+  const anom = KM ? Object.entries(KM.anomalies || {}).sort((a, b) => b[1] - a[1]) : [];
+  const cellInf = mapF.cell ? mapCellInfo(mapF.cell[0], mapF.cell[1]) : null;
+  const centerOn = sa => { const c = MAPD.sub.get(+sa) || []; if (!c.length) return; const cx = c.reduce((t, p) => t + p[0], 0) / c.length, cy = c.reduce((t, p) => t + p[1], 0) / c.length; mapCenter(Math.round(cx), Math.round(cy), 14); document.querySelector(".mapwrap")?.scrollIntoView({ block: "center", behavior: "smooth" }); };
+  return h("div", { class: "stack" },
+    h("section", { class: "panel" },
+      h("div", { class: "row between" }, h("h2", { text: "Carte d'Orukam" }), h("label", { class: "check" }, anCb, "Zones en anomalie (" + anom.length + ")")),
+      h("div", { class: "row", style: "gap:8px" }, jobSeg),
+      h("div", { class: "filters" }, h("div", { class: "search" }, q)),
+      h("div", { class: "reslist" }, list.map(r => { const i = mapF.sel.indexOf(r[0]);
+        return h("button", { type: "button", class: "reschip" + (i >= 0 ? " on" : ""), style: i >= 0 ? "--rc:" + MAP_COLORS[i] : null, "aria-pressed": i >= 0 ? "true" : "false", title: r[1] + " · niv. " + r[3] + " · " + (MAPD.spawns[r[0]] || []).length + " cartes", onclick: () => toggle(r[0]) },
+          icon(r[0], 22), h("span", { text: r[1] }), h("small", { class: "muted", text: r[3] })); })),
+      h("p", { class: "note", text: "Choisis jusqu'à 6 ressources : chaque point est une carte où elle pousse, plus gros quand il y en a beaucoup. Les zones en rouge sont en anomalie (bonus en %, mis à jour toutes les 2 heures). Glisse pour te déplacer, molette ou deux doigts pour zoomer, touche une carte pour son détail." })),
+    wrap,
+    h("div", { class: "grid2 even" },
+      h("section", { class: "panel" },
+        h("h2", { text: cellInf ? subName2(cellInf.sa) + " [" + cellInf.x + "," + cellInf.y + "]" : "Carte choisie" }),
+        cellInf ? h("div", { style: "display:grid;gap:8px" },
+          h("div", { class: "chips" }, F && F.subs[cellInf.sa] ? h("span", { class: "chip", text: "niv. " + F.subs[cellInf.sa][2] }) : null,
+            cellInf.an ? h("span", { class: "chip warn", text: "Anomalie +" + cellInf.an + " %" }) : h("span", { class: "chip", text: "pas d'anomalie" })),
+          cellInf.res.length ? cellInf.res.map(rr => h("div", { class: "row between" }, h("span", {}, h("span", { style: "color:" + rr.c, text: "● " }), itemLink(+rr.rid, null, 24)), h("strong", { text: "× " + rr.q }))) :
+            h("p", { class: "muted", text: mapF.sel.length ? "Aucune des ressources choisies sur cette carte." : "Choisis des ressources pour voir ce qui pousse ici." })) :
+          h("p", { class: "muted", text: "Touche ou clique une carte pour voir sa zone, son anomalie et ses ressources." })),
+      h("section", { class: "panel" },
+        h("h2", { text: mapF.sel.length ? "Meilleures zones" : "Zones en anomalie" }),
+        mapF.sel.length ? (topZones.length ? h("div", { class: "tablewrap" }, h("table", {}, h("tbody", {}, topZones.map(z => h("tr", {},
+          h("td", {}, h("button", { type: "button", class: "link", onclick: () => centerOn(z.sa) }, h("strong", { text: subName2(z.sa) })), h("small", { class: "muted", style: "display:block", text: z.n + " carte" + (z.n > 1 ? "s" : "") + (F && F.subs[z.sa] ? " · niv. " + F.subs[z.sa][2] : "") })),
+          h("td", {}, Object.entries(z.by).map(([i, qq]) => h("span", { class: "small", style: "margin-right:8px;white-space:nowrap" }, h("span", { style: "color:" + MAP_COLORS[i], text: "● " }), "× " + qq))),
+          h("td", { class: "n" }, anomalyOf(z.sa) ? h("span", { class: "chip warn", text: "+" + anomalyOf(z.sa) + " %" }) : null)))))) : h("p", { class: "muted", text: "Aucun emplacement connu." }))
+          : anom.length ? h("div", { style: "display:grid;gap:6px" }, anom.map(([sid, b]) => h("div", { class: "row between" },
+            h("button", { type: "button", class: "link", onclick: () => centerOn(sid) }, subName2(+sid)), h("span", { class: "chip warn", text: "+" + b + " %" })))) : h("p", { class: "muted", text: "Aucune zone en anomalie en ce moment." }),
+        h("p", { class: "note", text: mapF.sel.length ? "Classées par quantité totale, bonus d'anomalie compris. Clique une zone pour la centrer." : "Clique une zone pour la centrer sur la carte." }))),
+    h("p", { class: "note", text: "Cartes du monde : DofusDB. Emplacements des ressources et anomalies : Kamamaster (" + (KM ? KM.server : "Orukam") + ")." }));
+}
+
+// =====================================================================
 // Habillage : icônes, onglets, bandeaux de section
 // =====================================================================
 const IC = {
@@ -3101,6 +3338,8 @@ const IC = {
   up: "M12 20V5 M6 11l6-6 6 6 M5 20h14",
   ledger: "M6 3h12v18l-3-2-3 2-3-2-3 2z M9 8h6 M9 12h6 M9 16h3",
   route: "M6 19a2 2 0 1 0 0-4 2 2 0 0 0 0 4z M18 9a2 2 0 1 0 0-4 2 2 0 0 0 0 4z M8 17h7a3 3 0 0 0 0-6H9a3 3 0 0 1 0-6h7",
+  calendar: "M4 5h16v15H4z M4 9h16 M8 3v4 M16 3v4 M8 13h3 M13 13h3 M8 16h3",
+  map: "M9 4l6 2 5-2v14l-5 2-6-2-5 2V6z M9 4v14 M15 6v14",
   globe: "M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18z M3 12h18 M12 3c3.5 3.5 3.5 14.5 0 18 M12 3c-3.5 3.5-3.5 14.5 0 18",
   chart: "M4 20h16 M7 16v-4 M12 16V7 M17 16v-7",
   castle: "M4 21V8h3v2h2V8h2v2h2V8h2v2h2V8h3v13z M10 21v-4a2 2 0 0 1 4 0v4",
@@ -3109,14 +3348,14 @@ const IC = {
 const svgI = name => { const el = s("svg", { class: "i", viewBox: "0 0 24 24", "aria-hidden": "true" }); for (const d of IC[name].split(" M")) el.append(s("path", { d: d.startsWith("M") ? d : "M" + d })); return el; };
 const TABS = [
   ["accueil", "Accueil", "home", "--c-home"], ["plan", "Plan de craft", "hammer", "--c-craft", "c-plan"], ["rentabilite", "Rentabilité", "trend", "--c-gold"],
-  ["prix", "Prix HDV", "coins", "--c-gold", "c-prix"], ["tournee", "Tournée HDV", "route", "--c-gold", "c-tour"], ["journal", "Journal", "ledger", "--c-journal"], ["alertes", "Alertes", "bell", "--c-gold", "c-alert"], ["farm", "Farm", "leaf", "--c-farm"], ["metiers", "Métiers", "up", "--c-craft"], ["brisage", "Brisage", "rune", "--c-alm"], ["serveur", "Vue d'ensemble", "globe", "--c-oru"], ["cotes", "Cotes HDV", "chart", "--c-oru"], ["donjons", "Donjons", "castle", "--c-oru"], ["builds", "Builds", "shield", "--c-build", "c-builds"], ["comparer", "Comparer", "compare", "--c-build"],
+  ["prix", "Prix HDV", "coins", "--c-gold", "c-prix"], ["tournee", "Tournée HDV", "route", "--c-gold", "c-tour"], ["journal", "Journal", "ledger", "--c-journal"], ["alertes", "Alertes", "bell", "--c-gold", "c-alert"], ["farm", "Farm", "leaf", "--c-farm"], ["metiers", "Métiers", "up", "--c-craft"], ["brisage", "Brisage", "rune", "--c-alm"], ["serveur", "Vue d'ensemble", "globe", "--c-oru"], ["almanax", "Almanax", "calendar", "--c-alm"], ["carte", "Carte", "map", "--c-oru"], ["cotes", "Cotes HDV", "chart", "--c-oru"], ["donjons", "Donjons", "castle", "--c-oru"], ["builds", "Builds", "shield", "--c-build", "c-builds"], ["comparer", "Comparer", "compare", "--c-build"],
   ["stock", "Inventaire", "bag", "--c-stock", "c-stock"], ["encyclopedie", "Encyclopédie", "book", "--c-ency"], ["compte", "Compte", "user", "--c-save"],
 ];
 // Sections regroupées : menu latéral (bureau), barre du bas + sous-onglets (téléphone)
 const GROUPS = [
-  ["accueil", "Accueil", "home", "--c-home", ["accueil"]],
+  ["accueil", "Accueil", "home", "--c-home", ["accueil", "almanax"]],
   ["marche", "Marché", "coins", "--c-gold", ["prix", "tournee", "rentabilite", "journal", "alertes"]],
-  ["orukam", "Orukam", "globe", "--c-oru", ["serveur", "cotes", "donjons", "brisage"]],
+  ["orukam", "Orukam", "globe", "--c-oru", ["serveur", "cotes", "donjons", "carte", "brisage"]],
   ["production", "Production", "hammer", "--c-craft", ["plan", "metiers", "farm", "stock"]],
   ["equipement", "Équipement", "shield", "--c-build", ["builds", "comparer", "encyclopedie"]],
   ["compte", "Compte", "user", "--c-save", ["compte"]],
@@ -3188,6 +3427,8 @@ function heroFor(v) {
     alertes: ["Alertes de prix", "Sois prévenu quand un objet passe sous ton prix d'achat, dépasse ton prix de vente, ou quand un craft devient rentable.", "bell", (S.alerts || []).map(a => a.item)],
     metiers: ["Métiers", "Ton plan de montée jusqu'à l'objectif : crafts, coût et liste d'achat, avec le calcul d'XP de DofusDB.", "up", Object.entries(D.recipes).filter(([, r]) => r[0] === (+S.settings.job || r[0])).map(([id]) => +id).filter(id => item(id)[1] <= (S.settings.jobs?.[S.settings.job] ?? 200)).sort((a, b) => item(b)[1] - item(a)[1]).slice(0, 8)],
     journal: ["Journal de ventes", "Tes achats et ventes réels, et ce qu'ils t'ont vraiment rapporté.", "ledger", [...new Set(TR.slice().reverse().map(t => t.item_id))]],
+    almanax: ["Almanax", "Chaque jour de l'année : offrande, bonus et événements, avec les bonus de métier.", "calendar", (() => { const out = []; for (let i = 0; i < 8; i++) { const d = new Date(); d.setDate(d.getDate() + i); const a = almanaxFor(d); if (a) out.push(a[1]); } return out; })()],
+    carte: ["Carte d'Orukam", "Où pousse chaque ressource, et les zones en anomalie avec leur bonus.", "map", mapF.sel.slice()],
     serveur: ["Orukam en direct", "Le marché du serveur : cotes, tendances, donjons rentables et zones en anomalie.", "globe", (KM ? Object.keys(KM.prices).map(Number) : []).filter(id => D.items[id] && item(id)[1] >= 150).slice(0, 8)],
     cotes: ["Cotes HDV", "Tous les objets cotés sur Orukam, leur tendance et les objets que tu suis.", "chart", favs().length ? favs() : (KM ? Object.keys(KM.prices).map(Number) : []).filter(id => D.items[id] && recipe(id)).slice(0, 8)],
     donjons: ["Donjons rentables", "Ce que rapporte chaque donjon en kamas par heure, à ta prospection et aux prix d'Orukam.", "castle", KMD ? KMD.list.flatMap(d => d.drops.slice(0, 1).map(x => x[0])).slice(0, 8) : []],
@@ -3209,7 +3450,7 @@ function decorate(root, v) {
 // =====================================================================
 // Rendu et navigation
 // =====================================================================
-const VIEWS = { serveur: viewServeur, cotes: viewCotes, donjons: viewDonjons, brisage: viewBrisage, comparer: viewComparer, alertes: viewAlertes, metiers: viewMetiers, journal: viewJournal, tournee: viewTournee, farm: viewFarm, builds: viewBuilds, accueil: viewAccueil, plan: viewPlan, rentabilite: viewRentabilite, prix: viewPrix, stock: viewStock, encyclopedie: viewEncyclopedie, compte: viewSauvegarde };
+const VIEWS = { almanax: viewAlmanax, carte: viewCarte, serveur: viewServeur, cotes: viewCotes, donjons: viewDonjons, brisage: viewBrisage, comparer: viewComparer, alertes: viewAlertes, metiers: viewMetiers, journal: viewJournal, tournee: viewTournee, farm: viewFarm, builds: viewBuilds, accueil: viewAccueil, plan: viewPlan, rentabilite: viewRentabilite, prix: viewPrix, stock: viewStock, encyclopedie: viewEncyclopedie, compte: viewSauvegarde };
 function renderCounts() {
   const set = (id, n) => { const el = document.getElementById(id); if (el) { el.textContent = n; el.dataset.z = n ? "0" : "1"; } };
   set("c-plan", S.targets.length);

@@ -46,7 +46,7 @@ img { max-width: 100%; }
 [data-sec="farm"] { --sec: var(--c-farm); } [data-sec="builds"] { --sec: var(--c-build); }
 [data-sec="stock"] { --sec: var(--c-stock); } [data-sec="encyclopedie"] { --sec: var(--c-ency); }
 [data-sec="compte"] { --sec: var(--c-save); }
-[data-sec="serveur"], [data-sec="cotes"], [data-sec="donjons"] { --sec: var(--c-oru); } [data-sec="alm"] { --sec: var(--c-alm); }
+[data-sec="serveur"], [data-sec="cotes"], [data-sec="donjons"], [data-sec="carte"] { --sec: var(--c-oru); } [data-sec="almanax"] { --sec: var(--c-alm); } [data-sec="alm"] { --sec: var(--c-alm); }
 :root { --sec: var(--c-home); }
 .secvars, [data-sec] { --sec-soft: color-mix(in srgb, var(--sec) 13%, var(--surface)); --sec-line: color-mix(in srgb, var(--sec) 35%, var(--line)); }
 
@@ -483,3 +483,24 @@ footer.note { text-align: center; padding-top: 8px; }
 .dj .djc { display: flex; flex-wrap: wrap; gap: 6px; justify-content: flex-end; }
 .dj .djc:empty { display: none; }
 tr.today td { background: color-mix(in srgb, var(--kamas) 10%, transparent); }
+
+/* Almanax : calendrier */
+.almcal { display: grid; gap: 10px; }
+.almday { display: grid; grid-template-columns: 110px minmax(0, 260px) minmax(0, 1fr); gap: 14px; align-items: start; padding: 12px 16px; }
+.almday.today { border-color: var(--sec-line); background: color-mix(in srgb, var(--sec) 9%, var(--surface)); }
+.almday.past { opacity: .55; }
+.almday .almd { display: grid; }
+.almday .almb { display: grid; gap: 8px; }
+@media (max-width: 720px) { .almday { grid-template-columns: minmax(0, 1fr); gap: 8px; } }
+/* Carte interactive */
+.mapwrap { position: relative; border: 1px solid var(--line); border-radius: var(--r); overflow: hidden; background: var(--bg); box-shadow: var(--shadow); }
+.mapcv { display: block; width: 100%; height: min(70vh, 640px); touch-action: none; cursor: grab; }
+.mapcv:active { cursor: grabbing; }
+.maptip { position: absolute; pointer-events: none; background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 8px 10px; font-size: .82rem; display: grid; gap: 2px; max-width: 220px; box-shadow: var(--shadow); z-index: 2; }
+.mapzoom { position: absolute; right: 10px; top: 10px; display: grid; gap: 6px; }
+.mapzoom .btn { min-width: 38px; background: var(--surface); }
+.reslist { display: flex; flex-wrap: wrap; gap: 6px; max-height: 190px; overflow: auto; padding: 2px; }
+.reschip { display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px 4px 4px; border-radius: 99px; border: 1.5px solid var(--line); background: var(--sunk); color: var(--fg); font: 700 .82rem var(--f-body); cursor: pointer; }
+.reschip.on { border-color: var(--rc); background: color-mix(in srgb, var(--rc) 18%, var(--surface)); }
+.reschip small { font-weight: 600; }
+.seg.wrap { flex-wrap: wrap; height: auto; }
