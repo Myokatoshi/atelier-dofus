@@ -5,13 +5,15 @@ Usage : python3 tools/fetch_dofusdb_xp.py
 
 Écrit data/xp.json : {"source", "fetched",
                       "types": {id_type: ratio %},   types d'objets dont l'XP de craft diffère de 100 %
-                      "items": {id_objet: ratio %}}  objets dont l'XP de craft diffère (prioritaire sur le type)
+                      "items": {id_objet: ratio %},  objets dont l'XP de craft diffère (prioritaire sur le type)
+                      "almanax": [[nom, texte, [dates]]]}  tous les bonus de l'Almanax, dont plusieurs par jour
+                                   (saisons, événements) ; date « JJ/MM/AAAA », « JJ/MM/* » ou « */MM/* »
 Formule (simulateur d'XP de DofusDB) : XP d'un craft de niveau R au niveau de métier M =
     0 si M − R > 100, sinon ⌊20 × R ÷ ((M − R)^1,1 ÷ 10 + 1) × ratio / 100 × bonus / 100⌋
 XP totale du niveau N : N × (N − 1) × 10.
 À relancer après une mise à jour du jeu (une vingtaine d'appels).
 """
-import json, time, urllib.parse, urllib.request
+import json, re, time, urllib.parse, urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -35,10 +37,17 @@ def page(path, params):
 def main():
     types = {str(x["id"]): x["craftXpRatio"] for x in page("item-types", {"craftXpRatio[$ne]": -1})}
     items = {str(x["id"]): x["craftXpRatio"] for x in page("items", {"craftXpRatio[$ne]": -1})}
+    clean = lambda t: re.sub(r"\s+", " ", re.sub(r"<[^>]+>", "", re.sub(r"\{\{[^}]*::([^}]*)\}\}", r"\1", t or ""))).strip()
+    year = datetime.now(timezone.utc).year
+    almanax = []
+    for x in page("almanax-calendars", {}):
+        dates = [d for d in x.get("dates") or [] if d.endswith("/*") or int(d.split("/")[2]) >= year]
+        if dates:
+            almanax.append([x["name"]["fr"], clean(x["desc"]["fr"]), dates])
     out = {"source": "https://dofusdb.fr", "fetched": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-           "types": dict(sorted(types.items(), key=lambda kv: int(kv[0]))), "items": dict(sorted(items.items(), key=lambda kv: int(kv[0])))}
+           "types": dict(sorted(types.items(), key=lambda kv: int(kv[0]))), "items": dict(sorted(items.items(), key=lambda kv: int(kv[0]))), "almanax": almanax}
     json.dump(out, open(ROOT / "data" / "xp.json", "w", encoding="utf-8"), separators=(",", ":"))
-    print(f"{len(types)} types et {len(items)} objets avec un coefficient d'XP particulier")
+    print(f"{len(types)} types et {len(items)} objets avec un coefficient d'XP particulier, {len(almanax)} bonus d'Almanax")
 
 
 if __name__ == "__main__":
