@@ -643,3 +643,18 @@ details.fmd[open] > summary { border-bottom: 1px solid var(--line); }
 .fmf.exo { border-color: var(--c-alm); } .fmf.exo small { color: var(--c-alm); }
 @media (max-width: 720px) { .fm-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 .fm-glob { display: grid; gap: 8px; padding: 10px; border-radius: 12px; background: var(--sunk); border: 1px dashed var(--c-alm); }
+/* Icônes de caractéristiques */
+.chi { width: 18px; height: 18px; flex: none; vertical-align: -4px; object-fit: contain; }
+.chl { display: inline-flex; align-items: center; gap: 6px; }
+ul.fx li.chl { display: flex; }
+.fs2wrap { display: grid; gap: 10px; }
+.fs2g { display: grid; gap: 4px; }
+.fs2grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 4px; }
+.fs2 { display: grid; grid-template-columns: 18px minmax(0, 1fr) auto; align-items: center; gap: 6px; padding: 5px 8px; border-radius: 9px; background: var(--sunk); font-size: .85rem; }
+.fs2 .fs2l { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); font-weight: 700; }
+.fs2 strong { font-size: .95rem; }
+.fs2 .fs2r { grid-column: 2 / -1; text-align: right; color: var(--kamas); font-weight: 800; }
+.fs2.off { box-shadow: inset 0 0 0 1px var(--kamas); }
+.fs2.ok { box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--good) 45%, transparent); }
+.dc-st .chl { gap: 3px; justify-content: center; }
+@media (max-width: 720px) { .fs2grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }

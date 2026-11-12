@@ -1736,6 +1736,24 @@ function parseBuildMeta(text) {
       if (base >= 0 && base <= 2000 && parcho >= 0 && parcho <= 100) { if (base) meta.base[c] = base; meta.parcho[c] = parcho; break; }
     }
   }
+  // Stats affichées par Dofusbook (« 4150 PdV », « 12 PA », « 25 %Ré Neutre »…) : gardées pour comparer avec le calcul de l'atelier
+  const REF = [["pdv", PV], ["pp", 48], ["pa", 1], ["pm", 23], ["po", 19], ["initiative", 44], ["critique", 18], ["soin", 49], ["vitalite", 11], ["sagesse", 12],
+    ["force", 10], ["intelligence", 15], ["chance", 13], ["agilite", 14], ["puissance", 25], ["fuite", 78], ["tacle", 79], ["esq pa", 27], ["esq pm", 28], ["ret pa", 82], ["ret pm", 83],
+    ["pods", 40], ["do neutre", 92], ["do terre", 88], ["do feu", 89], ["do eau", 90], ["do air", 91], ["dommages", 16], ["do critique", 86], ["do poussee", 84],
+    ["% do armes", 122], ["% do sorts", 123], ["% do melee", 125], ["% do dist", 120], ["re neutre", 58], ["re terre", 54], ["re feu", 55], ["re eau", 56], ["re air", 57],
+    ["% re neutre", 37], ["% re terre", 33], ["% re feu", 34], ["% re eau", 35], ["% re air", 36], ["re critique", 87], ["re poussee", 85], ["% re melee", 124], ["% re dist", 121], ["% re armes", 142], ["% re sorts", 141]];
+  const rt = norm(String(text).replace(/%/g, " % ").replace(/(^|\s)[-−](\d+)/g, "$1n$2")).split(" "); // n123 = -123 (norm efface le signe)
+  meta.ref = {};
+  for (const [lab, c] of REF) {
+    const L = lab.split(" ");
+    for (let i = 1; i + L.length <= rt.length; i++) {
+      if (!L.every((w, k) => rt[i + k] === w)) continue;
+      if (!L[0].startsWith("%") && rt[i - 1] === "%") continue; // « % Ré Neutre » n'est pas « Ré Neutre »
+      if (L.length === 1 && ["esq", "ret", "do", "re"].includes(rt[i - 1])) continue;
+      const nv = /^(n?)(\d+)$/.exec(rt[i - 1] || ""); if (nv) { meta.ref[c] = (nv[1] ? -1 : 1) * +nv[2]; break; }
+    }
+  }
+  if (Object.keys(meta.ref).length < 5) meta.ref = {}; // pas un tableau de stats
   // Forgemagie globale (Dofusbook : exos PA, PM, PO… du stuff)
   const fi = norm(text).indexOf("forgemagie globale");
   if (fi >= 0) {
@@ -1795,7 +1813,7 @@ function statsEl(tot) {
   for (const x of ent) (by[x.ch[1]] = by[x.ch[1]] || []).push(x);
   return h("div", { class: "grid2b", style: "gap:14px" }, Object.entries(by).map(([cat, list]) => h("div", { style: "display:grid;gap:4px;align-content:start" },
     h("span", { class: "label", text: groups[cat] || "Autres" }),
-    h("ul", { class: "fx" }, list.sort((a, b) => a.ch[2] - b.ch[2]).map(x => h("li", { class: x.v.hi < 0 ? "neg" : "" }, fxText(x.ch[0], x.v.lo, x.v.hi)))))));
+    h("ul", { class: "fx" }, list.sort((a, b) => a.ch[2] - b.ch[2]).map(x => h("li", { class: "chl" + (x.v.hi < 0 ? " neg" : "") }, chIcon(x.c, 16), fxText(x.ch[0], x.v.lo, x.v.hi)))))));
 }
 function buildCost(ids) {
   const C = coster();
@@ -1858,6 +1876,7 @@ function viewBuilds() {
   if (buildImport?.status === "review") {
     const keep = new Set(buildImport.ids);
     importBox.append(h("span", { class: "label", text: buildImport.ids.length + " pièce(s) reconnue(s) : décoche les erreurs" }),
+      buildImport.ids.length < 10 ? h("p", { class: "chip warn", text: "Seulement " + buildImport.ids.length + " pièce(s) trouvée(s) sur 16 : Dofusbook n'écrit pas toujours le nom des pièces dans le texte copié (seulement leurs images). Après la création, ajoute les pièces manquantes en touchant les cases autour du personnage ; les stats « DB » de Dofusbook te montreront ce qu'il manque." }) : null,
       h("div", { class: "cards" }, buildImport.ids.slice().sort(slotSort).map(id => {
         const cb = h("input", { type: "checkbox", checked: true, "aria-label": item(id)[0] }); cb.addEventListener("change", () => cb.checked ? keep.add(id) : keep.delete(id));
         return h("label", { class: "card" }, cb, icon(id, 32), h("span", { class: "t" }, h("span", { class: "nm", text: item(id)[0] }), h("small", { text: (SLOTS[superOf(id)] || ["?"])[0] + " · niv. " + item(id)[1] })));
@@ -1881,6 +1900,7 @@ function viewBuilds() {
         if (m.breed) { nb.breed = m.breed; S.settings.breed = m.breed; }
         if (m.lvl || Object.keys(m.base || {}).length) nb.perso = { ...(m.lvl ? { lvl: m.lvl } : {}), base: { ...m.base }, ...(Object.keys(m.parcho || {}).length ? { parcho: { ...m.parcho } } : {}) };
         if (Object.keys(m.fmg || {}).length) nb.fmg = { ...m.fmg };
+        if (Object.keys(m.ref || {}).length) nb.ref = { ...m.ref };
         persist("builds"); buildImport = null; render(); } }, "Créer le build"),
         h("button", { type: "button", class: "btn", onclick: () => { buildImport = null; render(); } }, "Annuler")));
   }
@@ -2753,6 +2773,9 @@ function viewAlertes() {
 // =====================================================================
 const PRIM = [[11, "Vitalité"], [12, "Sagesse"], [10, "Force"], [15, "Intelligence"], [13, "Chance"], [14, "Agilité"]];
 const PV = -1; // pseudo-caractéristique : points de vie
+// Icône d'une caractéristique (icônes du jeu servies par DofusDB, data/chars/<id>.webp ; tools/fetch_dofusdb_builds.py)
+const CH_ICONS = new Set([1, 10, 11, 12, 13, 14, 15, 16, 18, 19, 23, 25, 26, 27, 28, 33, 34, 35, 36, 37, 40, 44, 48, 49, 50, 54, 55, 56, 57, 58, 69, 70, 78, 79, 82, 83, 84, 85, 86, 87, 88, 89, 90, 91, 92, 120, 121, 122, 123, 124, 125, 141, 142]);
+const chIcon = (c, px = 18) => c === PV || CH_ICONS.has(+c) ? h("img", { class: "chi", src: "data/chars/" + (c === PV ? "pv" : c) + ".webp", alt: "", width: px, height: px, loading: "lazy" }) : null;
 function persoOf(b) {
   const p = b.perso || {};
   return { lvl: p.lvl || Math.max(1, ...b.items.map(id => item(id)[1])), capital: p.capital ?? null,
@@ -2780,10 +2803,32 @@ function finalStats(b, jet) {
   const st = c => out[c] || 0;
   add(48, 100 + Math.floor(st(13) / 10));
   add(44, st(10) + st(15) + st(13) + st(14));
-  add(79, Math.floor(st(14) / 10)); add(78, Math.floor(st(14) / 10));
+  add(40, 1000 + 5 * st(10)); // pods : 1 000 + 5 par point de Force (Dofusbook : 720 Force -> 4 600 pods)
   for (const c of [82, 83, 27, 28]) add(c, Math.floor(st(12) / 10));
   out[PV] = 50 + 5 * Math.min(200, p.lvl) + st(11);
   return out;
+}
+// Toutes les stats finales, rangées comme sur Dofusbook ; à côté, la valeur de Dofusbook si le build en vient (b.ref)
+const FS_GROUPS = [
+  ["Principales", [[PV, "PdV"], [1, "PA"], [23, "PM"], [19, "PO"], [44, "Initiative"], [48, "Prospection"], [18, "Critique"], [26, "Invocations"], [49, "Soins"]]],
+  ["Caractéristiques", [[11, "Vitalité"], [12, "Sagesse"], [10, "Force"], [15, "Intelligence"], [13, "Chance"], [14, "Agilité"], [25, "Puissance"]]],
+  ["Dommages", [[92, "Do Neutre"], [88, "Do Terre"], [89, "Do Feu"], [90, "Do Eau"], [91, "Do Air"], [16, "Dommages"], [86, "Do Critique"], [84, "Do Poussée"], [122, "% Do Armes"], [123, "% Do Sorts"], [125, "% Do Mêlée"], [120, "% Do Dist"]]],
+  ["Résistances", [[58, "Ré Neutre"], [54, "Ré Terre"], [55, "Ré Feu"], [56, "Ré Eau"], [57, "Ré Air"], [37, "% Ré Neutre"], [33, "% Ré Terre"], [34, "% Ré Feu"], [35, "% Ré Eau"], [36, "% Ré Air"], [87, "Ré Critique"], [85, "Ré Poussée"], [124, "% Ré Mêlée"], [121, "% Ré Dist"], [142, "% Ré Armes"], [141, "% Ré Sorts"]]],
+  ["Divers", [[78, "Fuite"], [79, "Tacle"], [27, "Esq. PA"], [28, "Esq. PM"], [82, "Ret. PA"], [83, "Ret. PM"], [40, "Pods"]]],
+];
+function fullStats(b, fs) {
+  const ref = b.ref || {}, hasRef = Object.keys(ref).length > 0;
+  let diffs = 0;
+  const cell = ([c, l]) => {
+    const v = Math.round(fs[c] || 0), r = ref[c], d = r != null ? v - r : 0;
+    if (r != null && d) diffs++;
+    return h("div", { class: "fs2" + (r != null ? (d ? " off" : " ok") : "") }, chIcon(c, 18), h("span", { class: "fs2l", text: l }), h("strong", { class: "num", text: fmt.format(v) }),
+      r != null && d ? h("small", { class: "fs2r", title: "Valeur affichée par Dofusbook", text: "DB " + fmt.format(r) }) : null);
+  };
+  const out = h("div", { class: "fs2wrap" }, FS_GROUPS.map(([g, list]) => h("div", { class: "fs2g" }, h("span", { class: "label", text: g }), h("div", { class: "fs2grid" }, list.map(cell)))));
+  return h("div", { style: "display:grid;gap:8px" },
+    hasRef ? h("p", { class: "chip " + (diffs ? "warn" : "job"), text: diffs ? diffs + " stat" + (diffs > 1 ? "s" : "") + " différente" + (diffs > 1 ? "s" : "") + " de Dofusbook (valeur « DB » en orange) : vérifie les pièces reconnues, leurs jets (bouton Min / Moyen / Max) et la forgemagie" : "Toutes les stats correspondent à Dofusbook" }) : null,
+    out);
 }
 function persoPanel(b, jet) {
   const p = persoOf(b), cap = capitalOf(p);
@@ -2803,7 +2848,7 @@ function persoPanel(b, jet) {
     h("div", { class: "tablewrap" }, h("table", { class: "perso-t" },
       h("thead", {}, h("tr", {}, h("th", { text: "Carac." }), h("th", { class: "n", text: "Parcho" }), h("th", { class: "n", text: "Points" }), h("th", { class: "n", text: "Total" }))),
       h("tbody", {}, PRIM.map(([c, label]) => h("tr", {},
-        h("td", { text: label }),
+        h("td", {}, h("span", { class: "chl" }, chIcon(c), label)),
         h("td", { class: "n" }, numInput(p.parcho[c], v => save({ parcho: { ...p.parcho, [c]: Math.max(0, Math.min(100, Math.round(+v) || 0)) } }), { sm: true, label: "Parchemins " + label })),
         h("td", { class: "n" }, numInput(p.base[c] || "", v => save({ base: { ...p.base, [c]: Math.max(0, Math.round(+v) || 0) } }), { sm: true, ph: "0", label: "Points en " + label }),
           pointsCost(c, p.base[c]) !== (+p.base[c] || 0) ? h("small", { class: "muted", style: "display:block", text: "coûte " + fmt.format(pointsCost(c, p.base[c])) }) : null),
@@ -2814,11 +2859,8 @@ function persoPanel(b, jet) {
       save({ base: { ...p.base, [c]: v } });
     } }, label))) : null,
     h("h3", { text: "Stats finales (" + ({ min: "jet minimum", mid: "jet moyen", max: "jet maximum" })[jet] + ")" }),
-    h("div", { class: "fs-grid" },
-      line("PA", fs[1] || 0), line("PM", fs[23] || 0), line("Points de vie", fs[PV]), line("Portée", fs[19] || 0),
-      line("Initiative", fs[44] || 0), line("Prospection", fs[48] || 0), line("Invocations", fs[26] || 0), line("Critique (%)", fs[18] || 0),
-      line("Tacle", fs[79] || 0), line("Fuite", fs[78] || 0), line("Retrait PA / PM", fs[82] || 0), line("Esquive PA / PM", fs[27] || 0)),
-    h("p", { class: "note", text: "Hypothèses : 5 points de capital par niveau ; Vitalité 1 pour 1, Sagesse 3 pour 1, autres caractéristiques 1 / 2 / 3 / 4 points par paliers de 100 ; 6 PA (7 dès le niveau 100), 3 PM, PV = 50 + 5 × niveau + Vitalité. Si une règle diffère en jeu, corrige le capital à la main. Sans forgemagie, exos ni bonus de classe." }));
+    fullStats(b, fs),
+    h("p", { class: "note", text: "Hypothèses : 5 points de capital par niveau ; Vitalité 1 pour 1, Sagesse 3 pour 1, autres caractéristiques 1 / 2 / 3 / 4 points par paliers de 100 ; 6 PA (7 dès le niveau 100), 3 PM, PV = 50 + 5 × niveau + Vitalité. Pods = 1 000 + 5 × Force. Forgemagie et exos compris. Si une règle diffère en jeu, corrige le capital à la main." }));
 }
 
 // =====================================================================
@@ -2865,7 +2907,7 @@ function fmPanel(b, id, jet) {
   const rows = st.map(([c, lo, hi]) => ({ c, lo, hi, mx: Math.max(lo, hi), v: fm[c] ?? jetOf(lo, hi, jet), exo: false }));
   for (const [c, v] of Object.entries(fm)) if (!st.some(x => x[0] === +c)) rows.push({ c: +c, lo: 0, hi: 0, mx: 0, v, exo: true });
   const field = r => h("label", { class: "fmf" + (r.exo ? " exo" : r.v > r.mx ? " over" : "") },
-    h("span", { class: "fmn", text: charLabel(r.c) }),
+    h("span", { class: "fmn chl" }, chIcon(r.c, 16), charLabel(r.c)),
     numInput(r.v, v => { const x = Math.round(+String(v).replace(",", ".")); const nf = { ...fm }; if (isNaN(x) || (r.exo && !x)) delete nf[r.c]; else nf[r.c] = x; save(nf); }, { sm: true, label: "Valeur de " + charLabel(r.c), id: "fm-" + id + "-" + r.c, noRender: true }),
     h("small", { class: "muted", text: r.exo ? "exo" : r.lo === r.hi ? "fixe" : fmt.format(Math.min(r.lo, r.hi)) + " à " + fmt.format(r.mx) + (r.v > r.mx ? " · over" : "") }));
   const exoChoices = EXO_CHARS().filter(c => !rows.some(r => r.c === c));
@@ -3024,12 +3066,12 @@ function dollPanel(b, jet) {
   };
   // Centre : portrait Dofus 3 de la classe et l'essentiel des stats finales
   const fs = finalStats(b, jet), p = persoOf(b);
-  const mini = (l, v) => h("div", { class: "dc-st" }, h("span", { text: l }), h("strong", { text: fmt.format(Math.round(v || 0)) }));
+  const mini = (l, v, c) => h("div", { class: "dc-st", title: l }, h("span", { class: "chl" }, chIcon(c, 14), l), h("strong", { text: fmt.format(Math.round(v || 0)) }));
   const center = h("div", { class: "doll-c" },
     br ? h("div", { class: "dc-head" }, h("img", { src: headSrc(b), alt: breedName(br), width: 64, height: 64 })) : h("div", { class: "dc-head empty-h" }, h("span", { text: "?" })),
     h("strong", { class: "dc-name", text: br ? breedName(br) + " · niv. " + p.lvl : "Choisis une classe" }),
-    h("div", { class: "dc-stats" }, mini("PA", fs[1]), mini("PM", fs[23]), mini("PO", fs[19]), mini("PV", fs[PV])),
-    h("div", { class: "dc-stats" }, ...PRIM.slice(2).map(([c, l]) => mini(l.slice(0, 3) + ".", fs[c]))));
+    h("div", { class: "dc-stats" }, mini("PA", fs[1], 1), mini("PM", fs[23], 23), mini("PO", fs[19], 19), mini("PV", fs[PV], PV)),
+    h("div", { class: "dc-stats" }, ...PRIM.slice(2).map(([c, l]) => mini(l.slice(0, 3) + ".", fs[c], c))));
   const breedSel = h("select", { id: "build-breed", "aria-label": "Classe" }, h("option", { value: "" }, "Classe…"), (BD ? BD.breeds : []).map(([id, nm]) => h("option", { value: id, selected: id === br }, nm)));
   breedSel.addEventListener("change", () => { const v = +breedSel.value || 0; S.settings.breed = v; b.buffs = []; save({ breed: v }); });
   const sexSeg = h("span", { class: "seg", role: "group", "aria-label": "Sexe" }, [["m", "♂"], ["f", "♀"]].map(([v, l]) => h("button", { type: "button", "aria-pressed": (b.sexe || "m") === v ? "true" : "false", "aria-label": v === "m" ? "Masculin" : "Féminin", onclick: () => save({ sexe: v }) }, l)));
@@ -3130,7 +3172,7 @@ function viewComparer() {
     if (D.chars[c][1] !== curCat) { curCat = D.chars[c][1]; statRows.push(h("tr", { class: "cmp-cat" }, h("td", { colspan: 4, text: groups[curCat] || "Autres" }))); }
     const a = val(sA.tot[c]), b = val(sB.tot[c]), d = b - a;
     statRows.push(h("tr", { class: d ? "" : "same" },
-      h("td", { text: statName(c) }), h("td", { class: "n", text: fmtV(c, a) }), h("td", { class: "n", text: fmtV(c, b) }),
+      h("td", {}, h("span", { class: "chl" }, chIcon(c, 16), statName(c))), h("td", { class: "n", text: fmtV(c, a) }), h("td", { class: "n", text: fmtV(c, b) }),
       h("td", { class: "n " + (d > 0 ? "pos" : d < 0 ? "neg" : "muted"), text: d ? (d > 0 ? "▲ +" : "▼ −") + fmtV(c, Math.abs(d)) : "=" })));
   }
   // Pièces par emplacement
