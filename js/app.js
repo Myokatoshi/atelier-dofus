@@ -2888,6 +2888,42 @@ const canFm = id => ![12, 13].includes(superOf(id));
 const breedOf = b => b.breed || S.settings.breed || 0;
 const breedName = id => ((BD && BD.breeds.find(x => x[0] === id)) || [0, "Classe"])[1];
 // Portrait Dofus 3 de la classe (client Unity, tools/fetch_dofus3_images.py) : head_<classe><0 homme | 1 femme>
+// Rendu Dofus 3 du personnage (fichiers du jeu, data/d3/, tools/build_d3looks.py) avec d3-ts-renderer (vendor/d3r.js)
+let D3L = null, d3Loading = null, D3R = null, D3C = null;
+function ensureD3() {
+  if (D3L || d3Loading) return d3Loading;
+  d3Loading = Promise.all([fetch("data/d3/looks.json").then(r => r.ok ? r.json() : null), import("../vendor/d3r.js")]).then(([j, m]) => {
+    D3L = j || { items: {}, breeds: {} }; D3R = m;
+    m.configure({ strategy: "url", basePath: new URL("data/d3/", location.href).href, ImageExtension: "webp" });
+    if (view === "builds") render();
+  }).catch(e => { console.warn("rendu Dofus 3 indisponible", e); D3L = { items: {}, breeds: {} }; });
+  return d3Loading;
+}
+// Look du personnage : corps + tête de la classe, puis chapeau, cape, bouclier (l'apparat de la case passe avant la pièce équipée)
+function d3Look(b) {
+  const per = D3L && D3L.breeds[breedOf(b)]; if (!per) return null;
+  const [body, head, cols] = per[(b.sexe || "m") === "f" ? 1 : 0];
+  const skins = [body, head], miss = [];
+  for (const sp of [10, 11, 7]) {
+    const sk = skinOf(b, sp, 0), eq = slotItem(b, sp, 0), id = sk || eq;
+    if (!id) continue;
+    const s = D3L.items[sk] || D3L.items[eq];
+    if (s) skins.push(s); else miss.push(id);
+  }
+  return { look: "{1|" + skins.filter(Boolean).join(",") + "|" + cols.map((c, i) => (i + 1) + "=" + c).join(",") + "|100}", miss };
+}
+function d3Canvas(b) {
+  const L = D3R && d3Look(b); if (!L) return null;
+  if (!D3C) { const c = document.createElement("canvas"); c.className = "d3cv"; c.width = c.height = 300; D3C = { canvas: c, pb: new D3R.SpritePlayback(), key: "", fail: false }; }
+  const dir = b.dir ?? 1, key = L.look + "|" + dir;
+  if (D3C.key !== key) {
+    D3C.key = key; D3C.fail = false;
+    D3R.DofusSprite.create(D3R.Look.fromString(L.look), D3C.canvas)
+      .then(sp => D3C.key === key ? D3C.pb.play(sp, { animName: "AnimStatiqueExplo0", direction: dir, scale: 1.5, audio: false, forcedSize: 300 }) : null)
+      .catch(e => { console.warn(e); D3C.fail = true; if (view === "builds") render(); });
+  }
+  return D3C.fail ? null : { canvas: D3C.canvas, miss: L.miss };
+}
 const headSrc = b => "data/breeds/head_" + breedOf(b) + ((b.sexe || "m") === "f" ? 1 : 0) + ".webp";
 // Classes reconnues dans un texte copié (Dofusbook…) : nom normalisé -> id DofusDB
 const BREED_ALIASES = { feca: 1, osamodas: 2, enutrof: 3, sram: 4, xelor: 5, ecaflip: 6, eniripsa: 7, iop: 8, cra: 9, sadida: 10, sacrieur: 11, pandawa: 12,
@@ -3074,8 +3110,15 @@ function dollPanel(b, jet) {
   // Centre : portrait Dofus 3 de la classe et l'essentiel des stats finales
   const fs = finalStats(b, jet), p = persoOf(b);
   const mini = (l, v, c) => h("div", { class: "dc-st", title: l }, h("span", { class: "chl" }, chIcon(c, 14), l), h("strong", { text: fmt.format(Math.round(v || 0)) }));
+  ensureD3();
+  const r3 = br ? d3Canvas(b) : null, dir = b.dir ?? 1;
   const center = h("div", { class: "doll-c" },
-    br ? h("div", { class: "dc-head" }, h("img", { src: headSrc(b), alt: breedName(br), width: 64, height: 64 })) : h("div", { class: "dc-head empty-h" }, h("span", { text: "?" })),
+    r3 ? h("div", { class: "d3wrap" }, r3.canvas,
+        h("div", { class: "doll-rot" },
+          h("button", { type: "button", class: "btn sm", "aria-label": "Tourner à gauche", onclick: () => save({ dir: (dir + 7) % 8 }) }, "↺"),
+          h("button", { type: "button", class: "btn sm", "aria-label": "Tourner à droite", onclick: () => save({ dir: (dir + 1) % 8 }) }, "↻")))
+      : br ? h("div", { class: "dc-head" }, h("img", { src: headSrc(b), alt: breedName(br), width: 64, height: 64 })) : h("div", { class: "dc-head empty-h" }, h("span", { text: "?" })),
+    r3 && r3.miss.length ? h("small", { class: "muted", title: r3.miss.map(id => item(id)[0]).join(", "), text: r3.miss.length + " pièce" + (r3.miss.length > 1 ? "s" : "") + " sans rendu" }) : null,
     h("strong", { class: "dc-name", text: br ? breedName(br) + " · niv. " + p.lvl : "Choisis une classe" }),
     h("div", { class: "dc-stats" }, mini("PA", fs[1], 1), mini("PM", fs[23], 23), mini("PO", fs[19], 19), mini("PV", fs[PV], PV)),
     h("div", { class: "dc-stats" }, ...PRIM.slice(2).map(([c, l]) => mini(l.slice(0, 3) + ".", fs[c], c))));
