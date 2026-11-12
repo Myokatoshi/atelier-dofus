@@ -10,14 +10,13 @@ Usage : python3 tools/fetch_dofusdb_builds.py
      effet = [id d'effet, min, max, durée, cible (masque), zone]
   "effects": {id: [texte, caractéristique, catégorie, élément]}  textes des effets utilisés (catégorie 2 = dégâts)
   "weapons": {id objet: [PA, PO min, PO max, % critique, bonus critique, lancers/tour, [[id d'effet, min, max]]]}
-et les icônes des sorts dans data/spells/<icône>.webp, les symboles de classe dans data/breeds/<id>.webp.
+Les images (icônes des sorts, têtes des classes) viennent du client Dofus 3 : tools/fetch_dofus3_images.py.
 À relancer après une mise à jour du jeu (une centaine d'appels).
 """
-import io, json, time, urllib.parse, urllib.request
+import json, time, urllib.parse, urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
 
-from PIL import Image
 
 ROOT = Path(__file__).resolve().parent.parent
 API = "https://api.dofusdb.fr/"
@@ -54,19 +53,6 @@ def by_ids(path, key, ids):
     return out
 
 
-def webp(url, dest, size):
-    if dest.exists():
-        return
-    try:
-        im = Image.open(io.BytesIO(get(url))).convert("RGBA")
-    except Exception as e:
-        print("  image manquante", url, e)
-        return
-    im.thumbnail((size, size), Image.LANCZOS)
-    dest.parent.mkdir(parents=True, exist_ok=True)
-    im.save(dest, "WEBP", quality=85, method=6)
-    time.sleep(0.2)
-
 
 def fx(e):
     lo, hi = e.get("diceNum") or 0, e.get("diceSide") or 0
@@ -82,8 +68,6 @@ def fx(e):
 def main():
     breeds = sorted(page("breeds", {}), key=lambda b: b.get("sortIndex", b["id"]))
     out_b = [[b["id"], b["shortName"]["fr"], b.get("breedSpellsId") or []] for b in breeds]
-    for b in breeds:
-        webp(b["img"], ROOT / "data" / "breeds" / f"{b['id']}.webp", 64)
     spell_ids = [s for b in out_b for s in b[2]]
     spells = by_ids("spells", "id", spell_ids)
     levels = by_ids("spell-levels", "spellId", spell_ids)
@@ -101,8 +85,6 @@ def main():
                            lv.get("criticalHitProbability") or 0, lv.get("maxCastPerTurn") or 0, lv.get("maxCastPerTarget") or 0,
                            lv.get("minCastInterval") or 0, 1 if lv.get("rangeCanBeBoosted") else 0, ef, cr])
         out_s[str(s["id"])] = [s["name"]["fr"], s.get("iconId") or 0, grades]
-        if s.get("iconId"):
-            webp(f"{API}img/spells/sort_{s['iconId']}.png", ROOT / "data" / "spells" / f"{s['iconId']}.webp", 48)
     weapons = {}
     for t in WEAPON_TYPES:
         for it in page("items", {"typeId": t}):

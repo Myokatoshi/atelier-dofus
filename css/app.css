@@ -582,10 +582,10 @@ details.panel > summary::-webkit-details-marker { display: none; }
 .slot .ico { background-color: transparent !important; box-shadow: none !important; }
 .slot-fm { position: absolute; right: -4px; top: -6px; font: 800 .58rem var(--f-body); padding: 1px 4px; border-radius: 6px; background: var(--kamas); color: #241a00; }
 .doll-c { position: relative; display: grid; place-items: center; min-height: 260px; }
-.doll-img { width: 100%; max-width: 300px; height: auto; filter: drop-shadow(0 6px 10px rgb(0 0 0 / .45)); }
-.doll-sym { width: 120px; height: 120px; opacity: .85; }
-.doll-rot { position: absolute; bottom: 0; display: flex; gap: 6px; }
-.doll-rot .btn { min-width: 34px; padding: 2px 8px; }
+
+
+
+
 .slot-edit { display: grid; gap: 10px; padding: 12px; border-radius: 14px; border: 1px solid var(--accent); background: var(--sunk); }
 tr.fm-exo td { background: color-mix(in srgb, var(--kamas) 8%, transparent); }
 .spico { width: 36px; height: 36px; border-radius: 8px; flex: none; }
@@ -610,3 +610,35 @@ tr.fm-exo td { background: color-mix(in srgb, var(--kamas) 8%, transparent); }
 .sidenav a[aria-current="page"] .ib:has(.gi) { background: color-mix(in srgb, var(--c) 35%, transparent); box-shadow: inset 0 0 0 1px var(--c); }
 .subtabs a .gi { margin-right: 2px; }
 .hero .hi:has(.gi) { background: rgb(0 0 0 / .25); }
+
+/* Centre de la poupée : portrait Dofus 3 de la classe et stats clés */
+.doll-c { align-content: center; gap: 8px; text-align: center; }
+.dc-head { width: 112px; height: 112px; border-radius: 50%; display: grid; place-items: center; overflow: hidden;
+  background: radial-gradient(circle at 50% 35%, #3b5a50, #1a2622 70%); border: 3px solid #c9a24a; box-shadow: 0 0 0 3px #3a2f16, 0 8px 20px rgb(0 0 0 / .45); }
+.dc-head img { width: 104px; height: 104px; image-rendering: auto; }
+.dc-head.empty-h span { font: 800 2rem var(--f-display); color: var(--muted); }
+.dc-name { font: 800 1.05rem var(--f-display); }
+.dc-stats { display: flex; flex-wrap: wrap; justify-content: center; gap: 4px; }
+.dc-st { display: grid; min-width: 46px; padding: 3px 6px; border-radius: 8px; background: rgb(0 0 0 / .25); }
+.dc-st span { font-size: .6rem; font-weight: 800; color: var(--muted); text-transform: uppercase; }
+.dc-st strong { font-size: .9rem; }
+.fm-strip { display: grid; gap: 6px; }
+.chip.fmchip { display: inline-flex; align-items: center; gap: 6px; cursor: pointer; }
+.chip.fmchip.on { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+.chip.fmchip.done b { color: var(--kamas); }
+.imp-meta { display: grid; gap: 8px; padding: 10px; border-radius: 12px; background: var(--sunk); }
+@media (max-width: 720px) { .dc-head { width: 84px; height: 84px; } .dc-head img { width: 78px; height: 78px; } .dc-st { min-width: 40px; } }
+/* Forgemagie simple : une valeur par caractéristique */
+details.fmd { border: 1px solid var(--line); border-radius: 12px; background: var(--sunk); }
+details.fmd > summary { display: flex; align-items: center; gap: 8px; padding: 8px 10px; cursor: pointer; list-style: none; }
+details.fmd > summary::-webkit-details-marker { display: none; }
+details.fmd > summary .chip { margin-left: auto; }
+details.fmd[open] > summary { border-bottom: 1px solid var(--line); }
+.fm { display: grid; gap: 10px; padding: 10px; }
+.fm-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 8px; }
+.fmf { display: grid; gap: 2px; padding: 6px 8px; border-radius: 10px; background: var(--surface); border: 1px solid var(--line); }
+.fmf .fmn { font-size: .78rem; font-weight: 800; }
+.fmf input { width: 100%; }
+.fmf.over { border-color: var(--kamas); } .fmf.over small { color: var(--kamas); }
+.fmf.exo { border-color: var(--c-alm); } .fmf.exo small { color: var(--c-alm); }
+@media (max-width: 720px) { .fm-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }

@@ -1701,6 +1701,37 @@ function equipNames() {
   EQUIP_NAMES = [...m.entries()].sort((a, b) => b[0].length - a[0].length);
   return EQUIP_NAMES;
 }
+// Nom, classe, niveau et points de caractéristiques d'un build copié (page Dofusbook…) : repérage par heuristiques,
+// tout reste modifiable avant de créer le build
+function parseBuildMeta(text) {
+  const lines = String(text).split(/\r?\n/).map(l => l.trim()).filter(Boolean);
+  const meta = { name: "", breed: 0, lvl: null, base: {} };
+  const nt = " " + norm(text) + " ";
+  let bestPos = Infinity;
+  for (const [k, id] of Object.entries(BREED_ALIASES)) { const i = nt.indexOf(" " + k + " "); if (i >= 0 && i < bestPos) { bestPos = i; meta.breed = id; } }
+  const lv = /\b(?:niveau|niv\.?|lvl|level)\s*:?\s*(\d{1,3})\b/i.exec(text); if (lv && +lv[1] >= 1 && +lv[1] <= 200) meta.lvl = +lv[1];
+  const titled = lines.map(l => /^(.{2,60}?)\s*[-–|]\s*dofus ?book/i.exec(l)).find(Boolean);
+  if (titled) meta.name = titled[1].trim();
+  else if (meta.breed) {
+    const k = Object.entries(BREED_ALIASES).find(([, id]) => id === meta.breed)[0];
+    const at = lines.findIndex(l => (" " + norm(l) + " ").includes(" " + k + " "));
+    const own = norm(lines[at]).replace(new RegExp("\\b" + k + "\\b"), "").replace(/[^a-z0-9 ]/g, " ").trim();
+    if (own && lines[at].length <= 60 && !/niveau|niv |lvl|level|\d{3}/.test(own)) meta.name = lines[at];
+    else for (let j = at - 1; j >= Math.max(0, at - 3); j--) { const l = lines[j]; if (l.length >= 2 && l.length <= 60 && !/^\d[\d\s]*$/.test(l) && !/dofus ?book|connexion|accueil|menu|mes builds/i.test(l)) { meta.name = l; break; } }
+  }
+  // Points investis : « Vitalité 995 », « Vitalité : 995 » ou le nombre seul sur la ligne suivante (pas les effets « 31 à 50 Vitalité »)
+  for (const [c, label] of PRIM) {
+    const key = norm(label);
+    for (let j = 0; j < lines.length; j++) {
+      const n = norm(lines[j]); if (!n.startsWith(key)) continue;
+      let rest = lines[j].slice(label.length).replace(/^[\s:]+/, "");
+      if (!rest && j + 1 < lines.length) rest = lines[j + 1];
+      const m = /^\+?\s*(\d[\d\s\u202f\u00a0]{0,6})(?:\s|$)/.exec(rest);
+      if (m && /^[\d\s\u202f\u00a0+\t]+$/.test(rest)) { const v = +m[1].replace(/\D/g, ""); if (v > 0 && v <= 3000) { meta.base[c] = v; break; } }
+    }
+  }
+  return meta;
+}
 // Repère les noms d'équipements dans un texte copié (page Dofusbook, DofusDB, message…)
 function parseBuildText(text) {
   const t = " " + norm(text) + " ";
@@ -1730,7 +1761,7 @@ function buildStats(ids, b) {
   const tot = {};
   const add = (c, lo, hi) => { const x = tot[c] || (tot[c] = { lo: 0, hi: 0 }); x.lo += lo; x.hi += hi; };
   for (const id of ids) {
-    const st = detOf(id).st || [], fm = b && b.fm && b.fm[id];
+    const st = detOf(id).st || [], fm = b && b.fm && canFm(id) && b.fm[id];
     for (const [c, lo, hi] of st) if (fm && fm[c] != null) add(c, fm[c], fm[c]); else add(c, lo, hi);
     if (fm) for (const [c, v] of Object.entries(fm)) if (!st.some(x => x[0] === +c)) add(+c, v, v);
   }
@@ -1788,6 +1819,7 @@ async function importBuildCapture(file) {
   render();
 }
 function viewBuilds() {
+  ensureBuildData();
   const b = S.builds.find(x => x.id === buildSel) || S.builds[S.builds.length - 1];
   if (b) buildSel = b.id;
   // Import
@@ -1797,8 +1829,8 @@ function viewBuilds() {
     const txt = ta.value.trim();
     if (!txt) { ta.focus(); return; }
     if (/^https?:\/\/\S+$/i.test(txt)) { buildImport = { status: "error", error: "La page ne peut pas ouvrir de lien externe. Ouvre le build sur Dofusbook, copie tout son contenu (Ctrl + A, Ctrl + C) et colle-le ici." }; render(); return; }
-    const ids = parseBuildText(txt);
-    buildImport = ids.length ? { status: "review", ids, name: nameIn.value.trim() } : { status: "error", error: "Aucun nom d'équipement reconnu dans ce texte." };
+    const ids = parseBuildText(txt), meta = parseBuildMeta(txt);
+    buildImport = ids.length ? { status: "review", ids, meta, name: nameIn.value.trim() || meta.name } : { status: "error", error: "Aucun nom d'équipement reconnu dans ce texte." };
     render();
   };
   const fileIn = h("input", { type: "file", accept: "image/png,image/jpeg,image/webp", hidden: true, id: "build-file" });
@@ -1818,7 +1850,24 @@ function viewBuilds() {
         const cb = h("input", { type: "checkbox", checked: true, "aria-label": item(id)[0] }); cb.addEventListener("change", () => cb.checked ? keep.add(id) : keep.delete(id));
         return h("label", { class: "card" }, cb, icon(id, 32), h("span", { class: "t" }, h("span", { class: "nm", text: item(id)[0] }), h("small", { text: (SLOTS[superOf(id)] || ["?"])[0] + " · niv. " + item(id)[1] })));
       })),
-      h("div", { class: "row" }, h("button", { type: "button", class: "btn primary", onclick: () => { newBuild(buildImport.name || nameIn.value.trim(), [...keep]); buildImport = null; render(); } }, "Créer le build"),
+      (() => { // Nom, classe, niveau et caractéristiques repérés : modifiables avant la création
+        const m = buildImport.meta || (buildImport.meta = { name: "", breed: 0, lvl: null, base: {} });
+        const nm = h("input", { type: "text", id: "imp-name", value: buildImport.name || "", placeholder: "Nom du build", "aria-label": "Nom du build importé", style: "flex:1 1 200px" });
+        nm.addEventListener("input", () => { buildImport.name = nm.value; });
+        const bs = h("select", { id: "imp-breed", "aria-label": "Classe du build importé" }, h("option", { value: "" }, "Classe ?"), (BD ? BD.breeds : []).map(([id, n2]) => h("option", { value: id, selected: id === m.breed }, n2)));
+        bs.addEventListener("change", () => { m.breed = +bs.value || 0; });
+        const lv = numInput(m.lvl ?? "", v => { m.lvl = Math.max(1, Math.min(200, Math.round(+v) || 0)) || null; }, { sm: true, ph: "200", label: "Niveau du personnage", id: "imp-lvl", noRender: true });
+        return h("div", { class: "imp-meta" },
+          h("div", { class: "row", style: "gap:8px" }, h("span", { class: "label", text: "Build" }), nm, bs, h("span", { class: "label", text: "Niveau" }), lv),
+          h("div", { class: "row", style: "gap:8px" }, h("span", { class: "label", text: "Points investis" }),
+            PRIM.map(([c, l]) => h("label", { class: "fld" }, h("span", { class: "label", text: l }), numInput(m.base[c] || "", v => { const x = Math.max(0, Math.round(+String(v).replace(/\s/g, "")) || 0); if (x) m.base[c] = x; else delete m.base[c]; }, { sm: true, ph: "0", label: "Points investis en " + l, id: "imp-c" + c, noRender: true })))),
+          h("small", { class: "muted", text: (m.breed || m.name || Object.keys(m.base).length ? "Repéré dans le texte collé : vérifie et corrige si besoin." : "Nom, classe et caractéristiques non trouvés dans le texte : indique-les ici.") + " Les parchemins sont comptés à 100." }));
+      })(),
+      h("div", { class: "row" }, h("button", { type: "button", class: "btn primary", onclick: () => {
+        const m = buildImport.meta || {}, nb = newBuild((buildImport.name || "").trim() || nameIn.value.trim(), [...keep]);
+        if (m.breed) { nb.breed = m.breed; S.settings.breed = m.breed; }
+        if (m.lvl || Object.keys(m.base || {}).length) nb.perso = { ...(m.lvl ? { lvl: m.lvl } : {}), base: { ...m.base } };
+        persist("builds"); buildImport = null; render(); } }, "Créer le build"),
         h("button", { type: "button", class: "btn", onclick: () => { buildImport = null; render(); } }, "Annuler")));
   }
   const list = S.builds.length ? h("div", { class: "chips" }, S.builds.map(x => h("button", { type: "button", class: "chip" + (x.id === buildSel ? " job" : ""), onclick: () => { buildSel = x.id; render(); } }, x.name + " · " + x.items.length + " pièces"))) : null;
@@ -1845,6 +1894,7 @@ function viewBuilds() {
             h("button", { type: "button", class: "btn sm", onclick: () => { const i = S.builds.indexOf(b), copy = { ...b, items: [...b.items] }; S.builds = S.builds.filter(x => x !== b); buildSel = null; persist("builds"); render(); toast("Build supprimé", () => { S.builds.splice(i, 0, copy); buildSel = copy.id; persist("builds"); render(); }); } }, "Supprimer")),
           over.length ? h("p", { class: "neg small", text: "Trop de pièces pour : " + over.join(", ") + "." }) : null),
         dollPanel(b, S.settings.jet || "max"),
+        fmSection(b, S.settings.jet || "max"),
         h("details", { class: "panel dj" }, h("summary", {}, h("strong", { text: "Pièces, prix et coût du build · " + kk((cost.lo + cost.hi) / 2) + " ₭" })),
           searchBox("Ajouter une pièce (équipement, dofus, familier…)", {}, id => { if (!isEquip(id)) { toast(item(id)[0] + " n'est pas un équipement"); return; } if (!b.items.includes(id)) { b.items.push(id); b.items.sort(slotSort); persist("builds"); } render(); }, "q-build"),
           h("div", { class: "tablewrap" }, h("table", {},
@@ -2775,87 +2825,42 @@ const DOLL = {
 };
 const slotItem = (b, sp, i) => b.items.filter(id => superOf(id) === sp)[i];
 let bSlot = null; // case ouverte : {sp, i}
+// Pas de forgemagie sur les Dofus, trophées, familiers, montiliers et montures
+const canFm = id => ![12, 13].includes(superOf(id));
 const breedOf = b => b.breed || S.settings.breed || 0;
 const breedName = id => ((BD && BD.breeds.find(x => x[0] === id)) || [0, "Classe"])[1];
-// Rendu du personnage avec ce qu'il porte (chapeau, cape, bouclier, familier ou monture, arme)
-const LOOKS = new Map();
-function lookUrl(b, dir, size) {
-  const br = breedOf(b); if (!br) return null;
-  const ids = b.items.filter(id => [10, 11, 7, 12, 2].includes(superOf(id))).sort((x, y) => x - y);
-  const key = br + "|" + (b.sexe || "m") + "|" + ids.join(",");
-  let v = LOOKS.get(key);
-  if (v === undefined) {
-    try { v = localStorage.getItem("atelier-look:" + key); } catch { v = null; }
-    if (v) LOOKS.set(key, v);
-    else {
-      LOOKS.set(key, null);
-      fetch("https://api.dofusdb.fr/look?" + new URLSearchParams([["breedId", br], ["sexe", b.sexe || "m"], ...ids.map(id => ["itemIds[]", id])]))
-        .then(r => r.ok ? r.json() : Promise.reject()).then(s => { LOOKS.set(key, String(s)); try { localStorage.setItem("atelier-look:" + key, String(s)); } catch {} if (view === "builds") render(); })
-        .catch(() => LOOKS.set(key, ""));
-    }
-  }
-  if (!v) return null;
-  return "https://renderer.dofusdb.fr/kool/" + [...v].map(c => c.charCodeAt(0).toString(16).padStart(2, "0")).join("") + "/full/" + dir + "/" + size + "_" + size + ".png";
-}
+// Portrait Dofus 3 de la classe (client Unity, tools/fetch_dofus3_images.py) : head_<classe><0 homme | 1 femme>
+const headSrc = b => "data/breeds/head_" + breedOf(b) + ((b.sexe || "m") === "f" ? 1 : 0) + ".webp";
+// Classes reconnues dans un texte copié (Dofusbook…) : nom normalisé -> id DofusDB
+const BREED_ALIASES = { feca: 1, osamodas: 2, enutrof: 3, sram: 4, xelor: 5, ecaflip: 6, eniripsa: 7, iop: 8, cra: 9, sadida: 10, sacrieur: 11, pandawa: 12,
+  roublard: 13, zobal: 14, steamer: 15, steameur: 15, eliotrope: 16, huppermage: 17, ouginak: 18, forgelance: 20 };
 
 // --- Forgemagie : jets exacts, over et exos -------------------------------------------
 const jetOf = (lo, hi, jet) => jet === "min" ? lo : jet === "max" ? hi : Math.round((lo + hi) / 2);
 const charLabel = c => { const t = D.chars[c]; if (!t) return "?"; const n = fxText(t[0], 2, 2).replace(/^2\s*%?\s*/, "").trim() || t[3]; return /^0\s*%/.test(fxText(t[0], 0, 0)) ? n + " (%)" : n; };
-const runeW = c => RUNES[c] ? RUNES[c][0] : 0;
-let RUNE_NAMES = null;
-// Runes d'une caractéristique, de la plus forte à la plus faible : [[objet, points ajoutés]]
-function runeTiers(c) {
-  const r = RUNES[c]; if (!r) return [];
-  if (!RUNE_NAMES) { RUNE_NAMES = new Map(); for (const [id, it] of Object.entries(D.items)) if (it[0].startsWith("Rune ")) RUNE_NAMES.set(it[0], +id); }
-  const suf = item(r[1])[0].slice(5), unit = c === 40 ? 10 : Math.max(1, Math.round(1 / r[0]));
-  const out = [[r[1], unit]];
-  for (const [p, k] of [["Pa ", 3], ["Ra ", 10]]) { const id = RUNE_NAMES.get("Rune " + p + suf); if (id) out.unshift([id, unit * k]); }
-  return out;
-}
-// Runes pour ajouter « delta » points, sans compter les échecs
-function runesFor(c, delta) {
-  const tiers = runeTiers(c); let left = delta; const out = [];
-  for (const [id, v] of tiers) { const n = Math.floor(left / v); if (n > 0) { out.push([id, n]); left -= n * v; } }
-  if (left > 0 && tiers.length) { const id = tiers[tiers.length - 1][0], x = out.find(o => o[0] === id); if (x) x[1]++; else out.push([id, 1]); }
-  return out;
-}
+// Forgemagie simple : une valeur par caractéristique (jet exact, over permis) et des exos ; pas sur Dofus, trophées, familiers, montures
 function fmPanel(b, id, jet) {
   const st = detOf(id).st || [], fm = (b.fm && b.fm[id]) || {};
   const save = nf => { b.fm = { ...(b.fm || {}) }; if (nf && Object.keys(nf).length) b.fm[id] = nf; else delete b.fm[id]; persist("builds"); render(); };
-  const rows = st.map(([c, lo, hi]) => ({ c, lo, hi, mx: Math.max(lo, hi), v: fm[c] ?? jetOf(lo, hi, jet), set: fm[c] != null, exo: false }));
-  for (const [c, v] of Object.entries(fm)) if (!st.some(x => x[0] === +c)) rows.push({ c: +c, lo: 0, hi: 0, mx: 0, v, set: true, exo: true });
-  const baseW = st.reduce((t, [c, lo, hi]) => t + Math.max(0, lo, hi) * runeW(c), 0);
-  const curW = rows.reduce((t, r) => t + Math.max(0, r.v) * runeW(r.c), 0);
-  const P = rid => { const o = priceAt(rid); return o ? nowPrice(o) : null; };
-  let overCost = 0, overMissing = 0;
-  const overRunes = r => { if (!(r.v > r.mx) || !RUNES[r.c]) return null; const list = runesFor(r.c, r.v - r.mx);
-    for (const [rid, n] of list) { const p = P(rid); if (p == null) overMissing++; else overCost += p * n; }
-    return list.map(([rid, n]) => n + " × " + item(rid)[0]).join(" + "); };
-  const exoChoices = Object.keys(RUNES).map(Number).filter(c => D.chars[c] && !rows.some(r => r.c === c)).sort((x, y) => runeW(y) - runeW(x));
-  const exoSel = h("select", { id: "fm-exo", "aria-label": "Caractéristique à ajouter" }, exoChoices.map(c => h("option", { value: c }, charLabel(c) + " (poids " + String(runeW(c)).replace(".", ",") + ")")));
-  const exoIn = numInput("1", () => {}, { sm: true, label: "Valeur de l'exo", id: "fm-exo-v", noRender: true });
-  const body = rows.map(r => { const ov = overRunes(r); return h("tr", { class: r.exo ? "fm-exo" : "" },
-    h("td", {}, h("strong", { text: charLabel(r.c) }), r.exo ? h("span", { class: "chip kamas", style: "margin-left:6px", text: "exo" }) : r.v > r.mx ? h("span", { class: "chip warn", style: "margin-left:6px", text: "over" }) : null),
-    h("td", { class: "n muted", text: r.exo ? "—" : r.lo === r.hi ? fmt.format(r.lo) : fmt.format(r.lo) + " à " + fmt.format(r.hi) }),
-    h("td", { class: "n" }, numInput(r.v, v => { const x = Math.round(+String(v).replace(",", ".")); const nf = { ...fm }; if (isNaN(x) || (r.exo && !x)) delete nf[r.c]; else nf[r.c] = x; save(nf); }, { sm: true, label: "Valeur de " + charLabel(r.c), id: "fm-" + r.c, noRender: true }),
-      r.set && !r.exo ? h("small", { class: "muted", style: "display:block", text: "saisi" }) : null),
-    h("td", { class: "n hide-m", text: runeW(r.c) ? String(Math.round(Math.max(0, r.v) * runeW(r.c) * 10) / 10).replace(".", ",") : "—" }),
-    h("td", { class: "small" }, ov ? h("span", { text: ov }) : h("span", { class: "muted", text: r.exo ? "" : "—" }), r.exo ? h("button", { type: "button", class: "x", "aria-label": "Retirer l'exo", onclick: () => { const nf = { ...fm }; delete nf[r.c]; save(nf); } }, "×") : null)); });
-  return h("div", { style: "display:grid;gap:10px" },
-    h("div", { class: "row between" }, h("h3", { style: "margin:0", text: "Forgemagie" }),
-      h("div", { class: "row", style: "gap:6px" },
-        h("button", { type: "button", class: "btn sm", onclick: () => save(Object.fromEntries([...st.map(([c, lo, hi]) => [c, hi]), ...rows.filter(r => r.exo).map(r => [r.c, r.v])])) }, "Jet parfait"),
-        h("button", { type: "button", class: "btn sm", onclick: () => save(null) }, "Réinitialiser"))),
-    h("div", { class: "tablewrap" }, h("table", {},
-      h("thead", {}, h("tr", {}, h("th", { text: "Caractéristique" }), h("th", { class: "n", text: "Jet de base" }), h("th", { class: "n", text: "Valeur" }), h("th", { class: "n hide-m", text: "Poids" }), h("th", { text: "Runes pour l'over" }))),
-      h("tbody", {}, body))),
-    h("div", { class: "row", style: "gap:8px" }, h("span", { class: "label", text: "Ajouter un exo" }), exoSel, exoIn,
-      h("button", { type: "button", class: "btn sm primary", onclick: () => { const c = +exoSel.value, v = Math.round(+String(exoIn.value).replace(",", ".")) || 1; save({ ...fm, [c]: v }); } }, "Ajouter")),
-    h("div", { class: "chips" },
-      h("span", { class: "chip", text: "Poids de l'objet : " + fmt.format(Math.round(baseW)) + " (jets max)" }),
-      h("span", { class: "chip " + (curW > baseW ? "warn" : "job"), text: "Poids actuel : " + fmt.format(Math.round(curW)) + (curW > baseW ? " · +" + fmt.format(Math.round(curW - baseW)) + " au-dessus" : "") }),
-      overCost || overMissing ? h("span", { class: "chip kamas", text: "Runes pour l'over/exo ≈ " + kk(overCost) + " ₭" + (overMissing ? " + " + overMissing + " sans prix" : "") }) : null),
-    h("p", { class: "note", text: "Saisis la valeur exacte de chaque jet (forgemagie faite ou visée). Au-dessus du jet maximum, c'est de l'over ; une caractéristique absente de l'objet est un exo (PA, PM, Portée…). Poids d'une rune : PA 100, PM 90, Portée 51, Invocation 30, Dommages 20, Critique 10… Le coût des runes est le minimum sans échec, aux prix actuels de l'HDV." }));
+  const rows = st.map(([c, lo, hi]) => ({ c, lo, hi, mx: Math.max(lo, hi), v: fm[c] ?? jetOf(lo, hi, jet), exo: false }));
+  for (const [c, v] of Object.entries(fm)) if (!st.some(x => x[0] === +c)) rows.push({ c: +c, lo: 0, hi: 0, mx: 0, v, exo: true });
+  const field = r => h("label", { class: "fmf" + (r.exo ? " exo" : r.v > r.mx ? " over" : "") },
+    h("span", { class: "fmn", text: charLabel(r.c) }),
+    numInput(r.v, v => { const x = Math.round(+String(v).replace(",", ".")); const nf = { ...fm }; if (isNaN(x) || (r.exo && !x)) delete nf[r.c]; else nf[r.c] = x; save(nf); }, { sm: true, label: "Valeur de " + charLabel(r.c), id: "fm-" + id + "-" + r.c, noRender: true }),
+    h("small", { class: "muted", text: r.exo ? "exo" : r.lo === r.hi ? "fixe" : fmt.format(Math.min(r.lo, r.hi)) + " à " + fmt.format(r.mx) + (r.v > r.mx ? " · over" : "") }));
+  const exoChoices = [1, 23, 19, 26, 16, 18, 25, 49, 86, 88, 89, 90, 91, 92, 120, 125, 123, 122, 82, 83, 27, 28, 79, 78, 48, 44, 40, 11, 12, 10, 15, 13, 14, 33, 34, 35, 36, 37, 54, 55, 56, 57, 58]
+    .filter(c => D.chars[c] && !rows.some(r => r.c === c));
+  const exoSel = h("select", { id: "fm-exo-" + id, "aria-label": "Exo à ajouter" }, exoChoices.map(c => h("option", { value: c }, charLabel(c))));
+  const exoIn = h("input", { class: "cell sm", inputmode: "numeric", value: "1", id: "fm-exov-" + id, "aria-label": "Valeur de l'exo" });
+  const all = v => save(Object.fromEntries([...st.map(([c, lo, hi]) => [c, v === "max" ? hi : lo]), ...rows.filter(r => r.exo).map(r => [r.c, r.v])]));
+  return h("div", { class: "fm" },
+    h("div", { class: "fm-grid" }, rows.map(field)),
+    h("div", { class: "row", style: "gap:6px" },
+      h("button", { type: "button", class: "btn sm", onclick: () => all("max") }, "Jet parfait"),
+      h("button", { type: "button", class: "btn sm", onclick: () => all("min") }, "Jet minimum"),
+      Object.keys(fm).length ? h("button", { type: "button", class: "btn sm", onclick: () => save(null) }, "Réinitialiser") : null,
+      h("span", { class: "label", style: "margin-left:auto", text: "Exo" }), exoSel, exoIn,
+      h("button", { type: "button", class: "btn sm primary", onclick: () => { const c = +exoSel.value, v = Math.round(+String(exoIn.value).replace(",", ".")) || 1; save({ ...fm, [c]: v }); } }, "+ Ajouter")));
 }
 
 // --- Sorts, dégâts, buffs ------------------------------------------------------------
@@ -2990,7 +2995,7 @@ function ghostIcon(sp) {
 }
 function dollPanel(b, jet) {
   ensureBuildData();
-  const br = breedOf(b), dir = b.dir ?? 1;
+  const br = breedOf(b);
   const save = patch => { Object.assign(b, patch); persist("builds"); render(); };
   const slotBtn = ([sp, i, label]) => {
     const id = slotItem(b, sp, i), on = bSlot && bSlot.sp === sp && bSlot.i === i, fm = id && b.fm && b.fm[id];
@@ -2998,13 +3003,14 @@ function dollPanel(b, jet) {
       onclick: () => { bSlot = on ? null : { sp, i }; render(); if (bSlot) setTimeout(() => document.getElementById("slot-edit")?.scrollIntoView({ block: "nearest", behavior: "smooth" }), 30); } },
       id ? icon(id, 46) : [ghostIcon(sp), h("span", { class: "slot-l", text: label.split(" ")[0] })], fm ? h("span", { class: "slot-fm", text: "FM" }) : null);
   };
-  const url = br ? lookUrl(b, dir, 300) : null;
+  // Centre : portrait Dofus 3 de la classe et l'essentiel des stats finales
+  const fs = finalStats(b, jet), p = persoOf(b);
+  const mini = (l, v) => h("div", { class: "dc-st" }, h("span", { text: l }), h("strong", { text: fmt.format(Math.round(v || 0)) }));
   const center = h("div", { class: "doll-c" },
-    url ? h("img", { class: "doll-img", src: url, alt: "Personnage " + breedName(br), width: 300, height: 300, onerror: e => { e.target.replaceWith(h("img", { class: "doll-sym", src: "data/breeds/" + br + ".webp", alt: "" })); } })
-      : br ? h("img", { class: "doll-sym", src: "data/breeds/" + br + ".webp", alt: "" }) : h("span", { class: "muted small", text: "Choisis une classe" }),
-    br ? h("div", { class: "doll-rot" },
-      h("button", { type: "button", class: "btn sm", "aria-label": "Tourner à gauche", onclick: () => save({ dir: ((dir + 7) % 8) }) }, "↺"),
-      h("button", { type: "button", class: "btn sm", "aria-label": "Tourner à droite", onclick: () => save({ dir: ((dir + 1) % 8) }) }, "↻")) : null);
+    br ? h("div", { class: "dc-head" }, h("img", { src: headSrc(b), alt: breedName(br), width: 64, height: 64 })) : h("div", { class: "dc-head empty-h" }, h("span", { text: "?" })),
+    h("strong", { class: "dc-name", text: br ? breedName(br) + " · niv. " + p.lvl : "Choisis une classe" }),
+    h("div", { class: "dc-stats" }, mini("PA", fs[1]), mini("PM", fs[23]), mini("PO", fs[19]), mini("PV", fs[PV])),
+    h("div", { class: "dc-stats" }, ...PRIM.slice(2).map(([c, l]) => mini(l.slice(0, 3) + ".", fs[c]))));
   const breedSel = h("select", { id: "build-breed", "aria-label": "Classe" }, h("option", { value: "" }, "Classe…"), (BD ? BD.breeds : []).map(([id, nm]) => h("option", { value: id, selected: id === br }, nm)));
   breedSel.addEventListener("change", () => { const v = +breedSel.value || 0; S.settings.breed = v; b.buffs = []; save({ breed: v }); });
   const sexSeg = h("span", { class: "seg", role: "group", "aria-label": "Sexe" }, [["m", "♂"], ["f", "♀"]].map(([v, l]) => h("button", { type: "button", "aria-pressed": (b.sexe || "m") === v ? "true" : "false", "aria-label": v === "m" ? "Masculin" : "Féminin", onclick: () => save({ sexe: v }) }, l)));
@@ -3026,16 +3032,35 @@ function dollPanel(b, jet) {
         h("div", { class: "row", style: "gap:6px" }, id ? h("button", { type: "button", class: "btn sm", onclick: () => { b.items = b.items.filter(x => x !== id); if (b.fm) { const f = { ...b.fm }; delete f[id]; b.fm = f; } persist("builds"); render(); } }, "Retirer") : null,
           h("button", { type: "button", class: "x", "aria-label": "Fermer", onclick: () => { bSlot = null; render(); } }, "×"))),
       pick, h("small", { class: "muted", text: "Recherche limitée aux objets de cette case jusqu'au niveau " + lvl + " (niveau du personnage)." }),
-      id ? (DET[id % 32] ? fmPanel(b, id, jet) : (ensureDets([id]).then(() => render()), h("p", { class: "muted", text: "Chargement des effets…" }))) : null);
+      id && !canFm(id) ? h("p", { class: "note", text: "Pas de forgemagie sur les Dofus, trophées, familiers, montiliers et montures : leurs effets sont fixes." }) : null,
+      id && canFm(id) ? h("button", { type: "button", class: "btn sm primary", onclick: () => { FM_OPEN.add(id); bSlot = null; render(); setTimeout(() => document.querySelector('.fmd[data-id="' + id + '"]')?.scrollIntoView({ block: "start", behavior: "smooth" }), 30); } }, "Forgemager cette pièce") : null);
   }
   return h("section", { class: "panel doll-panel" },
-    h("div", { class: "row", style: "gap:8px" }, br ? h("img", { src: "data/breeds/" + br + ".webp", alt: "", width: 34, height: 34, style: "border-radius:8px" }) : null, breedSel, sexSeg,
-      h("span", { class: "small muted", text: "Touche une case pour choisir la pièce et la forgemager." })),
+    h("div", { class: "row", style: "gap:8px" }, br ? h("img", { src: headSrc(b), alt: "", width: 34, height: 34, style: "border-radius:8px" }) : null, breedSel, sexSeg,
+      h("span", { class: "small muted", text: "Touche une case pour choisir ou changer la pièce." })),
     h("div", { class: "doll" },
       h("div", { class: "doll-col" }, DOLL.left.map(slotBtn)), center, h("div", { class: "doll-col" }, DOLL.right.map(slotBtn)),
       h("div", { class: "doll-row" }, DOLL.bottom.map(slotBtn))),
     editor);
 }
+// Forgemagie de toutes les pièces (sauf Dofus, trophées, familiers, montures) : une ligne repliable par pièce
+function fmSection(b, jet) {
+  const ids = b.items.filter(canFm);
+  if (!ids.length) return null;
+  const miss = ids.filter(id => !DET[id % 32]);
+  if (miss.length) { ensureDets(miss).then(() => { if (view === "builds") render(); }); return null; }
+  return h("section", { class: "panel" },
+    h("div", { class: "row between" }, h("h2", { text: "Forgemagie" }), h("span", { class: "small muted", text: "Choisis la valeur de chaque caractéristique ; les stats se recalculent." })),
+    h("div", { style: "display:grid;gap:6px" }, ids.map(id => {
+      const n = Object.keys((b.fm || {})[id] || {}).length;
+      const d = h("details", { class: "fmd", "data-id": id }, h("summary", {}, icon(id, 28), h("strong", { text: item(id)[0] }),
+        h("span", { class: "chip " + (n ? "kamas" : ""), text: n ? "forgemagée" : "jets " + ({ min: "min", mid: "moyens", max: "max" })[jet] })), fmPanel(b, id, jet));
+      if (FM_OPEN.has(id)) d.open = true;
+      d.addEventListener("toggle", () => { if (d.open) FM_OPEN.add(id); else FM_OPEN.delete(id); });
+      return d;
+    })));
+}
+const FM_OPEN = new Set();
 
 // =====================================================================
 // Comparateur de builds : pièces, statistiques, coût, panoplies
