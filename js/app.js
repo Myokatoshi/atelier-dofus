@@ -1705,30 +1705,42 @@ function equipNames() {
 // tout reste modifiable avant de créer le build
 function parseBuildMeta(text) {
   const lines = String(text).split(/\r?\n/).map(l => l.trim()).filter(Boolean);
-  const meta = { name: "", breed: 0, lvl: null, base: {} };
-  const nt = " " + norm(text) + " ";
-  let bestPos = Infinity;
-  for (const [k, id] of Object.entries(BREED_ALIASES)) { const i = nt.indexOf(" " + k + " "); if (i >= 0 && i < bestPos) { bestPos = i; meta.breed = id; } }
-  const lv = /\b(?:niveau|niv\.?|lvl|level)\s*:?\s*(\d{1,3})\b/i.exec(text); if (lv && +lv[1] >= 1 && +lv[1] <= 200) meta.lvl = +lv[1];
-  const titled = lines.map(l => /^(.{2,60}?)\s*[-–|]\s*dofus ?book/i.exec(l)).find(Boolean);
-  if (titled) meta.name = titled[1].trim();
-  else if (meta.breed) {
-    const k = Object.entries(BREED_ALIASES).find(([, id]) => id === meta.breed)[0];
-    const at = lines.findIndex(l => (" " + norm(l) + " ").includes(" " + k + " "));
-    const own = norm(lines[at]).replace(new RegExp("\\b" + k + "\\b"), "").replace(/[^a-z0-9 ]/g, " ").trim();
-    if (own && lines[at].length <= 60 && !/niveau|niv |lvl|level|\d{3}/.test(own)) meta.name = lines[at];
-    else for (let j = at - 1; j >= Math.max(0, at - 3); j--) { const l = lines[j]; if (l.length >= 2 && l.length <= 60 && !/^\d[\d\s]*$/.test(l) && !/dofus ?book|connexion|accueil|menu|mes builds/i.test(l)) { meta.name = l; break; } }
+  const meta = { name: "", breed: 0, lvl: null, base: {}, parcho: {}, fmg: {} };
+  const keyOf = s => { const t = " " + norm(s) + " "; for (const [k, id] of Object.entries(BREED_ALIASES)) if (t.includes(" " + k + " ")) return [k, id]; return null; };
+  // Nom : « Nom - Dofusbook » (titre de page), sinon la première ligne qui contient une classe et d'autres mots
+  // (Dofusbook : « CRÂ 200 PVM TERRE/EAU ULTIME ») ; la classe est celle de cette ligne
+  const titled = lines.map(l => /^(.{2,80}?)\s*[-–|]\s*dofus ?book/i.exec(l)).find(Boolean);
+  for (const l of lines) {
+    const k = keyOf(l); if (!k || l.length > 80) continue;
+    const own = norm(l).replace(new RegExp("\\b" + k[0] + "\\b"), "").replace(/\b(niveau|niv|lvl|level)\b/g, "").replace(/[^a-z ]/g, " ").trim();
+    if (own) { meta.name = l; meta.breed = k[1]; break; }
   }
-  // Points investis : « Vitalité 995 », « Vitalité : 995 » ou le nombre seul sur la ligne suivante (pas les effets « 31 à 50 Vitalité »)
+  if (titled) meta.name = titled[1].trim();
+  if (!meta.breed) { // classe la plus citée
+    const cnt = {}; const t = " " + norm(text) + " ";
+    for (const [k, id] of Object.entries(BREED_ALIASES)) { const n = t.split(" " + k + " ").length - 1; if (n) cnt[id] = (cnt[id] || 0) + n; }
+    const best = Object.entries(cnt).sort((a, b) => b[1] - a[1])[0]; if (best) meta.breed = +best[0];
+  }
+  const lv = /\b(?:niveau|niv\.?|lvl|level)\s*:?\s*(\d{1,3})\b/i.exec(text); if (lv && +lv[1] >= 1 && +lv[1] <= 200) meta.lvl = +lv[1];
+  // Caractéristiques (tableau Dofusbook : total, nom, [total + puissance], base, parcho) ; « 31 à 50 Vitalité » (effet) est ignoré
+  const tok = norm(text).split(" "), LAB = new Set(["vitalite", "sagesse", "force", "intelligence", "chance", "agilite", "puissance"]);
   for (const [c, label] of PRIM) {
     const key = norm(label);
-    for (let j = 0; j < lines.length; j++) {
-      const n = norm(lines[j]); if (!n.startsWith(key)) continue;
-      let rest = lines[j].slice(label.length).replace(/^[\s:]+/, "");
-      if (!rest && j + 1 < lines.length) rest = lines[j + 1];
-      const m = /^\+?\s*(\d[\d\s\u202f\u00a0]{0,6})(?:\s|$)/.exec(rest);
-      if (m && /^[\d\s\u202f\u00a0+\t]+$/.test(rest)) { const v = +m[1].replace(/\D/g, ""); if (v > 0 && v <= 3000) { meta.base[c] = v; break; } }
+    for (let i = 0; i < tok.length; i++) {
+      if (tok[i] !== key) continue;
+      const nums = []; let j = i + 1;
+      while (j < tok.length && nums.length < 4 && /^-?\d+$/.test(tok[j])) nums.push(+tok[j++]);
+      if (nums.length > 1 && LAB.has(tok[j])) nums.pop(); // total de la ligne suivante
+      if (nums.length < 2) continue;
+      const [base, parcho] = nums.length >= 3 ? [nums[1], nums[2]] : [nums[0], nums[1]];
+      if (base >= 0 && base <= 2000 && parcho >= 0 && parcho <= 100) { if (base) meta.base[c] = base; meta.parcho[c] = parcho; break; }
     }
+  }
+  // Forgemagie globale (Dofusbook : exos PA, PM, PO… du stuff)
+  const fi = norm(text).indexOf("forgemagie globale");
+  if (fi >= 0) {
+    const t = norm(text).slice(fi + 18, fi + 200).split(" "), EXO = { pa: 1, pm: 23, po: 19, invocation: 26, invocations: 26 };
+    for (let i = 0; i + 1 < t.length && i < 24; i++) if (/^\d+$/.test(t[i]) && EXO[t[i + 1]]) meta.fmg[EXO[t[i + 1]]] = +t[i];
   }
   return meta;
 }
@@ -1851,7 +1863,7 @@ function viewBuilds() {
         return h("label", { class: "card" }, cb, icon(id, 32), h("span", { class: "t" }, h("span", { class: "nm", text: item(id)[0] }), h("small", { text: (SLOTS[superOf(id)] || ["?"])[0] + " · niv. " + item(id)[1] })));
       })),
       (() => { // Nom, classe, niveau et caractéristiques repérés : modifiables avant la création
-        const m = buildImport.meta || (buildImport.meta = { name: "", breed: 0, lvl: null, base: {} });
+        const m = buildImport.meta || (buildImport.meta = { name: "", breed: 0, lvl: null, base: {}, parcho: {}, fmg: {} });
         const nm = h("input", { type: "text", id: "imp-name", value: buildImport.name || "", placeholder: "Nom du build", "aria-label": "Nom du build importé", style: "flex:1 1 200px" });
         nm.addEventListener("input", () => { buildImport.name = nm.value; });
         const bs = h("select", { id: "imp-breed", "aria-label": "Classe du build importé" }, h("option", { value: "" }, "Classe ?"), (BD ? BD.breeds : []).map(([id, n2]) => h("option", { value: id, selected: id === m.breed }, n2)));
@@ -1861,12 +1873,14 @@ function viewBuilds() {
           h("div", { class: "row", style: "gap:8px" }, h("span", { class: "label", text: "Build" }), nm, bs, h("span", { class: "label", text: "Niveau" }), lv),
           h("div", { class: "row", style: "gap:8px" }, h("span", { class: "label", text: "Points investis" }),
             PRIM.map(([c, l]) => h("label", { class: "fld" }, h("span", { class: "label", text: l }), numInput(m.base[c] || "", v => { const x = Math.max(0, Math.round(+String(v).replace(/\s/g, "")) || 0); if (x) m.base[c] = x; else delete m.base[c]; }, { sm: true, ph: "0", label: "Points investis en " + l, id: "imp-c" + c, noRender: true })))),
-          h("small", { class: "muted", text: (m.breed || m.name || Object.keys(m.base).length ? "Repéré dans le texte collé : vérifie et corrige si besoin." : "Nom, classe et caractéristiques non trouvés dans le texte : indique-les ici.") + " Les parchemins sont comptés à 100." }));
+          Object.keys(m.fmg || {}).length ? h("span", { class: "chip kamas", text: "Forgemagie globale : " + Object.entries(m.fmg).map(([c, v]) => "+" + v + " " + charLabel(+c)).join(", ") }) : null,
+          h("small", { class: "muted", text: (m.breed || m.name || Object.keys(m.base).length ? "Repéré dans le texte collé : vérifie et corrige si besoin." : "Nom, classe et caractéristiques non trouvés dans le texte : indique-les ici.") + (Object.keys(m.parcho || {}).length ? " Parchemins repris du build." : " Les parchemins sont comptés à 100.") }));
       })(),
       h("div", { class: "row" }, h("button", { type: "button", class: "btn primary", onclick: () => {
         const m = buildImport.meta || {}, nb = newBuild((buildImport.name || "").trim() || nameIn.value.trim(), [...keep]);
         if (m.breed) { nb.breed = m.breed; S.settings.breed = m.breed; }
-        if (m.lvl || Object.keys(m.base || {}).length) nb.perso = { ...(m.lvl ? { lvl: m.lvl } : {}), base: { ...m.base } };
+        if (m.lvl || Object.keys(m.base || {}).length) nb.perso = { ...(m.lvl ? { lvl: m.lvl } : {}), base: { ...m.base }, ...(Object.keys(m.parcho || {}).length ? { parcho: { ...m.parcho } } : {}) };
+        if (Object.keys(m.fmg || {}).length) nb.fmg = { ...m.fmg };
         persist("builds"); buildImport = null; render(); } }, "Créer le build"),
         h("button", { type: "button", class: "btn", onclick: () => { buildImport = null; render(); } }, "Annuler")));
   }
@@ -2761,6 +2775,7 @@ function finalStats(b, jet) {
   for (const [c, x] of Object.entries(eq)) out[c] = val(x);
   const add = (c, v) => { out[c] = (out[c] || 0) + v; };
   for (const [c] of PRIM) add(c, (+p.parcho[c] || 0) + (+p.base[c] || 0));
+  for (const [c, v] of Object.entries(b.fmg || {})) add(+c, +v || 0); // forgemagie globale (exos du stuff, comme Dofusbook)
   add(1, p.lvl >= 100 ? 7 : 6); add(23, 3); add(26, 1);
   const st = c => out[c] || 0;
   add(48, 100 + Math.floor(st(13) / 10));
@@ -3051,6 +3066,9 @@ function fmSection(b, jet) {
   if (miss.length) { ensureDets(miss).then(() => { if (view === "builds") render(); }); return null; }
   return h("section", { class: "panel" },
     h("div", { class: "row between" }, h("h2", { text: "Forgemagie" }), h("span", { class: "small muted", text: "Choisis la valeur de chaque caractéristique ; les stats se recalculent." })),
+    h("div", { class: "row", style: "gap:10px;align-items:end" }, h("span", { class: "label", text: "Forgemagie globale (exos du stuff)" }),
+      [[1, "PA"], [23, "PM"], [19, "PO"], [26, "Invoc."]].map(([c, l]) => h("label", { class: "fld" }, h("span", { class: "label", text: l }),
+        numInput((b.fmg || {})[c] || "", v => { const x = Math.round(+String(v).replace(",", ".")) || 0; b.fmg = { ...(b.fmg || {}) }; if (x) b.fmg[c] = x; else delete b.fmg[c]; persist("builds"); }, { sm: true, ph: "0", label: "Exo " + l + " du stuff", id: "fmg-" + c })))),
     h("div", { style: "display:grid;gap:6px" }, ids.map(id => {
       const n = Object.keys((b.fm || {})[id] || {}).length;
       const d = h("details", { class: "fmd", "data-id": id }, h("summary", {}, icon(id, 28), h("strong", { text: item(id)[0] }),
