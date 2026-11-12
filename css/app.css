@@ -567,3 +567,39 @@ details.panel > summary::-webkit-details-marker { display: none; }
 .chip.down { background: var(--bad-soft); color: var(--bad); }
 .ichart.up { --sec: var(--good); } .ichart.down { --sec: var(--bad); }
 .spark.up path { stroke: var(--good); } .spark.up circle { fill: var(--good); } .spark.down path { stroke: var(--bad); } .spark.down circle { fill: var(--bad); }
+
+/* Simulateur de build : personnage au centre, cases d'équipement autour (comme en jeu) */
+.doll { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 10px; align-items: center;
+  padding: 12px; border-radius: 14px; background: radial-gradient(ellipse at 50% 45%, #2a3b36 0%, var(--sunk) 62%); border: 1px solid var(--line); }
+.doll-col { display: grid; gap: 8px; }
+.doll-row { grid-column: 1 / -1; display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 8px; justify-items: center; }
+.slot { position: relative; width: 58px; height: 58px; display: grid; place-items: center; padding: 0; cursor: pointer;
+  border-radius: 12px; border: 1px solid #3c4f48; background: linear-gradient(160deg, #24332f, #18221f); box-shadow: inset 0 0 0 2px rgb(0 0 0 / .25); color: var(--muted); }
+.slot:hover { border-color: var(--c-build); }
+.slot.on { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent); }
+.slot .ghost { position: absolute; inset: 0; margin: auto; filter: grayscale(1) brightness(.8); opacity: .22; }
+.slot.nil .slot-l { position: relative; font-size: .56rem; max-width: 100%; overflow: hidden; font-weight: 800; text-transform: uppercase; letter-spacing: .04em; text-align: center; line-height: 1.1; opacity: .7; }
+.slot .ico { background-color: transparent !important; box-shadow: none !important; }
+.slot-fm { position: absolute; right: -4px; top: -6px; font: 800 .58rem var(--f-body); padding: 1px 4px; border-radius: 6px; background: var(--kamas); color: #241a00; }
+.doll-c { position: relative; display: grid; place-items: center; min-height: 260px; }
+.doll-img { width: 100%; max-width: 300px; height: auto; filter: drop-shadow(0 6px 10px rgb(0 0 0 / .45)); }
+.doll-sym { width: 120px; height: 120px; opacity: .85; }
+.doll-rot { position: absolute; bottom: 0; display: flex; gap: 6px; }
+.doll-rot .btn { min-width: 34px; padding: 2px 8px; }
+.slot-edit { display: grid; gap: 10px; padding: 12px; border-radius: 14px; border: 1px solid var(--accent); background: var(--sunk); }
+tr.fm-exo td { background: color-mix(in srgb, var(--kamas) 8%, transparent); }
+.spico { width: 36px; height: 36px; border-radius: 8px; flex: none; }
+.dmg { font-family: var(--f-data); font-size: .85rem; white-space: nowrap; }
+.dmg i { font-style: normal; font-family: var(--f-body); font-weight: 800; color: var(--el); }
+.chip.buff { display: inline-flex; align-items: center; gap: 6px; cursor: pointer; }
+.chip.buff img { border-radius: 5px; }
+.chip.buff.on { border-color: var(--good); background: var(--good-soft); color: var(--fg); }
+@media (max-width: 720px) {
+  .doll { gap: 6px; padding: 8px; }
+  .slot { width: 46px; height: 46px; border-radius: 10px; }
+  .slot .ico { transform: scale(.82); }
+  .slot.nil .slot-l { font-size: .48rem; letter-spacing: 0; }
+  .doll-c { min-height: 200px; }
+  .doll-row { gap: 4px; }
+  .dmg { white-space: normal; }
+}
