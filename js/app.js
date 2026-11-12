@@ -229,6 +229,31 @@ function delRaw(r) {
   by[r.user_id] = by[r.user_id].filter(o => o.d !== r.d);
 }
 // Temps réel : chaque relevé d'un membre arrive chez tous les autres
+// Resynchronisation : la connexion en direct se coupe quand l'appli reste en arrière-plan (veille, onglet caché),
+// et les relevés des autres membres faits pendant ce temps n'arrivaient qu'au redémarrage. On recharge donc
+// les prix du groupe au retour sur l'appli et toutes les 2 minutes, sans perdre mes relevés pas encore envoyés.
+let lastSync = Date.now(), syncing = false;
+async function resync() {
+  if (!SB || !ME || writing || pending.size || syncing) return;
+  syncing = true; lastSync = Date.now();
+  const before = RAW;
+  try {
+    await loadAllPrices();
+    const redo = [];
+    for (const [id, by] of Object.entries(before)) for (const o of (by[ME] || [])) {
+      const srv = ((RAW[id] || {})[ME] || []).find(x => x.d === o.d);
+      if (!srv || (o.t && srv.t && new Date(o.t) - new Date(srv.t) > 1000)) { addRaw({ item_id: id, user_id: ME, d: o.d, lo: o.lo, hi: o.hi, cur: o.cur, updated_at: o.t }); redo.push(id); }
+    }
+    for (const id of new Set(redo)) aggregate(id);
+    if (redo.length) persist(...new Set(redo.map(id => "s:" + id)));
+    await loadCoefs(); await loadObtain();
+    softRender();
+  } catch (e) { console.error(e); RAW = before; for (const id in RAW) aggregate(id); }
+  finally { syncing = false; }
+}
+document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible" && Date.now() - lastSync > 20e3) resync(); });
+window.addEventListener("online", () => resync());
+setInterval(() => { if (document.visibilityState === "visible") resync(); }, 2 * 60e3);
 function subscribePrices() {
   SB.channel("prix-groupe")
     .on("postgres_changes", { event: "*", schema: "public", table: "price_obs" }, p => {
@@ -249,7 +274,7 @@ function subscribePrices() {
       else { const r = p.new; OBT[r.item_id] = { minutes: r.minutes == null ? null : +r.minutes, qty: r.qty, inputs: r.inputs || [], extra: +r.extra || 0, autoStone: r.auto_stone !== false, by: r.updated_by, t: r.updated_at }; }
       lsSaveObt(); softRender();
     })
-    .subscribe();
+    .subscribe(status => { if (status === "CHANNEL_ERROR" || status === "TIMED_OUT") setTimeout(resync, 5000); });
 }
 async function loadProfiles() {
   const { data } = await SB.from("profiles").select("id,pseudo");
