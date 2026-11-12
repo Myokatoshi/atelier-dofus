@@ -2150,7 +2150,15 @@ function almanaxJobsPanel(job) {
     h("p", { class: "note", text: "Calendrier de l'Almanax (DofusDB) : bonus du jour, remplacé par l'événement prévu certaines années. Les bonus d'XP, d'économie d'ingrédients et de fabrication intensive du jour choisi sont inclus dans les calculs ci-dessus ; « Qualité des objets » vaut pour toute fabrication dans la ville indiquée." }));
 }
 // Valeur de revente d'un craft à l'HDV, taxe déduite (prix actuel, sinon milieu de la fourchette)
-const resale = id => { const o = priceAt(id); return o ? nowPrice(o) * (1 - (S.settings.tax || 0) / 100) : null; };
+// Une cote Kamamaster « à vérifier » (plus de 50 fois les objets similaires) n'est pas comptée : un seul prix
+// aberrant suffisait à faire choisir une recette (ex. Clef de la mine de Sakaï à 4,7 M ₭)
+const resale = id => { const o = priceAt(id); return o && !oddOf(id, o) ? nowPrice(o) * (1 - (S.settings.tax || 0) / 100) : null; };
+// Prix à l'unité et sa source, pour l'affichage
+function unitSrc(id) {
+  const o = priceAt(id); if (!o) return h("small", { class: "muted", style: "display:block", text: "aucun prix" });
+  return h("small", { class: "muted", style: "display:block" }, k(nowPrice(o)) + " ₭/u · " + (o.src === "km" ? "Kamamaster" : "groupe" + (SH && o.by ? " (" + whoName(o.by[0]) + ")" : "")),
+    oddOf(id, o) ? h("span", { class: "chip warn", style: "margin-left:4px", title: oddText(id) + " : non compté", text: "à vérifier" }) : null);
+}
 // Plan de montée : à chaque niveau, la recette la moins chère par XP, la plus rentable une fois revendue
 // (coût moins revente, par XP) ou celle qui rapporte le plus d'XP
 function xpPlan(job, from, to, bonus, mode, C, B = { eco: 0, fab: 0 }) {
@@ -2261,12 +2269,12 @@ function viewMetiers() {
             h("td", {}, h("span", { class: "chip job", text: s.from + " → " + s.to })),
             h("td", {}, itemLink(s.id, "niv. " + item(s.id)[1] + " · " + kk(s.xp) + " XP", 26)),
             h("td", { class: "n" }, h("strong", { text: fmt.format(s.n) })),
-            h("td", { class: "n" }, s.c == null ? h("span", { class: "chip warn", text: "prix manquants" }) : kk(s.c * s.n)),
-            h("td", { class: "n hide-m" }, s.v == null ? h("span", { class: "muted", text: "sans prix" }) : kk(s.v * s.n)),
+            h("td", { class: "n" }, s.c == null ? h("span", { class: "chip warn", text: "prix manquants" }) : kk(s.c * s.n), s.c != null ? h("small", { class: "muted", style: "display:block", text: k(s.c) + " ₭/craft" }) : null),
+            h("td", { class: "n hide-m" }, s.v == null ? h("span", { class: "muted", text: oddOf(s.id, priceAt(s.id)) ? "non comptée" : "sans prix" }) : kk(s.v * s.n), unitSrc(s.id)),
             (() => { const b = s.c != null && s.v != null ? (s.v - s.c) * s.n : null; return h("td", { class: "n " + (b == null ? "muted" : b >= 0 ? "pos" : "neg"), text: b == null ? "—" : (b >= 0 ? "+" : "") + kk(b) }); })()))))) :
           h("div", { class: "empty" }, h("strong", { text: lv >= to ? "Objectif atteint" : "Aucune recette disponible" }), h("span", { text: lv >= to ? "Indique un objectif plus haut que ton niveau actuel." : "Aucune recette de ce métier ne rapporte d'XP à ton niveau." })),
         plan.stuck ? h("p", { class: "note", text: "Bloqué au niveau " + plan.stuck + " : aucune recette ne rapporte d'XP." }) : null,
-        plan.steps.length ? h("p", { class: "note", text: "Revente au prix actuel d'Orukam (sinon milieu de la fourchette), taxe HDV déduite. Écouler des centaines d'exemplaires du même objet fait baisser son prix : le bilan réel sera souvent plus bas, surtout sur les étapes à gros volume." }) : null),
+        plan.steps.length ? h("p", { class: "note", text: "Revente au prix actuel (relevé du groupe s'il existe, sinon cote Kamamaster), taxe HDV déduite ; une cote Kamamaster « à vérifier » n'est pas comptée tant que le groupe ne l'a pas relevée. Écouler des centaines d'exemplaires du même objet fait baisser son prix : le bilan réel sera souvent plus bas, surtout sur les étapes à gros volume." }) : null),
       h("section", { class: "panel" },
         h("div", { class: "row between" }, h("h2", { text: "Liste d'achat" }), h("span", { class: "chip", text: shop.length + " ingrédient" + (shop.length > 1 ? "s" : "") })),
         shop.length ? h("div", { class: "tablewrap" }, h("table", {}, h("tbody", {}, shop.slice(0, 60).map(x => h("tr", {},
@@ -2285,7 +2293,7 @@ function viewMetiers() {
           h("td", { class: "n" }, r.x ? h("strong", { text: fmt.format(r.x) }) : h("span", { class: "muted", text: "0" })),
           h("td", { class: "n hide-m", text: r.next ? fmt.format(r.next) : "—" }),
           h("td", { class: "n" }, r.c.missing ? h("span", { class: "chip warn", text: r.c.missing + " sans prix" }) : kk(r.mid)),
-          h("td", { class: "n hide-m", text: r.v != null ? kk(r.v) : "—" }),
+          h("td", { class: "n hide-m" }, r.v != null ? kk(r.v) : h("span", { class: "muted", text: "—" }), unitSrc(r.id)),
           h("td", { class: "n " + (r.b == null ? "muted" : r.b >= 0 ? "pos" : "neg"), text: r.b == null ? "—" : (r.b >= 0 ? "+" : "") + kk(r.b) }),
           h("td", { class: "n hide-m", text: r.perK != null ? kk(r.perK) : "—" }),
           h("td", { class: "hide-m" }, h("button", { type: "button", class: "btn sm", onclick: () => { addTarget(r.id); toast(item(r.id)[0] + " ajouté au plan"); } }, "+ Plan")))))),
