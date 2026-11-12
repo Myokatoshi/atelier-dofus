@@ -197,6 +197,7 @@ async function startOnline(session) {
     await loadTrades();
     await loadObtain();
     await loadCoefs();
+    loadKm();
     saveState("ok", "Synchronisé avec le groupe");
   } catch (e) {
     console.error(e);
@@ -246,7 +247,7 @@ async function resync() {
     }
     for (const id of new Set(redo)) aggregate(id);
     if (redo.length) persist(...new Set(redo.map(id => "s:" + id)));
-    await loadCoefs(); await loadObtain();
+    await loadCoefs(); await loadObtain(); await loadKm();
     softRender();
   } catch (e) { console.error(e); RAW = before; for (const id in RAW) aggregate(id); }
   finally { syncing = false; }
@@ -384,25 +385,59 @@ const obsOf = id => prices()[id] || [];
 // (hors cotes douteuses, écartées à la récupération : voir tools/fetch_kamamaster.py)
 let KM = null, KMH = null, kmhLoading = null;
 // Historique quotidien des prix Kamamaster (90 jours), chargé à la demande pour les courbes
-let kmCheckedAt = 0, KMC = null;
-function loadKm() {
+// Données Kamamaster : table km_data de Supabase (remplie toutes les 2 h par la fonction serveur « kamamaster »)
+// quand on est connecté, sinon fichiers data/km/*.json du site (secours)
+let kmCheckedAt = 0, KMC = null, kmSeen = {}, kmGen = 0;
+const kmOnline = () => !!(SB && ME && SH && SH.live);
+async function kmJson(key) {
+  if (kmOnline()) {
+    try { const { data, error } = await SB.from("km_data").select("data").eq("key", key).maybeSingle(); if (error) throw error; if (data && data.data) return data.data; }
+    catch (e) { console.error(e); }
+  }
+  try { const r = await fetch("data/km/" + key + ".json", { cache: "no-cache" }); return r.ok ? await r.json() : null; } catch { return null; }
+}
+function useKm(j) {
+  if (!j || !j.prices || (KM && j.fetched === KM.fetched && j.anomaliesAt === KM.anomaliesAt)) return false;
+  const first = !KM;
+  KM = j; ODD = null; oddKey = null;
+  // Nouvelles données : l'historique et les donjons seront rechargés à la demande
+  if (!first) { KMH = null; kmhLoading = null; KMD = null; kmdLoading = null; }
+  return true;
+}
+async function loadKm() {
   kmCheckedAt = Date.now();
-  // Heure de la dernière vérification sur Kamamaster (toutes les 2 h) et du dernier changement des prix
-  fetch("data/km/orukam-check.json", { cache: "no-cache" }).then(r => r.ok ? r.json() : null).then(j => { if (j && j.checked && (!KMC || j.checked !== KMC.checked)) { KMC = j; if (view === "serveur") render(); } }).catch(() => {});
-  return fetch("data/km/orukam.json", { cache: "no-cache" }).then(r => r.ok ? r.json() : null).then(j => {
-    if (!j || !j.prices || (KM && j.fetched === KM.fetched && j.anomaliesAt === KM.anomaliesAt)) return;
-    const first = !KM;
-    KM = j;
-    // Nouvelles données : l'historique et les donjons seront rechargés à la demande
-    if (!first) { KMH = null; kmhLoading = null; KMD = null; kmdLoading = null; }
-    render();
-  }).catch(() => {});
+  const gen = ++kmGen; // un chargement plus récent l'emporte (ex. fichiers du site lus avant la connexion)
+  if (kmOnline()) {
+    try {
+      // Petit appel d'abord : on ne recharge que ce qui a changé depuis la dernière fois
+      const { data: rows, error } = await SB.from("km_data").select("key, updated_at");
+      if (error) throw error;
+      if (rows && rows.length) {
+        if (gen !== kmGen) return;
+        const changed = new Set(rows.filter(r => kmSeen[r.key] !== r.updated_at).map(r => r.key));
+        let redraw = false;
+        if (changed.has("orukam-check")) { const c = await kmJson("orukam-check"); if (c) { KMC = c; redraw = true; } }
+        if (changed.has("orukam")) redraw = useKm(await kmJson("orukam")) || redraw;
+        if (changed.has("orukam-history") && KMH) { KMH = null; kmhLoading = null; redraw = true; }
+        if (changed.has("orukam-donjons") && KMD) { KMD = null; kmdLoading = null; redraw = true; }
+        for (const r of rows) kmSeen[r.key] = r.updated_at;
+        if (redraw) render();
+        return;
+      }
+    } catch (e) { console.error(e); }
+  }
+  const [c, j] = await Promise.all([kmJson("orukam-check"), kmJson("orukam")]);
+  if (gen !== kmGen) return;
+  let redraw = false;
+  if (c && c.checked && (!KMC || c.checked !== KMC.checked)) { KMC = c; redraw = true; }
+  if (useKm(j)) redraw = true;
+  if (redraw) render();
 }
 document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible" && D && Date.now() - kmCheckedAt > 15 * 60e3) loadKm(); });
 setInterval(() => { if (document.visibilityState === "visible" && D) loadKm(); }, 30 * 60e3);
 function ensureKmHistory() {
   if (KMH || kmhLoading) return kmhLoading;
-  kmhLoading = fetch("data/km/orukam-history.json", { cache: "no-cache" }).then(r => r.ok ? r.json() : null).then(j => { KMH = j || { dates: [], prices: {} }; if (sheet.open) renderSheet(); }).catch(() => { KMH = { dates: [], prices: {} }; });
+  kmhLoading = kmJson("orukam-history").then(j => { KMH = j || { dates: [], prices: {} }; if (sheet.open) renderSheet(); }).catch(() => { KMH = { dates: [], prices: {} }; });
   return kmhLoading;
 }
 function kmHistoryIn(id, s0, e0) {
@@ -2984,7 +3019,7 @@ function viewBrisage() {
 let KMD = null, kmdLoading = null, kmRedraw = false;
 function ensureKmDungeons() {
   if (KMD || kmdLoading) return kmdLoading;
-  kmdLoading = fetch("data/km/orukam-donjons.json", { cache: "no-cache" }).then(r => r.ok ? r.json() : null).then(j => { KMD = j && j.list ? j : { list: [], params: { min: 30 } }; redrawOrukam(); }).catch(() => { KMD = { list: [], params: { min: 30 } }; });
+  kmdLoading = kmJson("orukam-donjons").then(j => { KMD = j && j.list ? j : { list: [], params: { min: 30 } }; redrawOrukam(); }).catch(() => { KMD = { list: [], params: { min: 30 } }; });
   return kmdLoading;
 }
 // Recharge la vue quand une donnée chargée à la demande arrive

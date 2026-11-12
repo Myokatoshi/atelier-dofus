@@ -50,7 +50,9 @@ Deno.serve(async () => {
     }
   }
   let KM: any = null;
-  try { KM = await (await fetch(SITE + "data/km/orukam.json", { cache: "no-store" })).json(); } catch { /* prix de secours absents */ }
+  // Prix Kamamaster d'Orukam : table km_data (fonction « kamamaster »), sinon fichier du site
+  try { const { data } = await sb.from("km_data").select("data").eq("key", "orukam").maybeSingle(); KM = data?.data || null; } catch { /* table absente */ }
+  if (!KM) { try { KM = await (await fetch(SITE + "data/km/orukam.json", { cache: "no-store" })).json(); } catch { /* prix de secours absents */ } }
   const priceAt = (id: number): Obs | null => {
     const g = group.get(id) || null;
     const p = KM?.prices?.[id];

@@ -1,8 +1,8 @@
-# Vérifie toutes les 2 heures les données d'Orukam publiées par Kamamaster (prix HDV, brisage, anomalies, donjons), puis met l'appli à jour.
+# Secours : rafraîchit les fichiers data/km/ du site avec les données d'Orukam publiées par Kamamaster (lancement manuel).
 name: Prix Kamamaster
+# Plus de passage planifié : la récupération se fait désormais dans Supabase (fonction « kamamaster », toutes les 2 h).
+# Ce workflow ne sert plus qu'en secours, lancé à la main, pour rafraîchir les fichiers data/km/ du site.
 on:
-  schedule:
-    - cron: "17 */2 * * *"   # toutes les 2 heures (1 appel si les prix n'ont pas changé)
   workflow_dispatch:
 permissions:
   contents: write
