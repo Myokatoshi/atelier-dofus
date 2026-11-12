@@ -2149,10 +2149,12 @@ function almanaxJobsPanel(job) {
       h("p", { class: "muted", text: "Aucun bonus de ce type dans l'Almanax pour ce métier." }),
     h("p", { class: "note", text: "Calendrier de l'Almanax (DofusDB) : bonus du jour, remplacé par l'événement prévu certaines années. Les bonus d'XP, d'économie d'ingrédients et de fabrication intensive du jour choisi sont inclus dans les calculs ci-dessus ; « Qualité des objets » vaut pour toute fabrication dans la ville indiquée." }));
 }
-// Valeur de revente d'un craft à l'HDV, taxe déduite (prix actuel, sinon milieu de la fourchette)
+// Valeur de revente d'un craft à l'HDV (prix actuel, sinon milieu de la fourchette)
 // Une cote Kamamaster « à vérifier » (plus de 50 fois les objets similaires) n'est pas comptée : un seul prix
 // aberrant suffisait à faire choisir une recette (ex. Clef de la mine de Sakaï à 4,7 M ₭)
-const resale = id => { const o = priceAt(id); return o && !oddOf(id, o) ? nowPrice(o) * (1 - (S.settings.tax || 0) / 100) : null; };
+// Revente : prix de vente à l'HDV tel quel (la taxe HDV est déduite à part, dans le bilan : taxRate())
+const resale = id => { const o = priceAt(id); return o && !oddOf(id, o) ? nowPrice(o) : null; };
+const taxRate = () => (S.settings.tax || 0) / 100;
 // Prix à l'unité et sa source, pour l'affichage
 function unitSrc(id) {
   const o = priceAt(id); if (!o) return h("small", { class: "muted", style: "display:block", text: "aucun prix" });
@@ -2172,7 +2174,7 @@ function xpPlan(job, from, to, bonus, mode, C, B = { eco: 0, fab: 0 }) {
     for (const id of recs) {
       if (item(id)[1] > lv) continue;
       const g = craftXp(id, lv, bonus); if (!g) continue;
-      const c = cost.get(id), v = sell.get(id), net = c != null && v != null ? c - v : null;
+      const c = cost.get(id), v = sell.get(id), net = c != null && v != null ? c - v * (1 - taxRate()) : null;
       if (!most || g > most.g || (g === most.g && (c ?? Infinity) < (most.c ?? Infinity))) most = { id, g, c, v };
       const score = mode === "cost" ? c : mode === "net" ? net : null;
       if (score != null && (!best || score / g < best.s / best.g)) best = { id, g, c, v, s: score };
@@ -2218,7 +2220,7 @@ function viewMetiers() {
   const totN = plan.steps.reduce((t, s) => t + s.n, 0), unknown = plan.steps.filter(s => s.c == null);
   const totC = plan.steps.reduce((t, s) => t + (s.c ?? 0) * s.n, 0);
   const totV = plan.steps.reduce((t, s) => t + (s.v ?? 0) * s.n, 0), noSell = plan.steps.filter(s => s.v == null);
-  const bilan = totV - totC;
+  const totTax = totV * taxRate(), bilan = totV - totTax - totC;
   // Liste d'achat : ingrédients directs de toutes les étapes
   const need = new Map();
   for (const s of plan.steps) for (const [ing, q] of recipe(s.id)[1]) need.set(ing, (need.get(ing) || 0) + q * s.n);
@@ -2231,7 +2233,7 @@ function viewMetiers() {
   let rows = Object.entries(D.recipes).filter(([id, r]) => r[0] === job && item(+id)[1] <= lv).map(([id]) => {
     id = +id; const c = C.craft(id), mid = c.missing ? null : (c.lo + c.hi) / 2 * (1 - B.eco / 100), x = craftXp(id, lv, bonus);
     const v0 = resale(id), v = v0 == null ? null : v0 * (1 + B.fab / 100);
-    return { id, lvl: item(id)[1], c, mid, x, v, b: mid != null && v != null ? v - mid : null, perK: mid != null && x ? mid / x * 1000 : null, next: x ? Math.ceil((lvToXp(lv + 1) - lvToXp(lv)) / x) : null };
+    return { id, lvl: item(id)[1], c, mid, x, v, b: mid != null && v != null ? v * (1 - taxRate()) - mid : null, perK: mid != null && x ? mid / x * 1000 : null, next: x ? Math.ceil((lvToXp(lv + 1) - lvToXp(lv)) / x) : null };
   });
   const total = rows.length;
   if (!metierF.all) rows = rows.filter(r => r.x > 0 && r.lvl >= lv - 40);
@@ -2253,12 +2255,12 @@ function viewMetiers() {
       h("div", { class: "tiles" },
         h("div", { class: "tile" }, h("span", { class: "label", text: "Crafts nécessaires" }), h("span", { class: "v", text: plan.stuck ? "—" : fmt.format(totN) }), h("span", { class: "small muted", text: kk(Math.max(0, lvToXp(to) - lvToXp(lv))) + " XP du niveau " + lv + " au " + to + " · " + plan.steps.length + " étape" + (plan.steps.length > 1 ? "s" : "") })),
         h("div", { class: "tile" }, h("span", { class: "label", text: "Coût des ingrédients" }), h("span", { class: "v", text: kk(totC) + (unknown.length ? "+" : "") }), h("span", { class: "small muted", text: unknown.length ? unknown.length + " étape(s) sans prix complet" : "aux prix d'Orukam" })),
-        h("div", { class: "tile kamas" }, h("span", { class: "label", text: "Bilan après revente" }), h("span", { class: "v " + (bilan >= 0 ? "pos" : "neg"), text: (bilan >= 0 ? "+" : "") + kk(bilan) }), h("span", { class: "small muted", text: "revente " + kk(totV) + " ₭, taxe " + (S.settings.tax || 0) + " % déduite" + (noSell.length ? " · " + noSell.length + " craft(s) sans prix de vente" : "") })),
+        h("div", { class: "tile kamas" }, h("span", { class: "label", text: "Bilan après revente" }), h("span", { class: "v " + (bilan >= 0 ? "pos" : "neg"), text: (bilan >= 0 ? "+" : "") + kk(bilan) }), h("span", { class: "small muted", text: "revente " + kk(totV) + " ₭ − taxe HDV " + (S.settings.tax || 0) + " % (" + kk(totTax) + " ₭) − ingrédients" + (noSell.length ? " · " + noSell.length + " craft(s) sans prix de vente" : "") })),
         h("div", { class: "tile" }, h("span", { class: "label", text: "Prochain bonus · " + jobName(job) }),
           h("span", { class: "v", style: "font-size:1.2rem", text: nextB ? nextB.start.toLocaleDateString("fr-FR", { day: "numeric", month: "long" }) : "—" }),
           h("span", { class: "small muted", text: nextB ? nextB.fx.map(fxLabel).join(", ") + " · dans " + daysTo(nextB.start) + " j" : "aucun autre bonus prévu" }),
           nextB && days.findIndex(x => +x.d === +nextB.start) > 0 && dayIdx === 0 ? h("button", { type: "button", class: "btn sm", style: "justify-self:start;margin-top:4px", onclick: () => { metierDay = days.findIndex(x => +x.d === +nextB.start); render(); } }, "Calculer pour ce jour") : null)),
-      h("p", { class: "note", text: "Prix utilisés : prix actuel de chaque objet (sinon milieu de la fourchette), pour l'achat des ingrédients comme pour la revente. Calcul du simulateur d'XP de DofusDB : une recette rapporte d'autant plus d'XP que son niveau est proche du tien, plus du tout au-delà de 100 niveaux d'écart, et certains objets rapportent moins (pains, potions, alliages…). Jour de craft : son bonus d'Almanax est inclus : XP en plus, ingrédients économisés (coût et liste d'achat réduits), objets fabriqués en plus (revente augmentée, en moyenne). Autre bonus d'XP : parchemin, équipement… « Le moins cher » choisit à chaque niveau la recette au meilleur coût d'ingrédients par XP ; « Le plus rentable », celle qui coûte le moins par XP une fois revendue (coût moins revente, taxe déduite) ; « Le moins de crafts », celle qui rapporte le plus d'XP." })),
+      h("p", { class: "note", text: "Prix utilisés : prix actuel de chaque objet (sinon milieu de la fourchette), pour l'achat des ingrédients comme pour la revente. Calcul du simulateur d'XP de DofusDB : une recette rapporte d'autant plus d'XP que son niveau est proche du tien, plus du tout au-delà de 100 niveaux d'écart, et certains objets rapportent moins (pains, potions, alliages…). Jour de craft : son bonus d'Almanax est inclus : XP en plus, ingrédients économisés (coût et liste d'achat réduits), objets fabriqués en plus (revente augmentée, en moyenne). Autre bonus d'XP : parchemin, équipement… « Le moins cher » choisit à chaque niveau la recette au meilleur coût d'ingrédients par XP ; « Le plus rentable », celle qui coûte le moins par XP une fois revendue (coût moins revente, taxe HDV déduite) ; « Le moins de crafts », celle qui rapporte le plus d'XP." })),
     h("div", { class: "grid2 wide-left" },
       h("section", { class: "panel" },
         h("div", { class: "row between" }, h("h2", { text: "Plan de montée" }),
@@ -2271,10 +2273,10 @@ function viewMetiers() {
             h("td", { class: "n" }, h("strong", { text: fmt.format(s.n) })),
             h("td", { class: "n" }, s.c == null ? h("span", { class: "chip warn", text: "prix manquants" }) : kk(s.c * s.n), s.c != null ? h("small", { class: "muted", style: "display:block", text: k(s.c) + " ₭/craft" }) : null),
             h("td", { class: "n hide-m" }, s.v == null ? h("span", { class: "muted", text: oddOf(s.id, priceAt(s.id)) ? "non comptée" : "sans prix" }) : kk(s.v * s.n), unitSrc(s.id)),
-            (() => { const b = s.c != null && s.v != null ? (s.v - s.c) * s.n : null; return h("td", { class: "n " + (b == null ? "muted" : b >= 0 ? "pos" : "neg"), text: b == null ? "—" : (b >= 0 ? "+" : "") + kk(b) }); })()))))) :
+            (() => { const b = s.c != null && s.v != null ? (s.v * (1 - taxRate()) - s.c) * s.n : null; return h("td", { class: "n " + (b == null ? "muted" : b >= 0 ? "pos" : "neg"), text: b == null ? "—" : (b >= 0 ? "+" : "") + kk(b) }); })()))))) :
           h("div", { class: "empty" }, h("strong", { text: lv >= to ? "Objectif atteint" : "Aucune recette disponible" }), h("span", { text: lv >= to ? "Indique un objectif plus haut que ton niveau actuel." : "Aucune recette de ce métier ne rapporte d'XP à ton niveau." })),
         plan.stuck ? h("p", { class: "note", text: "Bloqué au niveau " + plan.stuck + " : aucune recette ne rapporte d'XP." }) : null,
-        plan.steps.length ? h("p", { class: "note", text: "Revente au prix actuel (relevé du groupe s'il existe, sinon cote Kamamaster), taxe HDV déduite ; une cote Kamamaster « à vérifier » n'est pas comptée tant que le groupe ne l'a pas relevée. Écouler des centaines d'exemplaires du même objet fait baisser son prix : le bilan réel sera souvent plus bas, surtout sur les étapes à gros volume." }) : null),
+        plan.steps.length ? h("p", { class: "note", text: "Revente au prix actuel à l'HDV (relevé du groupe s'il existe, sinon cote Kamamaster) ; le bilan retire la taxe HDV (" + (S.settings.tax || 0) + " %, réglable dans Rentabilité) et le coût des ingrédients ; une cote Kamamaster « à vérifier » n'est pas comptée tant que le groupe ne l'a pas relevée. Écouler des centaines d'exemplaires du même objet fait baisser son prix : le bilan réel sera souvent plus bas, surtout sur les étapes à gros volume." }) : null),
       h("section", { class: "panel" },
         h("div", { class: "row between" }, h("h2", { text: "Liste d'achat" }), h("span", { class: "chip", text: shop.length + " ingrédient" + (shop.length > 1 ? "s" : "") })),
         shop.length ? h("div", { class: "tablewrap" }, h("table", {}, h("tbody", {}, shop.slice(0, 60).map(x => h("tr", {},
