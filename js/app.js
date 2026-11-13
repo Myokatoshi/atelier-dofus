@@ -1658,15 +1658,30 @@ function zonesFor(ids) {
 let farmSrc = "plan";
 function viewFarm() {
   if (!F) { ensureFarm().then(() => { if (view === "farm") render(); }); return h("div", { class: "loading", text: "Chargement des drops, zones et donjons…" }); }
+  // Récoltes prévues dans les plans libres des métiers (onglet Métiers) : nombre de récoltes par ressource
+  const harv = {};
+  for (const [j, l] of Object.entries(S.settings.jobfree || {})) for (const x of l || []) if (x.h && D.items[x.id]) { harv[j] = harv[j] || new Map(); harv[j].set(x.id, (harv[j].get(x.id) || 0) + x.n); }
+  const hJobs = Object.keys(harv).sort((a, b) => jobName(+a).localeCompare(jobName(+b), "fr"));
+  let isH = String(farmSrc).startsWith("h:"); const hKey = isH ? farmSrc.slice(2) : null;
   const b = S.builds.find(x => x.id === farmSrc);
-  if (farmSrc !== "plan" && !b) farmSrc = "plan";
-  const targets = farmSrc === "plan" ? S.targets : b.items.map(id => recipe(id) ? { id, qty: 1 } : { id, qty: 1, raw: true });
-  const { rows } = computeNeeds(targets);
+  if (isH ? !(hKey === "all" ? hJobs.length : harv[hKey]) : farmSrc !== "plan" && !b) { farmSrc = "plan"; isH = false; }
+  let rows;
+  if (isH) {
+    const m = new Map();
+    for (const j of hKey === "all" ? hJobs : [hKey]) for (const [id, q] of harv[j]) m.set(id, (m.get(id) || 0) + q);
+    rows = [...m.entries()].map(([id, q]) => { const o = priceAt(id), p = pick(o, S.settings.basis); return { id, buy: q, o, p, farm: true, harvest: true, cost: p == null ? null : p * q }; })
+      .sort((a, c) => harvLvl(a.id) - harvLvl(c.id) || item(a.id)[0].localeCompare(item(c.id)[0], "fr"));
+  } else {
+    const targets = farmSrc === "plan" ? S.targets : b.items.map(id => recipe(id) ? { id, qty: 1 } : { id, qty: 1, raw: true });
+    rows = computeNeeds(targets).rows;
+  }
   const need = rows.filter(r => r.buy > 0);
   const farmed = need.filter(r => r.farm), bought = need.filter(r => !r.farm);
   const buyCost = bought.reduce((t, r) => t + (r.cost || 0), 0), saved = farmed.reduce((t, r) => t + (r.p != null ? r.p * r.buy : 0), 0);
   const srcSel = h("select", { id: "farm-src", "aria-label": "Source" }, h("option", { value: "plan", selected: farmSrc === "plan" }, "Plan de craft (" + S.targets.length + " objet" + (S.targets.length > 1 ? "s" : "") + ")"),
-    S.builds.map(x => h("option", { value: x.id, selected: farmSrc === x.id }, "Build : " + x.name)));
+    S.builds.map(x => h("option", { value: x.id, selected: farmSrc === x.id }, "Build : " + x.name)),
+    hJobs.map(j => h("option", { value: "h:" + j, selected: farmSrc === "h:" + j }, "Récoltes du plan libre : " + jobName(+j) + " (" + harv[j].size + ")")),
+    hJobs.length > 1 ? h("option", { value: "h:all", selected: farmSrc === "h:all" }, "Toutes les récoltes des plans libres") : null);
   srcSel.addEventListener("change", () => { farmSrc = srcSel.value; render(); });
   const setAll = v => { for (const r of need) { if (v) S.farm[r.id] = true; else delete S.farm[r.id]; } persist("plan"); render(); };
   const zones = zonesFor(farmed.map(r => r.id));
@@ -1676,19 +1691,19 @@ function viewFarm() {
     h("section", { class: "panel" },
       h("div", { class: "row between" }, h("h2", { text: "Liste de farm" }), h("div", { class: "row", style: "gap:8px" }, h("span", { class: "label", text: "Pour" }), srcSel,
         h("span", { class: "label", text: "Ta prospection" }), numInput(S.settings.pp || 100, v => { const n = Math.round(+String(v).replace(/\s/g, "")); S.settings.pp = n > 0 ? Math.min(1000, n) : 100; persist("plan"); }, { sm: true, label: "Prospection", id: "farm-pp" }))),
-      h("p", { class: "note", text: "Les ressources qu'il te manque (après ton stock), avec pour chacune où la récolter ou quel monstre la lâche. Choisis ce que tu farmes : le reste part dans la liste de courses du plan." }),
+      h("p", { class: "note", text: isH ? "Les ressources à récolter pour monter ton métier (plan libre de l'onglet Métiers), avec le nombre de récoltes prévu et les zones où les trouver. Valeur au prix HDV : ce que rapporte la revente." : "Les ressources qu'il te manque (après ton stock), avec pour chacune où la récolter ou quel monstre la lâche. Choisis ce que tu farmes : le reste part dans la liste de courses du plan." + (hJobs.length ? " Les récoltes de tes plans libres de métier sont dans le menu « Pour »." : "") }),
       h("div", { class: "tiles" },
-        h("div", { class: "tile" }, h("span", { class: "label", text: "À farmer" }), h("span", { class: "v", text: farmed.length }), h("span", { class: "small muted", text: k(farmed.reduce((t, r) => t + r.buy, 0)) + " unités" })),
+        h("div", { class: "tile" }, h("span", { class: "label", text: "À farmer" }), h("span", { class: "v", text: farmed.length }), h("span", { class: "small muted", text: k(farmed.reduce((t, r) => t + r.buy, 0)) + (isH ? " récoltes" : " unités") })),
         h("div", { class: "tile kamas" }, h("span", { class: "label", text: "À acheter" }), h("span", { class: "v", text: kk(buyCost) }), h("span", { class: "small muted", text: bought.length + " ressources" + (bought.some(r => r.p == null) ? ", prix incomplets" : "") })),
-        h("div", { class: "tile" }, h("span", { class: "label", text: "Économie en farmant" }), h("span", { class: "v pos", text: kk(saved) }), h("span", { class: "small muted", text: "au prix HDV relevé" })),
+        h("div", { class: "tile" }, h("span", { class: "label", text: isH ? "Valeur des récoltes" : "Économie en farmant" }), h("span", { class: "v pos", text: kk(saved) }), h("span", { class: "small muted", text: "au prix HDV relevé" })),
         h("div", { class: "tile" }, h("span", { class: "label", text: "Zones utiles" }), h("span", { class: "v", text: zones.length }), h("span", { class: "small muted", text: djs.size + " donjon" + (djs.size > 1 ? "s" : "") })))),
     !need.length ? h("div", { class: "empty" }, h("strong", { text: "Rien à farmer" }), h("span", { text: farmSrc === "plan" ? "Ajoute des objets au plan de craft, ou choisis un build dans la liste ci-dessus." : "Ton stock couvre déjà toutes les ressources de ce build." })) :
     h("div", { class: "grid2" },
       h("section", { class: "panel" },
         h("div", { class: "row between" }, h("h2", { text: "Ressources" }), h("div", { class: "row", style: "gap:6px" }, h("button", { type: "button", class: "btn sm", onclick: () => setAll(true) }, "Tout farmer"), h("button", { type: "button", class: "btn sm", onclick: () => setAll(false) }, "Tout acheter"))),
         h("div", { style: "display:grid;gap:10px" }, need.map(r => h("article", { class: "target" },
-          h("div", { class: "head" }, itemLink(r.id, "×" + k(r.buy) + " · " + (r.o ? range(r.o.lo, r.o.hi) + " ₭/u" : "prix inconnu"), 32),
-            h("span", { class: "seg", role: "group", "aria-label": "Choix" }, [[false, "Acheter"], [true, "Farmer"]].map(([v, l]) =>
+          h("div", { class: "head" }, itemLink(r.id, (r.harvest ? k(r.buy) + " récolte" + (r.buy > 1 ? "s" : "") + " · niv. " + harvLvl(r.id) : "×" + k(r.buy)) + " · " + (r.o ? range(r.o.lo, r.o.hi) + " ₭/u" : "prix inconnu"), 32),
+            r.harvest ? h("span", { class: "chip job", text: "Récolte (plan libre)" }) : h("span", { class: "seg", role: "group", "aria-label": "Choix" }, [[false, "Acheter"], [true, "Farmer"]].map(([v, l]) =>
               h("button", { type: "button", "aria-pressed": !!r.farm === v ? "true" : "false", onclick: () => { if (v) S.farm[r.id] = true; else delete S.farm[r.id]; persist("plan"); render(); } }, l)))),
           sourcesEl(r.id, false, r.buy))))),
       h("div", { class: "stack" },
@@ -2563,6 +2578,7 @@ function freePanel(job, plan, list, save, auto, o) {
     h("div", { class: "row", style: "gap:8px" },
       auto.steps.length ? h("button", { type: "button", class: "btn sm", onclick: () => { save(auto.steps.map(x => ({ id: x.id, n: x.n }))); toast("Plan automatique recopié : modifie-le à ta façon"); } }, list.length ? "Remplacer par le plan automatique" : "Partir du plan automatique") : null,
       list.length ? h("button", { type: "button", class: "btn sm", onclick: () => { for (const st of plan.steps.filter(x => !x.h)) { const t = S.targets.find(x => x.id === st.id); if (t) t.qty += st.n; else S.targets.push({ id: st.id, qty: st.n }); } persist("plan"); toast("Plan libre ajouté au plan de craft"); } }, "Ajouter au plan de craft") : null,
+      list.some(x => x.h) ? h("button", { type: "button", class: "btn sm", onclick: () => { farmSrc = "h:" + job; location.hash = "#farm"; } }, "Où récolter (liste de farm)") : null,
       list.length ? h("button", { type: "button", class: "btn sm", onclick: () => { if (confirm("Vider le plan libre de " + jobName(job) + " ?")) save([]); } }, "Vider") : null),
     plan.steps.length ? h("div", { class: "tablewrap" }, h("table", { class: "free" },
       h("thead", {}, h("tr", {}, h("th", { text: "Niveaux" }), h("th", { text: "Recette" }), h("th", { class: "n", text: "Crafts / récoltes" }), h("th", { class: "n", text: "Coût" }), h("th", { class: "n hide-m", text: "Revente" }), h("th", { class: "n", text: "Bilan" }), h("th", { text: "" }))),
