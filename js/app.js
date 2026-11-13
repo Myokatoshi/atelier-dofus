@@ -667,7 +667,7 @@ function find(q, opts = {}) {
   const out = [];
   for (const e of INDEX) {
     if (opts.craftOnly && !e.craft) continue;
-    if (opts.job != null && !(D.recipes[e.id] && D.recipes[e.id][0] === opts.job) && !(opts.harvest && F && F.harvest[e.id] && F.harvest[e.id][0] === opts.job)) continue;
+    if (opts.job != null && !(D.recipes[e.id] && D.recipes[e.id][0] === opts.job) && !(opts.harvest && harvJob(e.id) === opts.job)) continue;
     if (opts.type && e.type !== opts.type) continue;
     if (opts.sup != null && (D.types[e.type] || [0, 0])[1] !== opts.sup) continue;
     if (opts.types && !opts.types.includes(e.type)) continue;
@@ -1691,7 +1691,7 @@ function viewFarm() {
   const buyCost = bought.reduce((t, r) => t + (r.cost || 0), 0), saved = farmed.reduce((t, r) => t + (r.p != null ? r.p * r.buy : 0), 0);
   const srcSel = h("select", { id: "farm-src", "aria-label": "Source" }, h("option", { value: "plan", selected: farmSrc === "plan" }, "Plan de craft (" + S.targets.length + " objet" + (S.targets.length > 1 ? "s" : "") + ")"),
     S.builds.map(x => h("option", { value: x.id, selected: farmSrc === x.id }, "Build : " + x.name)),
-    hJobs.map(j => h("option", { value: "h:" + j, selected: farmSrc === "h:" + j }, "Récoltes du plan libre : " + jobName(+j) + " (" + harv[j].size + ")")),
+    hJobs.map(j => h("option", { value: "h:" + j, selected: farmSrc === "h:" + j }, (+j === 41 ? "Chasse du plan libre : " : "Récoltes du plan libre : ") + jobName(+j) + " (" + harv[j].size + ")")),
     hJobs.length > 1 ? h("option", { value: "h:all", selected: farmSrc === "h:all" }, "Toutes les récoltes des plans libres") : null);
   srcSel.addEventListener("change", () => { farmSrc = srcSel.value; render(); });
   const setAll = v => { for (const r of need) { if (v) S.farm[r.id] = true; else delete S.farm[r.id]; } persist("plan"); render(); };
@@ -1713,8 +1713,8 @@ function viewFarm() {
       h("section", { class: "panel" },
         h("div", { class: "row between" }, h("h2", { text: "Ressources" }), h("div", { class: "row", style: "gap:6px" }, h("button", { type: "button", class: "btn sm", onclick: () => setAll(true) }, "Tout farmer"), h("button", { type: "button", class: "btn sm", onclick: () => setAll(false) }, "Tout acheter"))),
         h("div", { style: "display:grid;gap:10px" }, need.map(r => h("article", { class: "target" },
-          h("div", { class: "head" }, itemLink(r.id, (r.harvest ? k(r.buy) + " récolte" + (r.buy > 1 ? "s" : "") + " · niv. " + harvLvl(r.id) : "×" + k(r.buy)) + " · " + (r.o ? range(r.o.lo, r.o.hi) + " ₭/u" : "prix inconnu"), 32),
-            r.harvest ? h("span", { class: "chip job", text: "Récolte (plan libre)" }) : h("span", { class: "seg", role: "group", "aria-label": "Choix" }, [[false, "Acheter"], [true, "Farmer"]].map(([v, l]) =>
+          h("div", { class: "head" }, itemLink(r.id, (r.harvest ? k(r.buy) + " " + hNoun(r.id, r.buy) + " · niv. " + harvLvl(r.id) : "×" + k(r.buy)) + " · " + (r.o ? range(r.o.lo, r.o.hi) + " ₭/u" : "prix inconnu"), 32),
+            r.harvest ? h("span", { class: "chip job", text: (isHunt(r.id) ? "Chasse" : "Récolte") + " (plan libre)" }) : h("span", { class: "seg", role: "group", "aria-label": "Choix" }, [[false, "Acheter"], [true, "Farmer"]].map(([v, l]) =>
               h("button", { type: "button", "aria-pressed": !!r.farm === v ? "true" : "false", onclick: () => { if (v) S.farm[r.id] = true; else delete S.farm[r.id]; persist("plan"); render(); } }, l)))),
           sourcesEl(r.id, false, r.buy))))),
       h("div", { class: "stack" },
@@ -2538,7 +2538,13 @@ function xpPlan(job, from, to, bonus, mode, C, B = { eco: 0, fab: 0 }, startXp =
 // est recalculée au niveau atteint à ce moment-là (une recette trop haute ou 100 niveaux en dessous ne rapporte rien)
 // Récolte : XP fixe par récolte, dès le niveau de la ressource. Valeur par défaut = 10 + 2 × ⌊niveau ÷ 10⌋
 // (5 + niveau ÷ 10 avant le doublement de l'XP de récolte de la 2.46), corrigeable par ressource (settings.hxp)
-const harvLvl = id => F && F.harvest[id] ? F.harvest[id][1] : item(id)[1];
+// Chasse : une viande ne tombe que pour un Chasseur (drops [monstre, taux, taux, 41, niveau] de farm.json) ;
+// dans le plan libre elle compte comme une « récolte » : XP fixe par viande obtenue, dès le niveau requis
+const huntLvl = id => { const l = F && (F.drops[id] || []).filter(d => d[3] === 41).map(d => d[4]); return l && l.length ? Math.min(...l) : null; };
+const isHunt = id => !!F && !F.harvest[id] && huntLvl(id) != null;
+const harvJob = id => F && F.harvest[id] ? F.harvest[id][0] : isHunt(id) ? 41 : null;
+const hNoun = (id, n = 1) => (isHunt(id) ? "viande" : "récolte") + (n > 1 ? "s" : "");
+const harvLvl = id => F && F.harvest[id] ? F.harvest[id][1] : huntLvl(id) ?? item(id)[1];
 const hxpDefault = id => 10 + 2 * Math.floor(harvLvl(id) / 10);
 const hxpOf = id => (S.settings.hxp || {})[id] ?? hxpDefault(id);
 const gainOf = (x, lv, bonus) => x.h ? (lv >= harvLvl(x.id) ? Math.floor(hxpOf(x.id) * (100 + bonus) / 100) : 0) : craftXp(x.id, lv, bonus);
@@ -2569,27 +2575,28 @@ let metierF = { sort: "xp", all: false }, metierDay = 0;
 function freePanel(job, plan, list, save, auto, o) {
   const move = (i, d) => { const l = list.slice(); const [x] = l.splice(i, 1); l.splice(Math.max(0, Math.min(l.length, i + d)), 0, x); save(l); };
   const setN = (i, n) => { const l = list.slice(); l[i] = { ...l[i], n: Math.max(1, Math.min(1e6, Math.round(n) || 1)) }; save(l); };
-  const harvests = F ? Object.keys(F.harvest).map(Number).filter(id => F.harvest[id][0] === job && D.items[id]).sort((a, b) => harvLvl(a) - harvLvl(b) || item(a)[0].localeCompare(item(b)[0], "fr")) : [];
+  const hunt = job === 41;
+  const harvests = F ? [...new Set([...Object.keys(F.harvest), ...(hunt ? Object.keys(F.drops) : [])])].map(Number).filter(id => D.items[id] && harvJob(id) === job).sort((a, b) => harvLvl(a) - harvLvl(b) || item(a)[0].localeCompare(item(b)[0], "fr")) : [];
   const add = id => {
     const r = recipe(id), x = r && r[0] === job ? { id } : harvests.includes(id) ? { id, h: 1 } : null;
     if (!x) { toast(item(id)[0] + " : ni une recette ni une ressource de " + jobName(job)); return; }
     const n = craftsTo(x, plan.xp, lvToXp(Math.min(200, xpToLv(plan.xp) + 1)), o.bonus);
-    save([...list, { ...x, n: Math.max(1, n) }]); toast(item(id)[0] + (x.h ? " (récolte)" : "") + " ajouté au plan libre");
+    save([...list, { ...x, n: Math.max(1, n) }]); toast(item(id)[0] + (x.h ? " (" + (hunt ? "chasse" : "récolte") + ")" : "") + " ajouté au plan libre");
   };
-  const box = searchBox("Ajouter une recette" + (harvests.length ? " ou une récolte" : "") + " de " + jobName(job) + "…", { job, harvest: true, limit: 30 }, add, "free-add");
+  const box = searchBox("Ajouter une recette" + (harvests.length ? hunt ? " ou une viande à chasser" : " ou une récolte" : "") + " de " + jobName(job) + "…", { job, harvest: true, limit: 30 }, add, "free-add");
   const lvNow = xpToLv(plan.xp);
   const hBest = harvests.filter(id => harvLvl(id) <= lvNow).sort((a, b) => hxpOf(b) - hxpOf(a))[0];
   const target = lvToXp(o.to);
   return h("div", { class: "stack" },
-    h("p", { class: "note", text: "Ajoute les recettes à crafter" + (harvests.length ? " et les ressources à récolter" : "") + ", dans l'ordre, avec leur quantité : l'XP de chaque craft est recalculée au niveau atteint à ce moment-là (formule du simulateur de DofusDB). Les coûts, la revente et la liste d'achat suivent ton plan." + (harvests.length ? " Récolte : XP fixe par récolte dès le niveau de la ressource ; la valeur proposée (10 + 2 × niveau ÷ 10) est une estimation, corrige-la avec l'XP vue en jeu (gardée pour la suite). La revente compte une ressource par récolte." : "") }),
+    h("p", { class: "note", text: "Ajoute les recettes à crafter" + (harvests.length ? hunt ? " et les viandes à obtenir en chassant" : " et les ressources à récolter" : "") + ", dans l'ordre, avec leur quantité : l'XP de chaque craft est recalculée au niveau atteint à ce moment-là (formule du simulateur de DofusDB). Les coûts, la revente et la liste d'achat suivent ton plan." + (harvests.length ? hunt ? " Chasse : une viande ne tombe que si tu es Chasseur au niveau demandé, avec une arme de chasse ; XP fixe par viande obtenue, la valeur proposée (10 + 2 × niveau ÷ 10) est une estimation, corrige-la avec l'XP vue en jeu. Le nombre de combats et les monstres sont dans la liste de farm." : " Récolte : XP fixe par récolte dès le niveau de la ressource ; la valeur proposée (10 + 2 × niveau ÷ 10) est une estimation, corrige-la avec l'XP vue en jeu (gardée pour la suite). La revente compte une ressource par récolte." : "") }),
     box,
-    harvests.length ? h("div", { class: "row", style: "gap:6px" }, h("span", { class: "label", text: "Récolter" }),
-      harvests.map(id => h("button", { type: "button", class: "chip" + (id === hBest ? " up" : ""), title: item(id)[0] + " : niveau " + harvLvl(id) + ", " + hxpOf(id) + " XP par récolte", disabled: harvLvl(id) > 200, onclick: () => add(id) },
+    harvests.length ? h("div", { class: "row", style: "gap:6px" }, h("span", { class: "label", text: hunt ? "Chasser" : "Récolter" }),
+      harvests.map(id => h("button", { type: "button", class: "chip" + (id === hBest ? " up" : ""), title: item(id)[0] + " : niveau " + harvLvl(id) + ", " + hxpOf(id) + " XP par " + hNoun(id), disabled: harvLvl(id) > 200, onclick: () => add(id) },
         icon(id, 18), item(id)[0] + " (" + harvLvl(id) + ")"))) : null,
     h("div", { class: "row", style: "gap:8px" },
       auto.steps.length ? h("button", { type: "button", class: "btn sm", onclick: () => { save(auto.steps.map(x => ({ id: x.id, n: x.n }))); toast("Plan automatique recopié : modifie-le à ta façon"); } }, list.length ? "Remplacer par le plan automatique" : "Partir du plan automatique") : null,
       list.length ? h("button", { type: "button", class: "btn sm", onclick: () => { for (const st of plan.steps.filter(x => !x.h)) { const t = S.targets.find(x => x.id === st.id); if (t) t.qty += st.n; else S.targets.push({ id: st.id, qty: st.n }); } persist("plan"); toast("Plan libre ajouté au plan de craft"); } }, "Ajouter au plan de craft") : null,
-      list.some(x => x.h) ? h("button", { type: "button", class: "btn sm", onclick: () => { farmSrc = "h:" + job; location.hash = "#farm"; } }, "Où récolter (liste de farm)") : null,
+      list.some(x => x.h) ? h("button", { type: "button", class: "btn sm", onclick: () => { farmSrc = "h:" + job; location.hash = "#farm"; } }, hunt ? "Où chasser (liste de farm)" : "Où récolter (liste de farm)") : null,
       list.length ? h("button", { type: "button", class: "btn sm", onclick: () => { if (confirm("Vider le plan libre de " + jobName(job) + " ?")) save([]); } }, "Vider") : null),
     plan.steps.length ? h("div", { class: "tablewrap" }, h("table", { class: "free" },
       h("thead", {}, h("tr", {}, h("th", { text: "Niveaux" }), h("th", { text: "Recette" }), h("th", { class: "n", text: "Crafts / récoltes" }), h("th", { class: "n", text: "Coût" }), h("th", { class: "n hide-m", text: "Revente" }), h("th", { class: "n", text: "Bilan" }), h("th", { text: "" }))),
@@ -2599,15 +2606,15 @@ function freePanel(job, plan, list, save, auto, o) {
         const b = st.c != null && st.v != null ? (st.v * (1 - taxRate()) - st.c) * st.n : null;
         return h("tr", {},
           h("td", {}, h("span", { class: "chip job", text: st.from + " → " + st.to })),
-          h("td", {}, itemLink(st.id, (st.h ? "récolte · " : "") + "niv. " + st.need + " · " + (g0 ? fmt.format(g0) + " XP / " + (st.h ? "récolte" : "craft au début") : "0 XP") + " · " + kk(st.xp) + " XP en tout", 26),
-            st.h ? h("label", { class: "row", style: "gap:6px;margin-top:4px" }, h("span", { class: "small muted", text: "XP par récolte (vue en jeu)" }),
+          h("td", {}, itemLink(st.id, (st.h ? (isHunt(st.id) ? "chasse · " : "récolte · ") : "") + "niv. " + st.need + " · " + (g0 ? fmt.format(g0) + " XP / " + (st.h ? hNoun(st.id) : "craft au début") : "0 XP") + " · " + kk(st.xp) + " XP en tout", 26),
+            st.h ? h("label", { class: "row", style: "gap:6px;margin-top:4px" }, h("span", { class: "small muted", text: "XP par " + hNoun(st.id) + " (vue en jeu)" }),
               numInput(hxpOf(st.id), v => { const n = Math.round(+String(v).replace(/\s/g, "")); const m = { ...(S.settings.hxp || {}) }; if (n > 0 && n !== hxpDefault(st.id)) m[st.id] = Math.min(10000, n); else delete m[st.id]; S.settings.hxp = m; persist("plan"); }, { sm: true, label: "XP par récolte de " + item(st.id)[0], id: "free-hxp-" + st.i })) : null,
             st.low ? h("span", { class: "chip warn", text: "niveau " + st.need + " requis" }) : null,
-            st.dead ? h("span", { class: "chip warn", text: fmt.format(st.dead) + (st.h ? " récolte" : " craft") + (st.dead > 1 ? "s" : "") + " sans XP" }) : null),
+            st.dead ? h("span", { class: "chip warn", text: fmt.format(st.dead) + " " + (st.h ? hNoun(st.id, st.dead) : "craft" + (st.dead > 1 ? "s" : "")) + " sans XP" }) : null),
           h("td", { class: "n" }, numInput(st.n, v => setN(st.i, +String(v).replace(/\s/g, "")), { sm: true, label: "Crafts de " + item(st.id)[0], id: "free-n-" + st.i, noRender: true }),
             h("div", { class: "row", style: "gap:4px;justify-content:flex-end;margin-top:4px" },
               fillNext && fillNext !== st.n && st.from < 200 ? h("button", { type: "button", class: "btn sm", title: "Crafts pour passer au niveau " + (st.from + 1), onclick: () => setN(st.i, fillNext) }, "→ " + (st.from + 1)) : null,
-              fill && fill !== st.n && o.to > st.from + 1 ? h("button", { type: "button", class: "btn sm", title: (st.h ? "Récoltes" : "Crafts") + " pour atteindre le niveau " + o.to + " (ou tant que " + (st.h ? "la ressource" : "la recette") + " rapporte de l'XP)", onclick: () => setN(st.i, fill) }, "→ " + Math.min(o.to, xpToLv(freeSim(st, fill, st.xpBefore, o.bonus).xp))) : null)),
+              fill && fill !== st.n && o.to > st.from + 1 ? h("button", { type: "button", class: "btn sm", title: (st.h ? (isHunt(st.id) ? "Viandes" : "Récoltes") : "Crafts") + " pour atteindre le niveau " + o.to + " (ou tant que " + (st.h ? "la ressource" : "la recette") + " rapporte de l'XP)", onclick: () => setN(st.i, fill) }, "→ " + Math.min(o.to, xpToLv(freeSim(st, fill, st.xpBefore, o.bonus).xp))) : null)),
           h("td", { class: "n" }, st.h ? h("span", { class: "muted", text: "gratuit" }) : st.c == null ? h("span", { class: "chip warn", text: "prix manquants" }) : kk(st.c * st.n), !st.h && st.c != null ? h("small", { class: "muted", style: "display:block", text: k(st.c) + " ₭/craft" }) : null),
           h("td", { class: "n hide-m" }, st.v == null ? h("span", { class: "muted", text: "sans prix" }) : kk(st.v * st.n), unitSrc(st.id)),
           h("td", { class: "n " + (b == null ? "muted" : b >= 0 ? "pos" : "neg"), text: b == null ? "—" : (b >= 0 ? "+" : "") + kk(b) }),
