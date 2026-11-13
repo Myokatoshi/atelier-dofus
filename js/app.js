@@ -4176,7 +4176,7 @@ function viewServeur() {
       (() => { const n = kmSuspects().length; return h("a", { class: "tile", href: "#prix", style: "text-decoration:none;color:inherit", onclick: () => setTimeout(() => document.getElementById("a-verifier")?.scrollIntoView({ behavior: "smooth" }), 300) }, h("span", { class: "label", text: "Cotes à vérifier" }), h("span", { class: "v", style: n ? "color:var(--bad)" : null, text: n }), h("span", { class: "small muted", text: n ? "prix Kamamaster suspects → les relever" : "aucune cote suspecte" })); })(),
       h("div", { class: "tile" }, h("span", { class: "label", text: "Zones en anomalie" }), h("span", { class: "v", text: anom.length }), h("span", { class: "small muted", text: "bonus de drop en cours" + (KM && KM.anomaliesAt ? " · changé " + agoTime(KM.anomaliesAt) : "") }))),
     h("section", { class: "panel" },
-      h("p", { class: "note", style: "margin:0", text: "Les relevés du groupe arrivent en direct : dès qu'un membre enregistre un prix, il s'affiche chez tout le monde. Les données de Kamamaster (prix d'Orukam, brisage, anomalies, donjons) sont vérifiées toutes les heureseures : Kamamaster ne les met lui-même à jour qu'environ une fois par jour, parfois moins, et il n'existe pas d'accès direct au serveur du jeu. Dès que le groupe a relevé un objet, son prix passe avant celui de Kamamaster ; les cotes Kamamaster qui s'écartent de plus de 3 fois de leurs derniers jours sont écartées comme douteuses. Source : kamamaster.fr." })),
+      h("p", { class: "note", style: "margin:0", text: "Les relevés du groupe arrivent en direct : dès qu'un membre enregistre un prix, il s'affiche chez tout le monde. Les données de Kamamaster (prix d'Orukam, brisage, anomalies, donjons) sont vérifiées toutes les heures : Kamamaster ne les met lui-même à jour qu'environ une fois par jour, parfois moins, et il n'existe pas d'accès direct au serveur du jeu. Dès que le groupe a relevé un objet, son prix passe avant celui de Kamamaster ; les cotes Kamamaster qui s'écartent de plus de 3 fois de leurs derniers jours sont écartées comme douteuses. Source : kamamaster.fr." })),
     h("div", { class: "grid2 even" },
       h("section", { class: "panel" }, h("div", { class: "row between" }, h("h2", { text: "▲ Plus fortes hausses" }), h("span", { class: "chip", text: span >= 1 ? "sur " + win + " j" : "bientôt" })), moverList(ups, span >= 1 ? "Aucune hausse notable." : noTrend)),
       h("section", { class: "panel" }, h("div", { class: "row between" }, h("h2", { text: "▼ Plus fortes baisses" }), h("span", { class: "chip", text: span >= 1 ? "sur " + win + " j" : "bientôt" })), moverList(downs, span >= 1 ? "Aucune baisse notable." : noTrend))),
@@ -4697,7 +4697,7 @@ function viewCarte() {
     h("section", { class: "panel" },
       h("div", { class: "row between" }, h("h2", { text: "Carte d'Orukam" }), wSel),
       h("div", { class: "row", style: "gap:14px;flex-wrap:wrap" }, h("label", { class: "check" }, anCb, "Zones en anomalie"), ...layerChecks, h("label", { class: "check" }, realCb, "Vraie carte")),
-      KM ? h("p", { class: "small muted", style: "margin:0", text: "Anomalies vérifiées toutes les heureseures" + (KM.anomaliesAt ? " · dernier changement " + agoTime(KM.anomaliesAt) : "") + (KMC ? " · dernière vérification " + agoTime(KMC.checked) : "") }) : null,
+      KM ? h("p", { class: "small muted", style: "margin:0", text: "Anomalies vérifiées toutes les heures" + (KM.anomaliesAt ? " · dernier changement " + agoTime(KM.anomaliesAt) : "") + (KMC ? " · dernière vérification " + agoTime(KMC.checked) : "") }) : null,
       h("div", { class: "row", style: "gap:8px" }, jobSeg),
       h("div", { class: "filters" }, h("div", { class: "search" }, q)),
       h("div", { class: "reslist" }, list.map(r => { const i = mapF.sel.indexOf(r[0]), n = inWorld(r[0]);
@@ -4937,7 +4937,20 @@ try { lastInGroup = JSON.parse(localStorage.getItem("atelier-nav") || "{}"); } c
 const GI = { accueil: 548, almanax: 21014, marche: 8425, prix: 8425, tournee: 14978, rentabilite: 745, journal: 678, alertes: 1339,
   orukam: 737, serveur: 737, cotes: 489, tendances: 1328, donjons: 8437, carte: 15378, brisage: 1519,
   production: 147, plan: 147, metiers: 14146, farm: 289, stock: 1699, equipement: 2411, builds: 2411, comparer: 22444, cosmetiques: 8069, encyclopedie: 2337, compte: 11270 };
-const gameIcon = (key, ic, px) => GI[key] && D && D.items[GI[key]] && item(GI[key])[3] >= 0 ? icon(GI[key], px, "gi") : svgI(ic);
+// Icônes des menus : petite planche dédiée (data/icons/menu.webp, tools/build_menu_icons.py, même ordre que GI)
+// au lieu d'une vingtaine de grandes planches d'icônes chargées au démarrage
+const MENU_IDS = [...new Set(Object.values(GI))];
+function gameIcon(key, ic, px) {
+  const i = MENU_IDS.indexOf(GI[key]);
+  if (i < 0 || !D || !D.items[GI[key]]) return svgI(ic);
+  const el = h("span", { class: "ico gi", "aria-hidden": "true" });
+  el.style.width = el.style.height = px + "px";
+  if (D.types) el.style.setProperty("--cat", catVar(GI[key]));
+  el.style.backgroundImage = "url(data/icons/menu.webp)";
+  el.style.backgroundSize = MENU_IDS.length * px + "px " + px + "px";
+  el.style.backgroundPosition = -i * px + "px 0";
+  return el;
+}
 function navLink(v, cls) {
   const [, label, ic, c, cnt] = tabOf(v);
   const a = h("a", { href: "#" + v, "data-v": v, class: cls || null }, h("span", { class: "ib" }, gameIcon(v, ic, 26)), h("span", { class: "lb", text: label }), cnt ? h("span", { class: "count", id: cnt, text: "" }) : null);
