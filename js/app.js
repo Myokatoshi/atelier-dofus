@@ -1800,7 +1800,8 @@ function buildStats(ids, b) {
   for (const id of ids) { const st = item(id)[4]; if (st > 0) (sets[st] = sets[st] || []).push(id); }
   const setRows = [];
   for (const [st, list] of Object.entries(sets)) {
-    const tiers = D.setfx[st] || [], n = Math.min(list.length, tiers.length - 1), bonus = tiers[n] || [];
+    // setfx[id][k] = bonus pour k + 1 pièces portées (la 1re entrée, vide, correspond à une seule pièce ; vérifié sur Dofusbook : 3 pièces Volkorne = +150 partout)
+    const tiers = D.setfx[st] || [], n = Math.min(list.length, tiers.length) - 1, bonus = tiers[n] || [];
     for (const [c, v] of bonus) add(c, v, v);
     setRows.push({ st: +st, n: list.length, of: (SET_ITEMS[st] || []).length, bonus });
   }
@@ -2809,6 +2810,56 @@ function finalStats(b, jet) {
   out[PV] = 50 + 5 * Math.min(200, p.lvl) + st(11);
   return out;
 }
+// Détail du calcul d'une caractéristique : base, parchemins, points, chaque pièce, panoplies, forgemagie globale, dérivés
+function statBreakdown(b, jet, c) {
+  const p = persoOf(b), fs = finalStats(b, jet), parts = [];
+  const val = (lo, hi) => jet === "min" ? lo : jet === "max" ? hi : (lo + hi) / 2;
+  const lv = Math.min(200, p.lvl);
+  if (c === 1) parts.push(["Base du personnage (" + (p.lvl >= 100 ? "7 dès le niveau 100" : "6 avant le niveau 100") + ")", p.lvl >= 100 ? 7 : 6]);
+  if (c === 23) parts.push(["Base du personnage", 3]);
+  if (c === 26) parts.push(["Base du personnage", 1]);
+  if (c === 48) parts.push(["Base du personnage", 100]);
+  if (c === 40) parts.push(["Base du personnage", 1000]);
+  if (c === PV) parts.push(["Base : 50 + 5 × niveau " + lv, 50 + 5 * lv]);
+  if (PRIM.some(([x]) => x === c)) { parts.push(["Parchemins", +p.parcho[c] || 0]); parts.push(["Points investis", +p.base[c] || 0]); }
+  const sets = {};
+  for (const id of b.items) {
+    const st = detOf(id).st || [], fm = b.fm && canFm(id) && b.fm[id];
+    let v = 0;
+    for (const [cc, lo, hi] of st) if (cc === c) v += fm && fm[c] != null ? fm[c] : val(lo, hi);
+    if (fm && fm[c] != null && !st.some(x => x[0] === c)) v += fm[c];
+    if (v) parts.push([item(id)[0] + (fm && fm[c] != null ? " (forgemagie)" : ""), v]);
+    const si = item(id)[4]; if (si > 0) (sets[si] = sets[si] || []).push(id);
+  }
+  for (const [si, list] of Object.entries(sets)) {
+    const tiers = D.setfx[si] || [], n = Math.min(list.length, tiers.length) - 1;
+    for (const [cc, v] of tiers[n] || []) if (cc === c) parts.push([(D.sets[si] || "Panoplie") + " (" + list.length + " pièces)", v]);
+  }
+  if ((b.fmg || {})[c]) parts.push(["Forgemagie globale", +b.fmg[c]]);
+  const f = x => fs[x] || 0;
+  if (c === 48) parts.push(["Chance ÷ 10 (" + fmt.format(Math.round(f(13))) + " Chance)", Math.floor(f(13) / 10)]);
+  if (c === 44) parts.push(["Force + Intelligence + Chance + Agilité", f(10) + f(15) + f(13) + f(14)]);
+  if (c === 40) parts.push(["5 × Force (" + fmt.format(Math.round(f(10))) + " Force)", 5 * f(10)]);
+  if ([82, 83, 27, 28].includes(c)) parts.push(["Sagesse ÷ 10 (" + fmt.format(Math.round(f(12))) + " Sagesse)", Math.floor(f(12) / 10)]);
+  if (c === PV) parts.push(["Vitalité", f(11)]);
+  return { parts: parts.filter(x => x[1]), total: fs[c] || 0 };
+}
+let detC = 10;
+function breakdownPanel(b, jet) {
+  const all = FS_GROUPS.flatMap(([, l]) => l);
+  const sel = h("select", { id: "det-c", "aria-label": "Caractéristique détaillée" }, all.map(([c, l]) => h("option", { value: c, selected: c === detC }, l)));
+  sel.addEventListener("change", () => { detC = +sel.value; render(); });
+  const { parts, total } = statBreakdown(b, jet, detC);
+  const d = h("details", { class: "dj", id: "detail-calcul" }, h("summary", {}, h("strong", { text: "Détail du calcul" })),
+    h("div", { class: "row", style: "gap:8px" }, h("span", { class: "label", text: "Caractéristique" }), sel),
+    h("div", { class: "brk" }, parts.map(([l, v]) => h("div", { class: "brk-r" }, h("span", { text: l }), h("strong", { class: "num " + (v < 0 ? "neg" : ""), text: (v > 0 ? "+" : "") + fmt.format(Math.round(v * 10) / 10) }))),
+      h("div", { class: "brk-r tot" }, h("span", { class: "chl" }, chIcon(detC, 16), "Total"), h("strong", { class: "num", text: fmt.format(Math.round(total)) }))),
+    h("p", { class: "note", text: "Stats sans buffs : les buffs de sorts, les passifs des Dofus et objets légendaires et les bonus saisis s'activent dans « Sorts et dégâts » et ne comptent que là." }));
+  if (DET_OPEN) d.open = true;
+  d.addEventListener("toggle", () => { DET_OPEN = d.open; });
+  return d;
+}
+let DET_OPEN = false;
 // Toutes les stats finales, rangées comme sur Dofusbook ; à côté, la valeur de Dofusbook si le build en vient (b.ref)
 const FS_GROUPS = [
   ["Principales", [[PV, "PdV"], [1, "PA"], [23, "PM"], [19, "PO"], [44, "Initiative"], [48, "Prospection"], [18, "Critique"], [26, "Invocations"], [49, "Soins"]]],
@@ -2846,14 +2897,14 @@ function persoPanel(b, jet) {
     h("div", { class: "row between" },
       h("span", { class: "chip " + (left < 0 ? "warn" : left === 0 ? "job" : "kamas"), text: left < 0 ? "Trop de points dépensés : " + fmt.format(-left) + " en trop" : fmt.format(left) + " point" + (left > 1 ? "s" : "") + " à répartir sur " + fmt.format(cap) }),
       h("button", { type: "button", class: "btn sm", onclick: () => save({ parcho: Object.fromEntries(PRIM.map(([c]) => [c, allParcho ? 0 : 100])) }) }, allParcho ? "Retirer les parchemins" : "Parchemins 100 partout")),
-    h("div", { class: "tablewrap" }, h("table", { class: "perso-t" },
-      h("thead", {}, h("tr", {}, h("th", { text: "Carac." }), h("th", { class: "n", text: "Parcho" }), h("th", { class: "n", text: "Points" }), h("th", { class: "n", text: "Total" }))),
-      h("tbody", {}, PRIM.map(([c, label]) => h("tr", {},
-        h("td", {}, h("span", { class: "chl" }, chIcon(c), label)),
-        h("td", { class: "n" }, numInput(p.parcho[c], v => save({ parcho: { ...p.parcho, [c]: Math.max(0, Math.min(100, Math.round(+v) || 0)) } }), { sm: true, label: "Parchemins " + label })),
-        h("td", { class: "n" }, numInput(p.base[c] || "", v => save({ base: { ...p.base, [c]: Math.max(0, Math.round(+v) || 0) } }), { sm: true, ph: "0", label: "Points en " + label }),
-          pointsCost(c, p.base[c]) !== (+p.base[c] || 0) ? h("small", { class: "muted", style: "display:block", text: "coûte " + fmt.format(pointsCost(c, p.base[c])) }) : null),
-        h("td", { class: "n" }, h("strong", { text: fmt.format(Math.round(fs[c] || 0)) }))))))),
+    h("div", { class: "pts" },
+      h("span", { class: "pts-h", text: "Caractéristique" }), h("span", { class: "pts-h n", text: "Parcho" }), h("span", { class: "pts-h n", text: "Points" }), h("span", { class: "pts-h n", text: "Total" }),
+      PRIM.flatMap(([c, label]) => [
+        h("span", { class: "pts-c chl" }, chIcon(c), h("span", { class: "pts-l", text: label })),
+        h("span", { class: "pts-i" }, numInput(p.parcho[c], v => save({ parcho: { ...p.parcho, [c]: Math.max(0, Math.min(100, Math.round(+v) || 0)) } }), { sm: true, label: "Parchemins " + label })),
+        h("span", { class: "pts-i" }, numInput(p.base[c] || "", v => save({ base: { ...p.base, [c]: Math.max(0, Math.round(+v) || 0) } }), { sm: true, ph: "0", label: "Points en " + label }),
+          h("small", { class: "muted", text: pointsCost(c, p.base[c]) !== (+p.base[c] || 0) ? "coûte " + fmt.format(pointsCost(c, p.base[c])) : "" })),
+        h("strong", { class: "pts-t num", text: fmt.format(Math.round(fs[c] || 0)) })])),
     left > 0 ? h("div", { class: "row" }, h("span", { class: "small muted", text: "Mettre le reste en :" }), PRIM.map(([c, label]) => h("button", { type: "button", class: "chip", onclick: () => {
       // Ajoute autant de points que possible dans la caractéristique, selon son coût
       let v = +p.base[c] || 0; while (pointsCost(c, v + 1) - pointsCost(c, +p.base[c] || 0) <= left) v++;
@@ -2861,6 +2912,7 @@ function persoPanel(b, jet) {
     } }, label))) : null,
     h("h3", { text: "Stats finales (" + ({ min: "jet minimum", mid: "jet moyen", max: "jet maximum" })[jet] + ")" }),
     fullStats(b, fs),
+    breakdownPanel(b, jet),
     h("p", { class: "note", text: "Hypothèses : 5 points de capital par niveau ; Vitalité 1 pour 1, Sagesse 3 pour 1, autres caractéristiques 1 / 2 / 3 / 4 points par paliers de 100 ; 6 PA (7 dès le niveau 100), 3 PM, PV = 50 + 5 × niveau + Vitalité. Pods = 1 000 + 5 × Force. Forgemagie et exos compris. Si une règle diffère en jeu, corrige le capital à la main." }));
 }
 
@@ -2990,6 +3042,7 @@ function hitDmg(st, base, e, o) {
   let d = Math.floor(base * (100 + Math.max(0, st[car] || 0) + (st[25] || 0)) / 100) + (st[16] || 0) + (st[doE] || 0) + (o.crit ? st[86] || 0 : 0);
   d = d * (100 + (o.weapon ? st[122] || 0 : st[123] || 0)) / 100 * (100 + (o.dist ? st[120] || 0 : st[125] || 0)) / 100;
   d = Math.max(0, d - (+(T.f || [])[e.elem] || 0) - (o.crit ? +T.crit || 0 : 0)) * (100 - (+(T.p || [])[e.elem] || 0)) / 100 * (100 - (o.dist ? +T.dist || 0 : +T.mel || 0)) / 100;
+  d = d * (100 + (st.df || 0)) / 100; // dommages finaux (passifs des Dofus, objets légendaires)
   return Math.max(0, Math.floor(d));
 }
 // Buffs d'un sort sur soi ou ses alliés : [{c, v, pct, dur}]
@@ -3004,7 +3057,50 @@ function spellBuffs(g) {
   return out;
 }
 const bufText = x => (x.v > 0 ? "+" : "") + fmt.format(x.v) + (x.pct ? " % " : " ") + charLabel(x.c) + " (" + x.dur + " tour" + (x.dur > 1 ? "s" : "") + ")";
-// Stats de combat : stats finales + buffs de sorts activés + bonus saisis
+// Passifs (Dofus, objets légendaires) : chaque point « • » de la description devient une option activable ;
+// valeurs lues dans le texte (dommages finaux, PA, PM, Puissance, Critique…), cumulables jusqu'au maximum indiqué
+const PASS_CHARS = [["PA", 1], ["PM", 23], ["Portée", 19], ["Puissance", 25], ["Dommages", 16], ["Fuite", 78], ["Tacle", 79], ["Force", 10], ["Intelligence", 15], ["Chance", 13], ["Agilité", 14], ["Vitalité", 11], ["Sagesse", 12], ["Soins", 49], ["Prospection", 48], ["Initiative", 44]];
+const PASS_CACHE = {};
+function passiveOpts(sid) {
+  if (PASS_CACHE[sid]) return PASS_CACHE[sid];
+  const ps = BD.pspells[sid]; if (!ps) return [];
+  const bullets = ps[1].split("•").map(x => x.trim()).filter((x, i) => i > 0 && x);
+  const opts = (bullets.length ? bullets : [ps[1]]).map(t => {
+    const fx = { df: 0, c: {} };
+    let m = /(\d+) ?% de dommages finaux/i.exec(t) || /dommages finaux (?:sont )?(?:augmentés|augmente) de (\d+) ?%/i.exec(t);
+    if (m) fx.df = +m[1];
+    m = /dommages finaux (?:sont )?(?:réduits|diminués) de (\d+) ?%/i.exec(t); if (m && /porteur|ses dommages/i.test(t)) fx.df = -m[1];
+    for (const [nm, c] of PASS_CHARS) { const r = new RegExp("(?:gagne|\\+) ?(\\d+) (?:de )?" + nm + "\\b", "i").exec(t); if (r) fx.c[c] = +r[1]; }
+    m = /(\d+) ?% (?:de )?(?:chances? de )?critique/i.exec(t); if (m && /gagne|\+/i.test(t)) fx.c[18] = +m[1];
+    const mx = /cumulable (\d+) fois/i.exec(t);
+    return { t, fx, max: mx ? +mx[1] : 1, ok: !!(fx.df || Object.keys(fx.c).length) };
+  });
+  return (PASS_CACHE[sid] = opts);
+}
+function activePassives(b) {
+  const out = [];
+  for (const id of b.items) for (const sid of (BD.passives || {})[id] || []) passiveOpts(sid).forEach((o, i) => {
+    const n = +((b.pass || {})[sid + "-" + i] || 0); if (n && o.ok) out.push({ ...o, n: Math.min(n, o.max), sid, i });
+  });
+  return out;
+}
+function passivesPanel(b) {
+  const list = b.items.filter(id => (BD.passives || {})[id]);
+  if (!list.length) return null;
+  const setN = (k, n) => { b.pass = { ...(b.pass || {}) }; if (n) b.pass[k] = n; else delete b.pass[k]; persist("builds"); render(); };
+  return h("div", { class: "passives" }, h("span", { class: "label", text: "Passifs des Dofus et objets légendaires (à activer selon la situation)" }),
+    list.map(id => h("div", { class: "pass-it" }, h("div", { class: "row", style: "gap:8px;flex-wrap:nowrap" }, icon(id, 30), h("strong", { text: item(id)[0] })),
+      ((BD.passives || {})[id] || []).map(sid => h("div", { class: "pass-sp" }, h("em", { text: (BD.pspells[sid] || ["Passif"])[0] }),
+        passiveOpts(sid).map((o, i) => { const k = sid + "-" + i, n = +((b.pass || {})[k] || 0);
+          return h("div", { class: "pass-o" + (n ? " on" : "") },
+            h("span", { class: "small", text: o.t }),
+            o.ok ? (o.max > 1 ? h("span", { class: "row", style: "gap:6px;flex-wrap:nowrap" }, h("span", { class: "small muted", text: "cumuls" }),
+                (() => { const s2 = h("select", { "aria-label": "Cumuls actifs" }, Array.from({ length: o.max + 1 }, (_, x) => h("option", { value: x, selected: x === n }, x ? "× " + x : "inactif"))); s2.addEventListener("change", () => setN(k, +s2.value)); return s2; })())
+              : h("label", { class: "check small" }, (() => { const c = h("input", { type: "checkbox", checked: !!n }); c.addEventListener("change", () => setN(k, c.checked ? 1 : 0)); return c; })(), "Actif"))
+              : h("span", { class: "small muted", style: "white-space:nowrap", text: /\d/.test(o.t) ? "non simulé" : "règle" }));
+        }))))));
+}
+// Stats de combat : stats finales + buffs de sorts activés + passifs activés + bonus saisis
 function combatStats(b, jet) {
   const st = finalStats(b, jet), p = persoOf(b), list = BD.breeds.find(x => x[0] === breedOf(b));
   const active = [];
@@ -3012,12 +3108,17 @@ function combatStats(b, jet) {
   for (const x of active) if (!x.pct) st[x.c] = (st[x.c] || 0) + x.v;
   for (const x of active) if (x.pct) st[x.c] = (st[x.c] || 0) * (1 + x.v / 100);
   for (const [c, v] of Object.entries(b.extra || {})) st[c] = (st[c] || 0) + (+v || 0);
+  st.df = 0;
+  for (const x of activePassives(b)) { st.df += x.fx.df * x.n; for (const [c, v] of Object.entries(x.fx.c)) st[c] = (st[c] || 0) + v * x.n; }
+  st.df += +((b.extra || {}).df || 0);
   if (active.some(x => x.c === 11)) st[PV] = 50 + 5 * Math.min(200, p.lvl) + (st[11] || 0);
   return st;
 }
 const TARGETS = [["Aucune", { p: [0, 0, 0, 0, 0], f: [0, 0, 0, 0, 0] }], ["20 % partout", { p: [20, 20, 20, 20, 20], f: [0, 0, 0, 0, 0] }],
   ["PvP (30 %, 30 fixes)", { p: [30, 30, 30, 30, 30], f: [30, 30, 30, 30, 30], crit: 50 }], ["Boss (40 %)", { p: [40, 40, 40, 40, 40], f: [0, 0, 0, 0, 0] }]];
 let spF = { sort: "ordre", dmgOnly: true };
+// Sort dont `sid` est la variante (deuxième sort d'une paire), sinon null
+const variantOf = (list, sid) => { const pr = (list[3] || []).find(pp => pp[1] === +sid); return pr ? pr[0] : null; };
 function spellsPanel(b, jet) {
   if (!BD) { ensureBuildData(); return h("section", { class: "panel" }, h("h2", { text: "Sorts et dégâts" }), h("p", { class: "muted", text: "Chargement des sorts…" })); }
   const br = breedOf(b), list = BD.breeds.find(x => x[0] === br);
@@ -3048,7 +3149,7 @@ function spellsPanel(b, jet) {
     const exp = (1 - pc / 100) * avg(n) + pc / 100 * avg(c);
     rows.push({ id: sid, name: sp[0], icon: h("img", { class: "spico", src: "data/spells/" + sp[1] + ".webp", alt: "", loading: "lazy", width: 36, height: 36 }), ap: g[1],
       po: (g[2] !== g[3] ? g[2] + "–" : "") + g[3] + (g[8] ? "" : " (fixe)"), pc, n, c, exp, per: g[1] ? exp / g[1] : exp,
-      info: [g[5] ? g[5] + "/tour" : "", g[6] ? g[6] + "/cible" : "", g[7] ? "relance " + g[7] + " t." : "", "niv. " + g[0]].filter(Boolean).join(" · ") });
+      info: [variantOf(list, sid) ? "variante de " + ((BD.spells[variantOf(list, sid)] || [""])[0]) : "", g[5] ? g[5] + "/tour" : "", g[6] ? g[6] + "/cible" : "", g[7] ? "relance " + g[7] + " t." : "", "niv. " + g[0]].filter(Boolean).join(" · ") });
   }
   if (spF.sort === "dmg") rows.sort((a, b2) => b2.exp - a.exp); else if (spF.sort === "pa") rows.sort((a, b2) => b2.per - a.per);
   const dmgCell = ls => ls.length ? h("div", { style: "display:grid;gap:2px" }, ls.map(x => h("span", { class: "dmg" + (x.e.main ? "" : " muted"), style: "--el:" + ELEM[x.e.elem][5] },
@@ -3063,12 +3164,14 @@ function spellsPanel(b, jet) {
         h("label", { class: "check small" }, (() => { const c = h("input", { type: "checkbox", checked: !spF.dmgOnly }); c.addEventListener("change", () => { spF.dmgOnly = !c.checked; render(); }); return c; })(), "Tous les sorts"))),
     h("div", { class: "fs-grid" },
       ...ELEM.slice(1).map(([nm, car, doE]) => h("div", { class: "fs-row", style: "border-left:3px solid " + ELEM.find(x => x[0] === nm)[5] }, h("span", { text: nm }), h("strong", { class: "num", text: fmt.format(Math.round((st[car] || 0) + (st[25] || 0))) }), h("small", { class: "muted", text: "carac. + puissance · " + fmt.format(Math.round((st[16] || 0) + (st[doE] || 0))) + " do fixes" }))),
-      h("div", { class: "fs-row" }, h("span", { text: "Critique" }), h("strong", { class: "num", text: fmt.format(Math.round(st[18] || 0)) + " %" }), h("small", { class: "muted", text: fmt.format(Math.round(st[86] || 0)) + " do crit" }))),
-    buffSpells.length ? h("div", { style: "display:grid;gap:6px" }, h("span", { class: "label", text: "Buffs de classe actifs (ajoutés aux stats et aux dégâts)" }),
+      h("div", { class: "fs-row" }, h("span", { text: "Critique" }), h("strong", { class: "num", text: fmt.format(Math.round(st[18] || 0)) + " %" }), h("small", { class: "muted", text: fmt.format(Math.round(st[86] || 0)) + " do crit" })),
+      h("div", { class: "fs-row" }, h("span", { text: "Dommages finaux" }), h("strong", { class: "num " + (st.df > 0 ? "pos" : st.df < 0 ? "neg" : ""), text: (st.df > 0 ? "+" : "") + fmt.format(st.df || 0) + " %" }), h("small", { class: "muted", text: "passifs activés et bonus" }))),
+    buffSpells.length ? h("div", { style: "display:grid;gap:6px" }, h("span", { class: "label", text: "Buffs de sorts à activer (ajoutés aux stats et aux dégâts)" }),
       h("div", { class: "chips" }, buffSpells.map(x => h("button", { type: "button", class: "chip buff" + (on.has(String(x.sid)) ? " on" : ""), "aria-pressed": on.has(String(x.sid)) ? "true" : "false", title: x.bf.map(bufText).join(", "),
         onclick: () => { const s2 = new Set(b.buffs || []); if (s2.has(x.sid)) s2.delete(x.sid); else s2.add(x.sid); b.buffs = [...s2]; persist("builds"); render(); } },
         h("img", { src: "data/spells/" + x.sp[1] + ".webp", alt: "", width: 20, height: 20 }), x.sp[0] + " : " + x.bf.map(bufText).join(", "))))) : null,
-    h("div", { class: "row", style: "gap:10px;align-items:end" }, h("span", { class: "label", text: "Autres bonus (pain, buff d'un allié…)" }), extraIn(25, "Puissance"), extraIn(16, "Dommages"), extraIn(18, "Critique %"), extraIn(123, "% do sorts")),
+    passivesPanel(b),
+    h("div", { class: "row", style: "gap:10px;align-items:end" }, h("span", { class: "label", text: "Autres bonus (pain, buff d'un allié…)" }), extraIn(25, "Puissance"), extraIn(16, "Dommages"), extraIn(18, "Critique %"), extraIn(123, "% do sorts"), extraIn("df", "% do finaux")),
     h("details", { class: "dj" }, h("summary", {}, h("strong", { text: "Cible : " + (TARGETS.find(([, t]) => JSON.stringify(t.p) === JSON.stringify(T.p) && JSON.stringify(t.f) === JSON.stringify(T.f)) || ["résistances personnalisées"])[0] })),
       h("div", { class: "chips" }, TARGETS.map(([l, t]) => h("button", { type: "button", class: "chip", onclick: () => { S.settings.target = JSON.parse(JSON.stringify(t)); persist("plan"); render(); } }, l))),
       h("div", { class: "tablewrap" }, h("table", {}, h("thead", {}, h("tr", {}, h("th", { text: "Élément" }), h("th", { class: "n", text: "Résistance %" }), h("th", { class: "n", text: "Résistance fixe" }))),

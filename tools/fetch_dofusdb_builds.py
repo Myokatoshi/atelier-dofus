@@ -4,16 +4,17 @@
 Usage : python3 tools/fetch_dofusdb_builds.py
 
 Écrit data/build.json :
-  "breeds": [[id, nom, ids des sorts]]                      19 classes
+  "breeds": [[id, nom, ids des sorts (paires sort/variante à la suite), [[sort, variante]…]]]                      19 classes
   "spells": {id: [nom, icône, [[niveau min, PA, PO min, PO max, % critique, lancers/tour, lancers/cible,
                                 intervalle, PO modifiable, effets, effets critiques]]]}   un grade par palier de niveau
      effet = [id d'effet, min, max, durée, cible (masque), zone]
   "effects": {id: [texte, caractéristique, catégorie, élément]}  textes des effets utilisés (catégorie 2 = dégâts)
+  "passives": {id objet: [sorts passifs]}, "pspells": {sort: [nom, description, effets]}   Dofus, objets légendaires
   "weapons": {id objet: [PA, PO min, PO max, % critique, bonus critique, lancers/tour, [[id d'effet, min, max]]]}
 Les images (icônes des sorts, têtes des classes) viennent du client Dofus 3 : tools/fetch_dofus3_images.py.
 À relancer après une mise à jour du jeu (une centaine d'appels).
 """
-import json, time, urllib.parse, urllib.request
+import json, re, time, urllib.parse, urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -67,7 +68,18 @@ def fx(e):
 
 def main():
     breeds = sorted(page("breeds", {}), key=lambda b: b.get("sortIndex", b["id"]))
-    out_b = [[b["id"], b["shortName"]["fr"], b.get("breedSpellsId") or []] for b in breeds]
+    # breedSpellsId ne donne qu'un sort par paire : les variantes (deuxième sort de chaque paire) viennent de spell-variants
+    variants = {}
+    for v in page("spell-variants", {}):
+        variants.setdefault(v.get("breedId"), []).append(v.get("spellIds") or [])
+    out_b = []
+    for b in breeds:
+        ids = list(b.get("breedSpellsId") or [])
+        pairs = variants.get(b["id"], [])
+        order = {s: i for i, s in enumerate(ids)}
+        pairs.sort(key=lambda p: min(order.get(x, 999) for x in p))
+        allids = [x for p in pairs for x in p] + [x for x in ids if not any(x in p for p in pairs)]
+        out_b.append([b["id"], b["shortName"]["fr"], allids, pairs])
     spell_ids = [s for b in out_b for s in b[2]]
     spells = by_ids("spells", "id", spell_ids)
     levels = by_ids("spell-levels", "spellId", spell_ids)
@@ -92,10 +104,28 @@ def main():
             used.update(d[0] for d in dmg)
             weapons[str(it["id"])] = [it.get("apCost") or 0, it.get("minRange") or 0, it.get("range") or 0, it.get("criticalHitProbability") or 0,
                                       it.get("criticalHitBonus") or 0, it.get("maxCastPerTurn") or 0, dmg]
+    # Passifs des Dofus et objets légendaires : effet 1175 « lance le sort » -> sort passif (nom, description, effets du dernier grade)
+    passives, pspells = {}, {}
+    for it in page("items", {"possibleEffects.effectId": 1175, "$select[]": ["id", "possibleEffects"]}):
+        sids = [e.get("diceNum") for e in it.get("possibleEffects") or [] if e.get("effectId") == 1175 and e.get("diceNum")]
+        if sids:
+            passives[str(it["id"])] = sids
+    clean = lambda t: re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", re.sub(r"\{\{[^}]*::([^}]*)\}\}", r"\1", t or ""))).strip()
+    ps_ids = sorted({x for v in passives.values() for x in v})
+    ps_lv = {}
+    for lv in by_ids("spell-levels", "spellId", ps_ids):
+        if lv["spellId"] not in ps_lv or lv.get("grade", 0) > ps_lv[lv["spellId"]].get("grade", 0):
+            ps_lv[lv["spellId"]] = lv
+    for sp in by_ids("spells", "id", ps_ids):
+        lv = ps_lv.get(sp["id"], {})
+        ef = [fx(e) for e in lv.get("effects") or []]
+        used.update(e[0] for e in ef)
+        pspells[str(sp["id"])] = [sp["name"]["fr"], clean((sp.get("description") or {}).get("fr")), ef]
     effects = {str(e["id"]): [e["description"]["fr"], e.get("characteristic") or 0, e.get("category") or 0, e.get("elementId", -1)]
                for e in by_ids("effects", "id", list(used))}
     data = {"source": "DofusDB (dofusdb.fr)", "fetched": datetime.now(timezone.utc).strftime("%Y-%m-%d"),
-            "breeds": out_b, "spells": out_s, "effects": effects, "weapons": weapons}
+            "breeds": out_b, "spells": out_s, "effects": effects, "weapons": weapons,
+            "passives": passives, "pspells": pspells}
     (ROOT / "data" / "build.json").write_text(json.dumps(data, ensure_ascii=False, separators=(",", ":")))
     print(len(out_b), "classes,", len(out_s), "sorts,", len(weapons), "armes,", len(effects), "effets")
 

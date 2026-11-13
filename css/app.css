@@ -678,3 +678,25 @@ ul.fx li.chl { display: flex; }
 .d3wrap .doll-rot { position: absolute; bottom: 2px; display: flex; gap: 6px; }
 .d3wrap .doll-rot .btn { min-width: 34px; padding: 2px 8px; }
 @media (max-width: 720px) { .d3cv { max-width: 200px; } }
+/* Points de caractéristiques : grille alignée (4 colonnes fixes, aussi sur téléphone) */
+.pts { display: grid; grid-template-columns: minmax(0, 1.4fr) 76px 92px 64px; gap: 6px 10px; align-items: center; }
+.pts-h { font-size: .7rem; font-weight: 800; color: var(--muted); text-transform: uppercase; letter-spacing: .06em; }
+.pts-h.n, .pts-t { text-align: right; }
+.pts-c { min-width: 0; } .pts-l { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pts-i { display: grid; gap: 1px; } .pts-i input { width: 100%; text-align: right; } .pts-i small { font-size: .66rem; text-align: right; min-height: .8em; }
+.pts-t { font-size: 1rem; }
+@media (max-width: 720px) { .pts { grid-template-columns: minmax(0, 1fr) 62px 74px 52px; gap: 6px; } .pts-c .chi { display: none; } }
+/* Détail du calcul */
+.brk { display: grid; gap: 2px; }
+.brk-r { display: flex; justify-content: space-between; gap: 10px; padding: 4px 8px; border-radius: 8px; background: var(--sunk); font-size: .88rem; }
+.brk-r span { min-width: 0; overflow-wrap: anywhere; }
+.brk-r.tot { background: transparent; border-top: 1px solid var(--line); font-weight: 800; }
+/* Passifs des Dofus et objets légendaires */
+.passives { display: grid; gap: 8px; }
+.pass-it { display: grid; gap: 6px; padding: 8px 10px; border-radius: 12px; background: var(--sunk); }
+.pass-sp { display: grid; gap: 4px; } .pass-sp em { font-style: normal; font-weight: 800; color: var(--kamas); }
+.pass-o { display: flex; justify-content: space-between; align-items: center; gap: 10px; padding: 6px 8px; border-radius: 9px; border: 1px solid var(--line); }
+.pass-o.on { border-color: var(--good); background: var(--good-soft); }
+.pass-o > .small { min-width: 0; }
+@media (max-width: 720px) { .pass-o { flex-direction: column; align-items: stretch; } }
+.pts .cell { width: 100% !important; min-width: 0 !important; max-width: 100%; box-sizing: border-box; padding-left: 6px; padding-right: 8px; }

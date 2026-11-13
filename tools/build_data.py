@@ -147,7 +147,7 @@ def main():
         if c > 0 and ef["bonusType"] == 1 and c not in chars and tr(ef["descriptionId"]):
             cd = C.get(c, {})
             chars[c] = [tr(ef["descriptionId"]), ef["category"], cd.get("order", 999), tr(cd.get("nameId", 0))]
-    # Bonus de panoplie : setfx[id][n] = [[caractéristique, valeur], ...] pour n pièces portées
+    # Bonus de panoplie : setfx[id][k] = [[caractéristique, valeur], ...] pour k + 1 pièces portées (setfx[id][0] = 1 pièce, vide)
     srid = {x["rid"]: x["data"] for x in sets_raw}
     setfx = {}
     for sd in (x["data"] for x in sets_raw if x["type"]["class"] == "ItemSetData"):
