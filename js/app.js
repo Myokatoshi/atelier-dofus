@@ -4530,6 +4530,28 @@ function setupMap(cv, tip) {
   cv.addEventListener("pointerup", up); cv.addEventListener("pointercancel", up);
   cv.addEventListener("pointerleave", () => { tip.hidden = true; });
 }
+// Protecteurs des ressources : ressource récoltée -> [{ mid, name, lo, hi, job, loot: [[objet, taux min, taux max]] }]
+let PROT = null;
+function protOf(rid) {
+  if (!F) return [];
+  if (!PROT) {
+    PROT = new Map();
+    for (const [mid, m] of Object.entries(F.mons)) if (m[5]) { const l = PROT.get(m[5]) || []; l.push({ mid: +mid, name: m[0], lo: m[1], hi: m[2], job: 0, loot: [] }); PROT.set(m[5], l); }
+    const byMid = new Map(); for (const l of PROT.values()) for (const p of l) byMid.set(p.mid, p);
+    for (const [it, ds] of Object.entries(F.drops)) for (const d of ds) { const p = byMid.get(d[0]); if (p && d[3]) { p.job = d[3]; p.loot.push([+it, d[1], d[2]]); } }
+    for (const l of PROT.values()) for (const p of l) p.loot.sort((a, b) => b[2] - a[2]);
+  }
+  return PROT.get(+rid) || [];
+}
+function protCard(p, rid, onShow) {
+  return h("div", { class: "target" },
+    h("div", { class: "row between" }, h("span", {}, h("strong", { text: p.name }), h("small", { class: "muted", text: " · niv. " + (p.lo === p.hi ? p.lo : p.lo + "–" + p.hi) })),
+      onShow ? h("button", { type: "button", class: "btn sm", onclick: onShow }, "Voir où") : null),
+    h("p", { class: "small", style: "margin:0", text: "Apparaît " + harvVerb(p.job) + " " + item(rid)[0] + " (" + jobName(p.job) + " niv. " + (F.harvest[rid] ? F.harvest[rid][1] : "?") + ")" }),
+    h("div", { class: "chips" }, p.loot.map(([it, a, b]) => { const bg = bagOf(it), v = bg ? bagValue(it) : resale(it);
+      return h("button", { type: "button", class: "chip" + (b >= 100 ? "" : " kamas"), onclick: () => openSheet(it), title: bg ? "Contient " + bg[1] + " × " + item(bg[0])[0] : "" },
+        icon(it, 18), item(it)[0] + " · " + pctTxt(a, b) + (v != null ? " · ≈ " + kk(v) + " ₭" : "")); })));
+}
 function viewCarte() {
   ensureMap();
   if (!F) ensureFarm().then(d => { if (d && view === "carte") render(); });
@@ -4591,7 +4613,7 @@ function viewCarte() {
       h("div", { class: "row", style: "gap:8px" }, jobSeg),
       h("div", { class: "filters" }, h("div", { class: "search" }, q)),
       h("div", { class: "reslist" }, list.map(r => { const i = mapF.sel.indexOf(r[0]), n = inWorld(r[0]);
-        return h("button", { type: "button", class: "reschip" + (i >= 0 ? " on" : "") + (n ? "" : " off"), style: i >= 0 ? "--rc:" + MAP_COLORS[i] : null, "aria-pressed": i >= 0 ? "true" : "false", title: r[1] + " · niv. " + r[3] + " · " + n + " carte(s) ici", onclick: () => toggle(r[0]) },
+        return h("button", { type: "button", class: "reschip" + (i >= 0 ? " on" : "") + (n ? "" : " off"), style: i >= 0 ? "--rc:" + MAP_COLORS[i] : null, "aria-pressed": i >= 0 ? "true" : "false", title: r[1] + " · niv. " + r[3] + (protOf(r[0]).length ? " · protecteur : " + protOf(r[0]).map(p => p.name).join(", ") : "") + " · " + n + " carte(s) ici", onclick: () => toggle(r[0]) },
           icon(r[0], 22), h("span", { text: r[1] }), h("small", { class: "muted", text: r[3] })); })),
       h("p", { class: "note", text: "Choisis jusqu'à 6 ressources : chaque point est une case où elle pousse, plus gros quand il y en a beaucoup (ressources estompées : absentes de cette carte). Zones en rouge : anomalie et son bonus. Repères du jeu : zaaps, transports, ateliers, HDV et banques. Glisse pour te déplacer, molette ou deux doigts pour zoomer, touche une case pour son détail." })),
     wrap,
@@ -4603,7 +4625,7 @@ function viewCarte() {
             cellInf.an ? h("span", { class: "chip warn", text: "Anomalie +" + cellInf.an + " %" }) : h("span", { class: "chip", text: "pas d'anomalie" }),
             ...cellInf.hints.map(n => h("span", { class: "chip job", text: n }))),
           (() => { const nz = cellInf.sa != null ? nearZaap(cellInf.sa) : null; return nz ? h("p", { class: "small", text: "Zaap le plus proche : " + zaapName(nz.z) + " · " + Math.round(nz.d) + " case" + (nz.d >= 2 ? "s" : "") }) : null; })(),
-          cellInf.res.length ? cellInf.res.map(rr => h("div", { class: "row between" }, h("span", {}, h("span", { style: "color:" + rr.c, text: "● " }), itemLink(+rr.rid, null, 24)), h("strong", { text: "× " + rr.q }))) :
+          cellInf.res.length ? cellInf.res.map(rr => h("div", { class: "row between" }, h("span", {}, h("span", { style: "color:" + rr.c, text: "● " }), itemLink(+rr.rid, protOf(rr.rid).length ? "protecteur : " + protOf(rr.rid).map(p => p.name).join(", ") : null, 24)), h("strong", { text: "× " + rr.q }))) :
             h("p", { class: "muted", text: mapF.sel.length ? "Aucune des ressources choisies sur cette case." : "Choisis des ressources pour voir ce qui pousse ici." })) :
           h("p", { class: "muted", text: "Touche ou clique une case pour voir sa zone, son anomalie, ses repères et ses ressources." })),
       h("section", { class: "panel" },
@@ -4616,6 +4638,20 @@ function viewCarte() {
           : anomAll.length ? h("div", { style: "display:grid;gap:6px" }, anomAll.map(([sid, b]) => h("div", { class: "row between" },
             h("button", { type: "button", class: "link", onclick: () => centerOn(sid) }, subName2(+sid) + (MAPD.subW.get(+sid) && MAPD.subW.get(+sid) !== 1 ? " · " + (MAPD.byW.get(MAPD.subW.get(+sid))?.name || "") : "")), h("span", { class: "chip warn", text: "+" + b + " %" })))) : h("p", { class: "muted", text: "Aucune zone en anomalie en ce moment." }),
         h("p", { class: "note", text: mapF.sel.length ? "Classées par quantité totale, bonus d'anomalie compris, avec le zaap le plus proche. Clique une zone pour la centrer." : "Clique une zone pour la centrer sur la carte (et changer de carte si besoin)." }))),
+    (() => {
+      if (!F) return null;
+      const selP = mapF.sel.flatMap(rid => protOf(rid).map(p => [rid, p]));
+      const all = [...new Set(MAPD.res.map(r => r[0]))].flatMap(rid => protOf(rid).map(p => [rid, p]))
+        .filter(([rid, p]) => (!mapF.job || (MAPD.res.find(r => r[0] === rid) || [])[2] === mapF.job) && (!nq || norm(p.name).includes(nq) || norm(item(rid)[0]).includes(nq)))
+        .sort((a, b) => (F.harvest[a[0]]?.[1] || 0) - (F.harvest[b[0]]?.[1] || 0));
+      const show = rid => { if (!mapF.sel.includes(rid)) { if (mapF.sel.length >= 6) mapF.sel.shift(); mapF.sel.push(rid); saveMapSel(); } render(); requestAnimationFrame(() => document.querySelector(".mapwrap")?.scrollIntoView({ block: "center", behavior: "smooth" })); };
+      return h("section", { class: "panel", id: "carte-prot" },
+        h("div", { class: "row between" }, h("h2", { text: "Protecteurs des ressources" }), h("span", { class: "chip", text: all.length + " protecteur" + (all.length > 1 ? "s" : "") })),
+        h("p", { class: "note", text: "Un protecteur apparaît parfois pendant la récolte d'une ressource, là où elle pousse : les points de la ressource sur la carte sont donc les endroits où le croiser. Battu, il lâche un sac de 50 ressources et parfois (1 %) une ressource rare. « Voir où » affiche sa ressource sur la carte." }),
+        selP.length ? h("div", { style: "display:grid;gap:8px" }, h("span", { class: "label", text: "Pour les ressources choisies" }), selP.map(([rid, p]) => protCard(p, rid, null))) : null,
+        h("details", { class: "dj", open: !selP.length }, h("summary", {}, h("strong", { text: "Tous les protecteurs" + (mapF.job ? " · " + mapF.job : "") + (nq ? " · « " + mapF.q + " »" : "") })),
+          all.length ? h("div", { class: "protgrid" }, all.map(([rid, p]) => protCard(p, rid, () => show(rid)))) : h("p", { class: "muted", text: "Aucun protecteur pour ce filtre." })));
+    })(),
     h("p", { class: "note", text: "Cartes du jeu, images et repères : DofusDB. Emplacements des ressources (Monde des Douze) et anomalies : Kamamaster (" + (KM ? KM.server : "Orukam") + ")." }));
 }
 

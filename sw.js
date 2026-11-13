@@ -1,6 +1,6 @@
 // Service worker : rend l'appli installable et utilisable hors connexion.
 // Pense à changer VERSION à chaque mise en ligne pour que tout le monde reçoive la mise à jour.
-const VERSION = "atelier-v71";
+const VERSION = "atelier-v72";
 const SHELL = ["./", "index.html", "css/app.css", "js/app.js", "config.js", "vendor/supabase.js", "manifest.webmanifest",
   "icons/icon.svg", "icons/icon-192.png", "icons/dofus-ocre.png", "data/core.json", "data/farm.json"];
 
