@@ -42,11 +42,13 @@ def fetch():
         urllib.request.urlretrieve(BASE + f, dst)
 
 
-def job_drops(monster_refs, tr, subs, boss_dj, core_items, harvest, mons, drops):
+def job_drops(monster_refs, tr, subs, boss_dj, core_items, harvest, mons, drops, bags=None):
     """Drops réservés à un métier, ajoutés à drops sous la forme [monstre, taux min, taux max, métier, niveau du métier] :
     - chasse : viandes lâchées seulement si le personnage est Chasseur (« Pj>41,N&CU>0 » : niveau > N, arme de chasse équipée) ;
-    - pêche : poissons rares (1 %) et sacs de poissons lâchés par les « Dévoreurs », qui apparaissent en pêchant un poisson (« PZ=1&PJ=36 ») ;
-      zones du Dévoreur = zones de pêche de ce poisson, niveau = niveau de pêche de ce poisson."""
+    - récolte (« PZ=1&PJ=métier ») : ressources rares (1 %) et sacs (100 %) lâchés par les protecteurs qui apparaissent en récoltant
+      une ressource (Dévoreurs pour la pêche, Épouvantails, Arbres ensorcelés, Craqueboules, Bulbes…) ;
+      zones du protecteur = zones de récolte de cette ressource, niveau = niveau de récolte de cette ressource (F.mons[m][5])."""
+    bags = bags or {}
     fish_by_name = {tr(core_items[i][0]) if isinstance(core_items[i][0], int) else core_items[i][0]: i for i in harvest if harvest[i][0] == 36}
     for m in (x["data"] for x in monster_refs):
         if "drops" not in m:
@@ -65,15 +67,19 @@ def job_drops(monster_refs, tr, subs, boss_dj, core_items, harvest, mons, drops)
             if mh:
                 mons.setdefault(m["id"], [name, min(lv), max(lv), sa, boss_dj.get(m["id"], 0)])
                 drops.setdefault(oid, []).append([m["id"], round(min(pc), 3), round(max(pc), 3), int(mh.group(1)), int(mh.group(2)) + 1])
-            elif cr == "PZ=1&PJ=36" and name.startswith("Dévoreur"):
-                # poisson pêché qui fait apparaître le Dévoreur, d'après son nom (« Dévoreur de Goujons » -> Goujon) ;
-                # il lâche un sac de poissons (100 %) et le poisson rare (1 %)
-                w = re.sub(r"^Dévoreur d(e |')", "", name).lower().replace("-", " ").rstrip("s")
-                base = next((i for n_, i in sorted(fish_by_name.items(), key=lambda x: harvest[x[1]][1]) if n_.lower().replace("-", " ").startswith(w)), None)
+            elif re.fullmatch(r"PZ=1&PJ=\d+", cr):
+                # « protecteur » qui apparaît pendant la récolte d'une ressource (Dévoreurs, Épouvantails, Arbres ensorcelés,
+                # Craqueboules, Bulbes…) : il lâche un sac de cette ressource (100 %) et une ressource rare (1 %).
+                # Ressource récoltée = contenu de son sac, sinon d'après le nom pour les Dévoreurs (« Dévoreur de Goujons » -> Goujon)
+                job = int(cr.rsplit("=", 1)[1])
+                base = next((bags[x["objectId"]][0] for x in m["drops"]["Array"] if x["objectId"] in bags and harvest.get(bags[x["objectId"]][0], [0])[0] == job), None)
+                if base is None and job == 36 and name.startswith("Dévoreur"):
+                    w = re.sub(r"^Dévoreur d(e |')", "", name).lower().replace("-", " ").rstrip("s")
+                    base = next((i for n_, i in sorted(fish_by_name.items(), key=lambda x: harvest[x[1]][1]) if n_.lower().replace("-", " ").startswith(w)), None)
                 if base is None:
                     continue
                 mons.setdefault(m["id"], [name, min(lv), max(lv), list(harvest[base][2]), 0, base])
-                drops.setdefault(oid, []).append([m["id"], round(min(pc), 3), round(max(pc), 3), 36, harvest[base][1]])
+                drops.setdefault(oid, []).append([m["id"], round(min(pc), 3), round(max(pc), 3), job, harvest[base][1]])
     for k_ in drops:
         drops[k_].sort(key=lambda x: -x[2])
 
@@ -270,8 +276,8 @@ def main():
         for it_ in s_["harvestables"]["Array"]:
             if it_ in harvest and s_["id"] in subs:
                 harvest[it_][2].append(s_["id"])
-    job_drops(refs("monsters.json"), tr, subs, boss_dj, core_items, harvest, mons, drops)
     bags = bag_contents(refs("items.json"), core_items)
+    job_drops(refs("monsters.json"), tr, subs, boss_dj, core_items, harvest, mons, drops, bags)
     farm = {"mons": mons, "drops": drops, "subs": subs, "areas": areas, "dungeons": dungeons, "harvest": harvest, "bags": bags}
     json.dump(farm, open(OUT / "farm.json", "w", encoding="utf-8"), ensure_ascii=False, separators=(",", ":"))
     print(f"farm : {len(mons)} monstres, {len(drops)} objets droppables, {len(harvest)} ressources récoltables, {len(subs)} zones, {len(dungeons)} donjons")
