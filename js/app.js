@@ -2965,8 +2965,11 @@ function d3Look(b) {
   // Familier, montilier ou monture (case « Familier / monture ») : son propre squelette, à côté du personnage
   let pet = "";
   const psk = skinOf(b, 12, 0), peq = slotItem(b, 12, 0);
-  if (psk || peq) { const bone = (D3L.pets || {})[psk] || (D3L.pets || {})[peq]; if (bone) pet = "|1@0={" + bone + "|||90}"; else miss.push(psk || peq); }
-  return { look: "{1|" + skins.filter(Boolean).join(",") + "|" + cols.map((c, i) => (i + 1) + "=" + c).join(",") + "|100" + pet + "}", miss };
+  const pid = (D3L.pets || {})[psk] ? psk : (D3L.pets || {})[peq] ? peq : null;
+  const lk = skins.filter(Boolean).join(",") + "|" + cols.map((c, i) => (i + 1) + "=" + c).join(",") + "|100";
+  if (pid && (D3L.ride || []).includes(+pid)) return { look: "{" + D3L.pets[pid] + "|||100|2@0={2|" + lk + "}}", miss }; // monté sur le montilier
+  if (pid) pet = "|1@0={" + D3L.pets[pid] + "|||90}"; else if (psk || peq) miss.push(psk || peq);
+  return { look: "{1|" + lk + pet + "}", miss };
 }
 function d3Canvas(b) {
   const L = D3R && d3Look(b); if (!L) return null;

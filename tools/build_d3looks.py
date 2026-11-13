@@ -119,6 +119,21 @@ def main():
                     dump(json.load(open(f)), db / f.name)
                 elif f.suffix == ".png":
                     webp(f, db / (f.stem + ".webp"), 4)
+    # Montiliers (et leurs apparats) : le personnage est monté dessus (squelette cavalier « 2 », sous-entité 2@0)
+    items = load("ItemsDataRoot")
+    looks["ride"] = sorted(int(i) for i in looks["pets"] if items.get(i, {}).get("typeId") in (121, 250, 324))
+    if len(sys.argv) > 4:
+        rb = Path(sys.argv[3]) / "Dofus_Data" / "StreamingAssets" / "Content" / "Characters" / "Bones" / "2"
+        db = OUT / "Content" / "Characters" / "Bones" / "2"
+        if (rb / "bone.json").exists() and not (db / "bone.json").exists():
+            db.mkdir(parents=True, exist_ok=True)
+            for f in rb.iterdir():
+                if f.suffix == ".dat":
+                    shutil.copy(f, db / f.name)
+                elif f.suffix == ".json":
+                    dump(json.load(open(f)), db / f.name)
+                elif f.suffix == ".png":
+                    webp(f, db / (f.stem + ".webp"))
     json.dump(looks, open(OUT / "looks.json", "w"), separators=(",", ":"))
     size = sum(f.stat().st_size for f in OUT.rglob("*") if f.is_file())
     print(len(skins), "skins,", missing, "manquants,", len(looks["items"]), "objets,", len(looks["pets"]), "familiers/montures,", round(size / 1e6, 1), "Mo")
