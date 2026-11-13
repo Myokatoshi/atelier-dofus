@@ -700,3 +700,12 @@ ul.fx li.chl { display: flex; }
 .pass-o > .small { min-width: 0; }
 @media (max-width: 720px) { .pass-o { flex-direction: column; align-items: stretch; } }
 .pts .cell { width: 100% !important; min-width: 0 !important; max-width: 100%; box-sizing: border-box; padding-left: 6px; padding-right: 8px; }
+/* Passifs : réglages, détail des dégâts, passifs dans les fiches */
+.pass-ctl { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; justify-content: flex-end; }
+select.sm { padding: 4px 8px; font-size: .8rem; }
+.det-b { display: grid; gap: 4px; padding: 8px 10px; border-radius: 12px; background: var(--sunk); }
+.det-g { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; gap: 3px 12px; align-items: baseline; }
+.det-g .n { text-align: right; }
+.det-g > span.small { overflow-wrap: anywhere; }
+li.fx-pass { list-style: none; margin: 6px 0; padding: 6px 8px; border-left: 3px solid var(--kamas); background: var(--sunk); border-radius: 8px; }
+li.fx-pass strong { color: var(--kamas); }

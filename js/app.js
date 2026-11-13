@@ -984,13 +984,18 @@ async function renderSheet() {
 
   // Encyclopédie (chargée à la demande)
   const det = await loadDet(id);
+  if (/(^|\n)\d+(\n|$)/.test((det.fx || []).join("\n"))) await ensureBuildData(); // passifs des Dofus et légendaires
   if (seq !== sheetRenderSeq || sheetStack[sheetStack.length - 1] !== id) return;
   const used = (USED_IN[id] || []).slice().sort((a, b) => item(a)[1] - item(b)[1]);
   const almDays = D.almanax.filter(a => a[1] === id);
   const setItems = it[4] > 0 ? (SET_ITEMS[it[4]] || []) : [];
   const enc = h("section", { class: "panel" }, h("h3", { text: "Encyclopédie" }),
     det.d ? h("p", { class: "muted", text: det.d }) : null,
-    det.fx ? h("div", {}, h("span", { class: "label", text: "Effets" }), h("ul", { class: "fx" }, det.fx.map(f => h("li", { text: f })))) : null,
+    det.fx ? h("div", {}, h("span", { class: "label", text: "Effets" }), h("ul", { class: "fx" }, det.fx.filter(f => !/^(Échangeable : 0|Attitude 0)$/.test(f)).map(f => {
+      const ps = /^\d+$/.test(f) && BD && (BD.passives || {})[id] && BD.pspells[f];
+      if (/^\d+$/.test(f) && !ps) return null;
+      return ps ? h("li", { class: "fx-pass" }, h("strong", { text: "Passif · " + ps[0] }), h("span", { class: "small", style: "display:block", text: ps[1].replace(/^[^:]*:\s*/, "") })) : h("li", { text: f });
+    }))) : null,
     almDays.length ? h("div", {}, h("span", { class: "label", text: "Offrande d'Almanax" }), h("p", { text: almDays.map(a => almDate(a[0]) + " (×" + a[2] + ")").join(", ") })) : null,
     setItems.length ? h("div", { style: "display:grid;gap:6px" }, h("span", { class: "label", text: "Panoplie " + (D.sets[it[4]] || "") }), h("div", { class: "chips" }, setItems.map(x => h("button", { type: "button", class: "chip", onclick: () => openSheet(x) }, item(x)[0])))) : null,
     used.length ? h("div", { style: "display:grid;gap:6px" }, h("span", { class: "label", text: "Utilisé dans " + used.length + " recette" + (used.length > 1 ? "s" : "") }),
@@ -1698,7 +1703,7 @@ let EQUIP_NAMES = null;
 function equipNames() {
   if (EQUIP_NAMES) return EQUIP_NAMES;
   const m = new Map();
-  for (const e of INDEX) if (isEquip(e.id) && (e.key.length >= 6 || e.key.includes(" "))) { const cur = m.get(e.key); if (!cur || item(e.id)[1] > item(cur)[1]) m.set(e.key, e.id); }
+  for (const e of INDEX) if (isEquip(e.id) && (e.key.length >= 6 || e.key.includes(" "))) { const cur = m.get(e.key); if (!cur || item(e.id)[1] > item(cur)[1] || (item(e.id)[1] === item(cur)[1] && e.id > cur)) m.set(e.key, e.id); }
   EQUIP_NAMES = [...m.entries()].sort((a, b) => b[0].length - a[0].length);
   return EQUIP_NAMES;
 }
@@ -1850,8 +1855,11 @@ async function importBuildCapture(file) {
   }
   render();
 }
+// Objets remplacés dans les builds existants : version vide -> vraie version (Dofus Sylvestre non terminé -> terminé)
+const ITEM_FIX = { 29134: 29136 };
 function viewBuilds() {
   ensureBuildData();
+  for (const x of S.builds) if (x.items.some(id => ITEM_FIX[id])) { x.items = [...new Set(x.items.map(id => ITEM_FIX[id] || id))]; persist("builds"); }
   const b = S.builds.find(x => x.id === buildSel) || S.builds[S.builds.length - 1];
   if (b) buildSel = b.id;
   // Import
@@ -2967,7 +2975,7 @@ function d3Look(b) {
   const psk = skinOf(b, 12, 0), peq = slotItem(b, 12, 0);
   const pid = (D3L.pets || {})[psk] ? psk : (D3L.pets || {})[peq] ? peq : null;
   const lk = skins.filter(Boolean).join(",") + "|" + cols.map((c, i) => (i + 1) + "=" + c).join(",") + "|100";
-  if (pid && (D3L.ride || []).includes(+pid)) return { look: "{" + D3L.pets[pid] + "|||100|2@0={2|" + lk + "}}", miss }; // monté sur le montilier
+  if (pid && (D3L.ride || []).includes(+pid)) return { look: "{" + D3L.pets[pid] + "|||100|2@0={9582|" + lk + "}}", miss }; // monté (assis) sur le montilier
   if (pid) pet = "|1@0={" + D3L.pets[pid] + "|||90}"; else if (psk || peq) miss.push(psk || peq);
   return { look: "{1|" + lk + pet + "}", miss };
 }
@@ -3039,15 +3047,38 @@ function dmgEffects(list) {
   const seen = new Set();
   return out.map(x => ({ ...x, main: x.mask === mainMask })).filter(x => { const k = [x.elem, x.lo, x.hi, x.heal, x.main].join(); if (seen.has(k)) return false; seen.add(k); return true; });
 }
-function hitDmg(st, base, e, o) {
-  if (e.heal) return Math.floor(base * (100 + Math.max(0, st[15] || 0)) / 100) + (st[49] || 0);
-  const [, car, doE, rp, rf] = ELEM[e.elem], T = o.target || {};
-  let d = Math.floor(base * (100 + Math.max(0, st[car] || 0) + (st[25] || 0)) / 100) + (st[16] || 0) + (st[doE] || 0) + (o.crit ? st[86] || 0 : 0);
-  d = d * (100 + (o.weapon ? st[122] || 0 : st[123] || 0)) / 100 * (100 + (o.dist ? st[120] || 0 : st[125] || 0)) / 100;
-  d = Math.max(0, d - (+(T.f || [])[e.elem] || 0) - (o.crit ? +T.crit || 0 : 0)) * (100 - (+(T.p || [])[e.elem] || 0)) / 100 * (100 - (o.dist ? +T.dist || 0 : +T.mel || 0)) / 100;
-  d = d * (100 + (st.df || 0)) / 100; // dommages finaux (passifs des Dofus, objets légendaires)
-  return Math.max(0, Math.floor(d));
+// Un coup, étape par étape : jet de base -> caractéristique + puissance -> dommages fixes -> % dommages -> résistances -> dommages finaux
+function dmgCalc(st, base, e, o) {
+  const steps = []; const T = o.target || {};
+  if (e.heal) {
+    const v = Math.floor(base * (100 + Math.max(0, st[15] || 0)) / 100) + (st[49] || 0);
+    steps.push(["Jet de base", base], ["× (100 + Intelligence " + fmt.format(Math.round(st[15] || 0)) + ") ÷ 100, arrondi", Math.floor(base * (100 + Math.max(0, st[15] || 0)) / 100)], ["+ Soins " + fmt.format(st[49] || 0), v]);
+    return { v, steps };
+  }
+  const [en, car, doE] = ELEM[e.elem], cv = Math.max(0, st[car] || 0), pu = st[25] || 0;
+  steps.push(["Jet de base" + (o.crit ? " (critique)" : ""), base]);
+  let d = Math.floor(base * (100 + cv + pu) / 100);
+  steps.push(["× (100 + " + D.chars[car][3] + " " + fmt.format(Math.round(cv)) + " + Puissance " + fmt.format(Math.round(pu)) + ") ÷ 100, arrondi", d]);
+  const fixe = (st[16] || 0) + (st[doE] || 0) + (o.crit ? st[86] || 0 : 0);
+  d += fixe;
+  steps.push(["+ Dommages " + fmt.format(st[16] || 0) + " + Do " + en + " " + fmt.format(st[doE] || 0) + (o.crit ? " + Do critiques " + fmt.format(st[86] || 0) : ""), d]);
+  const pc1 = o.weapon ? st[122] || 0 : st[123] || 0;
+  d = d * (100 + pc1) / 100; steps.push(["× (100 + % dommages " + (o.weapon ? "d'armes" : "aux sorts") + " " + fmt.format(pc1) + ") ÷ 100", d]);
+  const pc2 = o.dist ? st[120] || 0 : st[125] || 0;
+  d = d * (100 + pc2) / 100; steps.push(["× (100 + % dommages " + (o.dist ? "distance" : "mêlée") + " " + fmt.format(pc2) + ") ÷ 100", d]);
+  const rf = (+(T.f || [])[e.elem] || 0) + (o.crit ? +T.crit || 0 : 0);
+  d = Math.max(0, d - rf); steps.push(["− résistance fixe " + en + (o.crit ? " et critiques" : "") + " de la cible (" + fmt.format(rf) + ")", d]);
+  const rp = +(T.p || [])[e.elem] || 0;
+  d = d * (100 - rp) / 100; steps.push(["× (100 − résistance " + en + " " + rp + " %) ÷ 100", d]);
+  const rd = o.dist ? +T.dist || 0 : +T.mel || 0;
+  d = d * (100 - rd) / 100; steps.push(["× (100 − résistance " + (o.dist ? "distance" : "mêlée") + " " + rd + " %) ÷ 100", d]);
+  const rs = o.weapon ? +T.armes || 0 : +T.sorts || 0;
+  d = d * (100 - rs) / 100; steps.push(["× (100 − résistance " + (o.weapon ? "aux armes" : "aux sorts") + " " + rs + " %) ÷ 100", d]);
+  d = d * (100 + (st.df || 0)) / 100; steps.push(["× (100 + dommages finaux " + fmt.format(st.df || 0) + " %) ÷ 100", d]);
+  const v = Math.max(0, Math.floor(d)); steps.push(["Arrondi à l'unité inférieure", v]);
+  return { v, steps };
 }
+const hitDmg = (st, base, e, o) => dmgCalc(st, base, e, o).v;
 // Buffs d'un sort sur soi ou ses alliés : [{c, v, pct, dur}]
 function spellBuffs(g) {
   const out = [];
@@ -3075,17 +3106,25 @@ function passiveOpts(sid) {
     m = /dommages finaux (?:sont )?(?:réduits|diminués) de (\d+) ?%/i.exec(t); if (m && /porteur|ses dommages/i.test(t)) fx.df = -m[1];
     for (const [nm, c] of PASS_CHARS) { const r = new RegExp("(?:gagne|\\+) ?(\\d+) (?:de )?" + nm + "\\b", "i").exec(t); if (r) fx.c[c] = +r[1]; }
     m = /(\d+) ?% (?:de )?(?:chances? de )?critique/i.exec(t); if (m && /gagne|\+/i.test(t)) fx.c[18] = +m[1];
-    const mx = /cumulable (\d+) fois/i.exec(t);
-    return { t, fx, max: mx ? +mx[1] : 1, ok: !!(fx.df || Object.keys(fx.c).length) };
+    const mx = /cumulable (\d+) fois/i.exec(t), each = /pour chaque ([^,.]+)/i.exec(t);
+    return { t, fx, max: mx ? +mx[1] : each ? 12 : 1, unit: each ? each[1].replace(/\s*qu'il utilise.*$/i, " utilisé(s)").trim() : "", ok: !!(fx.df || Object.keys(fx.c).length) };
   });
   return (PASS_CACHE[sid] = opts);
 }
-function activePassives(b) {
+// Portée d'un buff : sur tous les coups, seulement les coups critiques, ou seulement les coups normaux
+const SCOPES = [["all", "tous les coups"], ["crit", "coups critiques"], ["norm", "coups normaux"]];
+const scopeOk = (sc, mode) => !sc || sc === "all" || !mode || (sc === "crit" ? mode === "c" : mode === "n");
+function activePassives(b, mode) {
   const out = [];
   for (const id of b.items) for (const sid of (BD.passives || {})[id] || []) passiveOpts(sid).forEach((o, i) => {
-    const n = +((b.pass || {})[sid + "-" + i] || 0); if (n && o.ok) out.push({ ...o, n: Math.min(n, o.max), sid, i });
+    const k = sid + "-" + i, n = +((b.pass || {})[k] || 0);
+    if (n && o.ok && scopeOk((b.pscope || {})[k], mode)) out.push({ ...o, n: Math.min(n, o.max), sid, i });
   });
   return out;
+}
+function scopeSel(cur, onSet, label) {
+  const s2 = h("select", { class: "sm", "aria-label": label }, SCOPES.map(([v, l]) => h("option", { value: v, selected: (cur || "all") === v }, l)));
+  s2.addEventListener("change", () => onSet(s2.value)); return s2;
 }
 function passivesPanel(b) {
   const list = b.items.filter(id => (BD.passives || {})[id]);
@@ -3095,50 +3134,82 @@ function passivesPanel(b) {
     list.map(id => h("div", { class: "pass-it" }, h("div", { class: "row", style: "gap:8px;flex-wrap:nowrap" }, icon(id, 30), h("strong", { text: item(id)[0] })),
       ((BD.passives || {})[id] || []).map(sid => h("div", { class: "pass-sp" }, h("em", { text: (BD.pspells[sid] || ["Passif"])[0] }),
         passiveOpts(sid).map((o, i) => { const k = sid + "-" + i, n = +((b.pass || {})[k] || 0);
+          const setScope = v => { b.pscope = { ...(b.pscope || {}) }; if (v === "all") delete b.pscope[k]; else b.pscope[k] = v; persist("builds"); render(); };
           return h("div", { class: "pass-o" + (n ? " on" : "") },
             h("span", { class: "small", text: o.t }),
-            o.ok ? (o.max > 1 ? h("span", { class: "row", style: "gap:6px;flex-wrap:nowrap" }, h("span", { class: "small muted", text: "cumuls" }),
+            o.ok ? h("span", { class: "pass-ctl" }, o.max > 1 ? h("span", { class: "row", style: "gap:6px;flex-wrap:nowrap" }, h("span", { class: "small muted", text: o.unit ? o.unit : "cumuls" }),
                 (() => { const s2 = h("select", { "aria-label": "Cumuls actifs" }, Array.from({ length: o.max + 1 }, (_, x) => h("option", { value: x, selected: x === n }, x ? "× " + x : "inactif"))); s2.addEventListener("change", () => setN(k, +s2.value)); return s2; })())
-              : h("label", { class: "check small" }, (() => { const c = h("input", { type: "checkbox", checked: !!n }); c.addEventListener("change", () => setN(k, c.checked ? 1 : 0)); return c; })(), "Actif"))
+              : h("label", { class: "check small" }, (() => { const c = h("input", { type: "checkbox", checked: !!n }); c.addEventListener("change", () => setN(k, c.checked ? 1 : 0)); return c; })(), "Actif"),
+              n ? scopeSel((b.pscope || {})[k], setScope, "Appliqué sur") : null)
               : h("span", { class: "small muted", style: "white-space:nowrap", text: /\d/.test(o.t) ? "non simulé" : "règle" }));
         }))))));
 }
 // Stats de combat : stats finales + buffs de sorts activés + passifs activés + bonus saisis
-function combatStats(b, jet) {
+function combatStats(b, jet, mode) {
   const st = finalStats(b, jet), p = persoOf(b), list = BD.breeds.find(x => x[0] === breedOf(b));
   const active = [];
-  for (const sid of b.buffs || []) { const sp = BD.spells[sid], g = sp && list && list[2].includes(+sid) && gradeAt(sp, p.lvl); if (g) active.push(...spellBuffs(g)); }
+  for (const sid of b.buffs || []) { const sp = BD.spells[sid], g = sp && list && list[2].includes(+sid) && gradeAt(sp, p.lvl); if (g && scopeOk((b.bscope || {})[sid], mode)) active.push(...spellBuffs(g)); }
   for (const x of active) if (!x.pct) st[x.c] = (st[x.c] || 0) + x.v;
   for (const x of active) if (x.pct) st[x.c] = (st[x.c] || 0) * (1 + x.v / 100);
   for (const [c, v] of Object.entries(b.extra || {})) st[c] = (st[c] || 0) + (+v || 0);
   st.df = 0;
-  for (const x of activePassives(b)) { st.df += x.fx.df * x.n; for (const [c, v] of Object.entries(x.fx.c)) st[c] = (st[c] || 0) + v * x.n; }
+  for (const x of activePassives(b, mode)) { st.df += x.fx.df * x.n; for (const [c, v] of Object.entries(x.fx.c)) st[c] = (st[c] || 0) + v * x.n; }
   st.df += +((b.extra || {}).df || 0);
   if (active.some(x => x.c === 11)) st[PV] = 50 + 5 * Math.min(200, p.lvl) + (st[11] || 0);
   return st;
 }
 const TARGETS = [["Aucune", { p: [0, 0, 0, 0, 0], f: [0, 0, 0, 0, 0] }], ["20 % partout", { p: [20, 20, 20, 20, 20], f: [0, 0, 0, 0, 0] }],
   ["PvP (30 %, 30 fixes)", { p: [30, 30, 30, 30, 30], f: [30, 30, 30, 30, 30], crit: 50 }], ["Boss (40 %)", { p: [40, 40, 40, 40, 40], f: [0, 0, 0, 0, 0] }]];
-let spF = { sort: "ordre", dmgOnly: true };
+let spF = { sort: "ordre", dmgOnly: true, range: "auto", det: null };
 // Sort dont `sid` est la variante (deuxième sort d'une paire), sinon null
 const variantOf = (list, sid) => { const pr = (list[3] || []).find(pp => pp[1] === +sid); return pr ? pr[0] : null; };
+// Détail du calcul d'un sort : chaque ligne de dégâts, coup normal et coup critique, jet minimum ou maximum
+function spellDetail(rows, st, stC) {
+  const withDmg = rows.filter(r => r.calc && r.calc.ne.length);
+  if (!withDmg.length) return null;
+  if (!withDmg.some(r => String(r.id) === String(spF.det))) spF.det = withDmg[0].id;
+  const r = withDmg.find(x => String(x.id) === String(spF.det));
+  const sel = h("select", { id: "sp-det", "aria-label": "Sort détaillé" }, withDmg.map(x => h("option", { value: x.id, selected: x === r }, x.name)));
+  sel.addEventListener("change", () => { spF.det = sel.value; render(); });
+  const jetSeg = h("span", { class: "seg", role: "group" }, [["lo", "Jet minimum"], ["hi", "Jet maximum"]].map(([v, l]) => h("button", { type: "button", "aria-pressed": (spF.detJet || "lo") === v ? "true" : "false", onclick: () => { spF.detJet = v; render(); } }, l)));
+  const k = spF.detJet || "lo";
+  const blocks = r.calc.ne.map((e, i) => {
+    const n = dmgCalc(st, e[k], e, r.calc.o), ce = r.calc.ce[i] || e, c = dmgCalc(stC, ce[k], ce, { ...r.calc.o, crit: true });
+    return h("div", { class: "det-b" }, h("strong", { text: (e.heal ? "Soin" : ELEM[e.elem][0] + (e.steal ? " (vol)" : "")) + (e.main ? "" : " (sous condition)") }),
+      h("div", { class: "det-g" }, h("span", { class: "label", text: "Étape" }), h("span", { class: "label n", text: "Normal" }), h("span", { class: "label n", text: "Critique" }),
+        n.steps.flatMap((st2, j) => [h("span", { class: "small", text: st2[0] }), h("span", { class: "num n", text: fmt.format(Math.round(st2[1] * 100) / 100) }),
+          h("span", { class: "num n", text: c.steps[j] ? fmt.format(Math.round(c.steps[j][1] * 100) / 100) : "" })])));
+  });
+  const d = h("details", { class: "dj", id: "sp-detail" }, h("summary", {}, h("strong", { text: "Détail du calcul d'un sort" })),
+    h("div", { class: "row", style: "gap:8px" }, sel, jetSeg, h("small", { class: "muted", text: (r.calc.o.dist ? "à distance" : "en mêlée") + (r.calc.o.weapon ? " · arme" : " · sort") })),
+    blocks,
+    h("p", { class: "note", text: "La colonne Critique utilise les dommages du coup critique du sort et les buffs réglés sur « tous les coups » ou « coups critiques » ; la colonne Normal, ceux réglés sur « tous les coups » ou « coups normaux »." }));
+  if (SPDET_OPEN) d.open = true;
+  d.addEventListener("toggle", () => { SPDET_OPEN = d.open; });
+  return d;
+}
+let SPDET_OPEN = false;
 function spellsPanel(b, jet) {
   if (!BD) { ensureBuildData(); return h("section", { class: "panel" }, h("h2", { text: "Sorts et dégâts" }), h("p", { class: "muted", text: "Chargement des sorts…" })); }
   const br = breedOf(b), list = BD.breeds.find(x => x[0] === br);
   if (!list) return h("section", { class: "panel" }, h("h2", { text: "Sorts et dégâts" }), h("p", { class: "muted", text: "Choisis la classe du personnage (en haut, à côté du personnage) pour voir ses sorts et leurs dégâts." }));
-  const p = persoOf(b), st = combatStats(b, jet), T = S.settings.target || TARGETS[0][1];
+  const p = persoOf(b), st = combatStats(b, jet, "n"), stC = combatStats(b, jet, "c"), T = S.settings.target || TARGETS[0][1];
   const saveT = patch => { S.settings.target = { ...T, ...patch }; persist("plan"); render(); };
   const crit = g => g[4] ? Math.min(100, g[4] + (st[18] || 0)) : 0;
-  const lineTxt = (lines, o) => lines.map(e => { const a = hitDmg(st, e.lo, e, o), z = hitDmg(st, e.hi, e, o); return { e, a, z }; });
+  // Coups normaux avec les stats « coups normaux », coups critiques avec les stats « coups critiques »
+  const lineTxt = (lines, o) => lines.map(e => { const S2 = o.crit ? stC : st, a = hitDmg(S2, e.lo, e, o), z = hitDmg(S2, e.hi, e, o); return { e, a, z }; });
+  // Distance ou mêlée : choisi, sinon selon la portée du sort (portée max > 1 = distance)
+  const isDist = maxPo => spF.range === "dist" ? true : spF.range === "mel" ? false : maxPo > 1;
   const avg = ls => ls.filter(x => x.e.main).reduce((t, x) => t + (x.a + x.z) / 2, 0);
   const rows = [];
   // Arme portée
   const wid = b.items.find(id => superOf(id) === 2), W = wid && BD.weapons[wid];
   if (W && W[6].length) {
-    const base = dmgEffects(W[6].map(([eid, lo, hi]) => [eid, lo, hi, 0, "A"])), dist = W[2] > 1, o = { weapon: true, dist, target: T };
+    const base = dmgEffects(W[6].map(([eid, lo, hi]) => [eid, lo, hi, 0, "A"])), dist = isDist(W[2]), o = { weapon: true, dist, target: T };
     const n = lineTxt(base, o), c = lineTxt(base.map(e => ({ ...e, lo: e.lo + W[4], hi: e.hi + W[4] })), { ...o, crit: true });
     const pc = W[3] ? Math.min(100, W[3] + (st[18] || 0)) : 0, exp = (1 - pc / 100) * avg(n) + pc / 100 * avg(c);
-    rows.push({ id: "w", name: item(wid)[0], icon: icon(wid, 36), ap: W[0], po: (W[1] !== W[2] ? W[1] + "–" : "") + W[2], pc, n, c, exp, per: W[0] ? exp / W[0] : exp, info: "Arme" + (W[5] ? " · " + W[5] + "/tour" : "") });
+    rows.push({ id: "w", name: item(wid)[0], icon: icon(wid, 36), ap: W[0], po: (W[1] !== W[2] ? W[1] + "–" : "") + W[2], pc, n, c, exp, per: W[0] ? exp / W[0] : exp, info: "Arme" + (W[5] ? " · " + W[5] + "/tour" : ""),
+      calc: { ne: base, ce: base.map(e => ({ ...e, lo: e.lo + W[4], hi: e.hi + W[4] })), o } });
   }
   const buffSpells = [];
   for (const sid of list[2]) {
@@ -3147,10 +3218,10 @@ function spellsPanel(b, jet) {
     const bf = spellBuffs(g); if (bf.length) buffSpells.push({ sid, sp, g, bf });
     const ne = dmgEffects(g[9]), ce = dmgEffects(g[10]);
     if (!ne.length && spF.dmgOnly) continue;
-    const dist = g[3] > 1, o = { dist, target: T };
+    const dist = isDist(g[3]), o = { dist, target: T };
     const n = lineTxt(ne, o), c = lineTxt(ce.length ? ce : ne, { ...o, crit: true }), pc = crit(g);
     const exp = (1 - pc / 100) * avg(n) + pc / 100 * avg(c);
-    rows.push({ id: sid, name: sp[0], icon: h("img", { class: "spico", src: "data/spells/" + sp[1] + ".webp", alt: "", loading: "lazy", width: 36, height: 36 }), ap: g[1],
+    rows.push({ calc: { ne, ce: ce.length ? ce : ne, o }, id: sid, name: sp[0], icon: h("img", { class: "spico", src: "data/spells/" + sp[1] + ".webp", alt: "", loading: "lazy", width: 36, height: 36 }), ap: g[1],
       po: (g[2] !== g[3] ? g[2] + "–" : "") + g[3] + (g[8] ? "" : " (fixe)"), pc, n, c, exp, per: g[1] ? exp / g[1] : exp,
       info: [variantOf(list, sid) ? "variante de " + ((BD.spells[variantOf(list, sid)] || [""])[0]) : "", g[5] ? g[5] + "/tour" : "", g[6] ? g[6] + "/cible" : "", g[7] ? "relance " + g[7] + " t." : "", "niv. " + g[0]].filter(Boolean).join(" · ") });
   }
@@ -3165,6 +3236,10 @@ function spellsPanel(b, jet) {
       h("div", { class: "row", style: "gap:8px" },
         (() => { const s2 = h("select", { id: "sp-sort", "aria-label": "Trier les sorts" }, [["ordre", "Ordre du jeu"], ["dmg", "Plus gros dégâts"], ["pa", "Dégâts par PA"]].map(([v, l]) => h("option", { value: v, selected: spF.sort === v }, l))); s2.addEventListener("change", () => { spF.sort = s2.value; render(); }); return s2; })(),
         h("label", { class: "check small" }, (() => { const c = h("input", { type: "checkbox", checked: !spF.dmgOnly }); c.addEventListener("change", () => { spF.dmgOnly = !c.checked; render(); }); return c; })(), "Tous les sorts"))),
+    h("div", { class: "row", style: "gap:8px" }, h("span", { class: "label", text: "Attaque" }),
+      h("span", { class: "seg", role: "group", "aria-label": "Mêlée ou distance" }, [["auto", "Selon la portée du sort"], ["mel", "En mêlée"], ["dist", "À distance"]].map(([v, l]) =>
+        h("button", { type: "button", "aria-pressed": spF.range === v ? "true" : "false", onclick: () => { spF.range = v; render(); } }, l))),
+      h("small", { class: "muted", text: spF.range === "auto" ? "mêlée si le sort porte à 1 case, sinon distance" : "appliqué à tous les sorts et à l'arme" })),
     h("div", { class: "fs-grid" },
       ...ELEM.slice(1).map(([nm, car, doE]) => h("div", { class: "fs-row", style: "border-left:3px solid " + ELEM.find(x => x[0] === nm)[5] }, h("span", { text: nm }), h("strong", { class: "num", text: fmt.format(Math.round((st[car] || 0) + (st[25] || 0))) }), h("small", { class: "muted", text: "carac. + puissance · " + fmt.format(Math.round((st[16] || 0) + (st[doE] || 0))) + " do fixes" }))),
       h("div", { class: "fs-row" }, h("span", { text: "Critique" }), h("strong", { class: "num", text: fmt.format(Math.round(st[18] || 0)) + " %" }), h("small", { class: "muted", text: fmt.format(Math.round(st[86] || 0)) + " do crit" })),
@@ -3172,7 +3247,9 @@ function spellsPanel(b, jet) {
     buffSpells.length ? h("div", { style: "display:grid;gap:6px" }, h("span", { class: "label", text: "Buffs de sorts à activer (ajoutés aux stats et aux dégâts)" }),
       h("div", { class: "chips" }, buffSpells.map(x => h("button", { type: "button", class: "chip buff" + (on.has(String(x.sid)) ? " on" : ""), "aria-pressed": on.has(String(x.sid)) ? "true" : "false", title: x.bf.map(bufText).join(", "),
         onclick: () => { const s2 = new Set(b.buffs || []); if (s2.has(x.sid)) s2.delete(x.sid); else s2.add(x.sid); b.buffs = [...s2]; persist("builds"); render(); } },
-        h("img", { src: "data/spells/" + x.sp[1] + ".webp", alt: "", width: 20, height: 20 }), x.sp[0] + " : " + x.bf.map(bufText).join(", "))))) : null,
+        h("img", { src: "data/spells/" + x.sp[1] + ".webp", alt: "", width: 20, height: 20 }), x.sp[0] + " : " + x.bf.map(bufText).join(", ")))),
+      buffSpells.filter(x => on.has(String(x.sid))).map(x => h("div", { class: "row", style: "gap:8px" }, h("span", { class: "small", text: x.sp[0] + " appliqué sur" }),
+        scopeSel((b.bscope || {})[x.sid], v => { b.bscope = { ...(b.bscope || {}) }; if (v === "all") delete b.bscope[x.sid]; else b.bscope[x.sid] = v; persist("builds"); render(); }, "Buff appliqué sur")))) : null,
     passivesPanel(b),
     h("div", { class: "row", style: "gap:10px;align-items:end" }, h("span", { class: "label", text: "Autres bonus (pain, buff d'un allié…)" }), extraIn(25, "Puissance"), extraIn(16, "Dommages"), extraIn(18, "Critique %"), extraIn(123, "% do sorts"), extraIn("df", "% do finaux")),
     h("details", { class: "dj" }, h("summary", {}, h("strong", { text: "Cible : " + (TARGETS.find(([, t]) => JSON.stringify(t.p) === JSON.stringify(T.p) && JSON.stringify(t.f) === JSON.stringify(T.f)) || ["résistances personnalisées"])[0] })),
@@ -3182,7 +3259,9 @@ function spellsPanel(b, jet) {
       h("div", { class: "row", style: "gap:10px" },
         h("label", { class: "fld" }, h("span", { class: "label", text: "Rés. critiques" }), numInput(T.crit || 0, v => saveT({ crit: +v || 0 }), { sm: true, id: "t-crit", noRender: true })),
         h("label", { class: "fld" }, h("span", { class: "label", text: "Rés. distance %" }), numInput(T.dist || 0, v => saveT({ dist: +v || 0 }), { sm: true, id: "t-dist", noRender: true })),
-        h("label", { class: "fld" }, h("span", { class: "label", text: "Rés. mêlée %" }), numInput(T.mel || 0, v => saveT({ mel: +v || 0 }), { sm: true, id: "t-mel", noRender: true })))),
+        h("label", { class: "fld" }, h("span", { class: "label", text: "Rés. mêlée %" }), numInput(T.mel || 0, v => saveT({ mel: +v || 0 }), { sm: true, id: "t-mel", noRender: true })),
+        h("label", { class: "fld" }, h("span", { class: "label", text: "Rés. sorts %" }), numInput(T.sorts || 0, v => saveT({ sorts: +v || 0 }), { sm: true, id: "t-sorts", noRender: true })),
+        h("label", { class: "fld" }, h("span", { class: "label", text: "Rés. armes %" }), numInput(T.armes || 0, v => saveT({ armes: +v || 0 }), { sm: true, id: "t-armes", noRender: true })))),
     rows.length ? h("div", { class: "tablewrap" }, h("table", { class: "spells-t" },
       h("thead", {}, h("tr", {}, h("th", { text: "Sort" }), h("th", { class: "n", text: "PA" }), h("th", { class: "n hide-m", text: "PO" }), h("th", { text: "Normal" }), h("th", { text: "Critique" }), h("th", { class: "n", text: "Moyenne" }), h("th", { class: "n", text: "Par PA" }))),
       h("tbody", {}, rows.map(r => h("tr", {},
@@ -3191,6 +3270,7 @@ function spellsPanel(b, jet) {
         h("td", {}, dmgCell(r.n)), h("td", {}, r.pc ? dmgCell(r.c) : h("span", { class: "muted", text: "pas de critique" })),
         h("td", { class: "n" }, h("strong", { text: r.n.length ? fmt.format(Math.round(r.exp)) : "—" })),
         h("td", { class: "n", text: r.n.length && r.ap ? fmt.format(Math.round(r.per)) : "—" })))))) : h("p", { class: "muted", text: "Aucun sort de dégâts à ce niveau." }),
+    spellDetail(rows, st, stC),
     h("p", { class: "note", text: "Dégâts par coup = base × (100 + caractéristique de l'élément + puissance) ÷ 100 + dommages + dommages de l'élément (+ dommages critiques en critique), × (100 + % dommages aux sorts ou d'armes) × (100 + % distance ou mêlée), puis résistances de la cible : − résistance fixe, × (100 − résistance %). Moyenne = dégâts moyens en tenant compte du taux de critique (sort + stat Critique). * = ligne sous condition (état, distance…), non comptée dans la moyenne. Sorts au grade du niveau du personnage, d'après DofusDB. Les mécaniques propres à chaque classe (états, combos, bonus de dégâts de base) ne sont pas simulées." }));
 }
 

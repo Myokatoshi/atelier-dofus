@@ -119,12 +119,12 @@ def main():
                     dump(json.load(open(f)), db / f.name)
                 elif f.suffix == ".png":
                     webp(f, db / (f.stem + ".webp"), 4)
-    # Montiliers (et leurs apparats) : le personnage est monté dessus (squelette cavalier « 2 », sous-entité 2@0)
+    # Montiliers (et leurs apparats) : le personnage est monté dessus, assis (squelette cavalier « 9582 » ; « 2 » le met debout), sous-entité 2@0
     items = load("ItemsDataRoot")
     looks["ride"] = sorted(int(i) for i in looks["pets"] if items.get(i, {}).get("typeId") in (121, 250, 324))
     if len(sys.argv) > 4:
-        rb = Path(sys.argv[3]) / "Dofus_Data" / "StreamingAssets" / "Content" / "Characters" / "Bones" / "2"
-        db = OUT / "Content" / "Characters" / "Bones" / "2"
+        rb = Path(sys.argv[3]) / "Dofus_Data" / "StreamingAssets" / "Content" / "Characters" / "Bones" / "9582"
+        db = OUT / "Content" / "Characters" / "Bones" / "9582"
         if (rb / "bone.json").exists() and not (db / "bone.json").exists():
             db.mkdir(parents=True, exist_ok=True)
             for f in rb.iterdir():
