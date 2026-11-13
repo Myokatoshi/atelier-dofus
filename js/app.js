@@ -2910,7 +2910,11 @@ function d3Look(b) {
     const s = D3L.items[sk] || D3L.items[eq];
     if (s) skins.push(s); else miss.push(id);
   }
-  return { look: "{1|" + skins.filter(Boolean).join(",") + "|" + cols.map((c, i) => (i + 1) + "=" + c).join(",") + "|100}", miss };
+  // Familier, montilier ou monture (case « Familier / monture ») : son propre squelette, à côté du personnage
+  let pet = "";
+  const psk = skinOf(b, 12, 0), peq = slotItem(b, 12, 0);
+  if (psk || peq) { const bone = (D3L.pets || {})[psk] || (D3L.pets || {})[peq]; if (bone) pet = "|1@0={" + bone + "|||90}"; else miss.push(psk || peq); }
+  return { look: "{1|" + skins.filter(Boolean).join(",") + "|" + cols.map((c, i) => (i + 1) + "=" + c).join(",") + "|100" + pet + "}", miss };
 }
 function d3Canvas(b) {
   const L = D3R && d3Look(b); if (!L) return null;

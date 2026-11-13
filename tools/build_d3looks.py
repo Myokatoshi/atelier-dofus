@@ -9,7 +9,7 @@ Chaîne complète (voir CLAUDE.md, « Rendu Dofus 3 ») :
      (le jeu ne le fournit pas : c'est le serveur qui l'envoie) -> itemskins.json (objet -> skin) ;
   4. ce script recopie dans data/d3/ ce qu'il faut à l'appli, en WebP et JSON compact.
 
-Usage : python3 tools/build_d3looks.py <dossier extrait par pydofus3> <itemskins.json>
+Usage : python3 tools/build_d3looks.py <dossier extrait par pydofus3> <itemskins.json> [<squelettes de familiers extraits> <itempets.json>]
 
 Écrit data/d3/Content/Data/{breeds,bodies,skinslotsrules}dataroot.json, data/d3/Content/Characters/Bones/1-static/,
 data/d3/Content/Characters/Skins/<skin>/{skin.json,0.webp…} (corps de base, tête par défaut, skins des objets)
@@ -24,11 +24,11 @@ ROOT = Path(__file__).resolve().parent.parent
 OUT = ROOT / "data" / "d3"
 
 
-def webp(src, dst):
-    """Texture en WebP, deux fois plus petite en largeur et hauteur (invisible au format de la poupée)."""
+def webp(src, dst, div=2):
+    """Texture en WebP, deux (familiers : quatre) fois plus petite en largeur et hauteur (invisible au format de la poupée)."""
     im = Image.open(src); w, h = im.size
     if w > 256 or h > 256:
-        im = im.resize((max(1, w // 2), max(1, h // 2)), Image.LANCZOS)
+        im = im.resize((max(1, w // div), max(1, h // div)), Image.LANCZOS)
     im.save(dst, "WEBP", quality=82, method=4)
 
 
@@ -97,9 +97,31 @@ def main():
     for d in (OUT / "Content" / "Characters" / "Skins").iterdir():
         if d.name not in keep:
             shutil.rmtree(d)
+    # Familiers et montiliers (et leurs apparats) : squelette propre, affiché à côté du personnage.
+    # Le lien objet -> squelette n'est pas dans les fichiers du jeu (l'appearanceId ne pointe pas le bon squelette) :
+    # il est retrouvé en comparant l'icône de l'objet à la vignette de chacun des ~8 600 squelettes (itempets.json).
+    looks["pets"] = {}
+    if len(sys.argv) > 4:
+        pb = Path(sys.argv[3]) / "Dofus_Data" / "StreamingAssets" / "Content" / "Characters" / "Bones"
+        for iid, bone in json.load(open(sys.argv[4])).items():
+            a = str(bone); sb = pb / a
+            if not (sb / "bone.json").exists():
+                continue
+            looks["pets"][iid] = int(a)
+            db = OUT / "Content" / "Characters" / "Bones" / a
+            if (db / "bone.json").exists():
+                continue
+            db.mkdir(parents=True, exist_ok=True)
+            for f in sb.iterdir():
+                if f.suffix == ".dat" and f.name.startswith(("AnimStatique", "AnimState0")):
+                    shutil.copy(f, db / f.name)
+                elif f.suffix == ".json":
+                    dump(json.load(open(f)), db / f.name)
+                elif f.suffix == ".png":
+                    webp(f, db / (f.stem + ".webp"), 4)
     json.dump(looks, open(OUT / "looks.json", "w"), separators=(",", ":"))
     size = sum(f.stat().st_size for f in OUT.rglob("*") if f.is_file())
-    print(len(skins), "skins,", missing, "manquants,", len(looks["items"]), "objets,", round(size / 1e6, 1), "Mo")
+    print(len(skins), "skins,", missing, "manquants,", len(looks["items"]), "objets,", len(looks["pets"]), "familiers/montures,", round(size / 1e6, 1), "Mo")
 
 
 if __name__ == "__main__":
