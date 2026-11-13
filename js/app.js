@@ -198,6 +198,7 @@ async function startOnline(session) {
     await loadTrades();
     await loadObtain();
     await loadVolumes();
+    await loadHxp();
     await loadCoefs();
     loadKm();
     saveState("ok", "Synchronisé avec le groupe");
@@ -249,7 +250,7 @@ async function resync() {
     }
     for (const id of new Set(redo)) aggregate(id);
     if (redo.length) persist(...new Set(redo.map(id => "s:" + id)));
-    await loadCoefs(); await loadObtain(); await loadVolumes(); await loadKm();
+    await loadCoefs(); await loadObtain(); await loadVolumes(); await loadHxp(); await loadKm();
     softRender();
   } catch (e) { console.error(e); RAW = before; for (const id in RAW) aggregate(id); }
   finally { syncing = false; }
@@ -271,6 +272,10 @@ function subscribePrices() {
       if (p.eventType === "DELETE") delete COEF[p.old.item_id]; else COEF[p.new.item_id] = { coef: +p.new.coef, by: p.new.updated_by, t: p.new.updated_at };
       try { localStorage.setItem("atelier-coef", JSON.stringify(COEF)); } catch {}
       softRender();
+    })
+    .on("postgres_changes", { event: "*", schema: "public", table: "harvest_xp" }, p => {
+      if (p.eventType === "DELETE") delete HXP[p.old.item_id]; else HXP[p.new.item_id] = { xp: p.new.xp, by: p.new.updated_by, t: p.new.updated_at };
+      lsSaveHxp(); softRender();
     })
     .on("postgres_changes", { event: "*", schema: "public", table: "item_volume" }, p => {
       if (p.eventType === "DELETE") { const r = p.old; VOL[r.item_id] = (VOL[r.item_id] || []).filter(x => x.day !== r.day); }
@@ -2573,7 +2578,7 @@ const harvJob = id => F && F.harvest[id] ? F.harvest[id][0] : isHunt(id) ? 41 : 
 const hNoun = (id, n = 1) => (isHunt(id) ? "viande" : isBag(id) && isRare(id) ? "sac" : isRare(id) ? (item(id)[2] === 41 ? "poisson rare" : "ressource rare") : "récolte").replace(/(\w+)( rare)?$/, (m, a, b) => a + (n > 1 ? "s" : "") + (b ? b + (n > 1 ? "s" : "") : ""));
 const harvLvl = id => F && F.harvest[id] ? F.harvest[id][1] : huntLvl(id) ?? (isRare(id) ? Math.min(...rareDrops(id).map(d => d[4])) : item(id)[1]);
 const hxpDefault = id => isRare(id) ? 0 : 10 + 2 * Math.floor(harvLvl(id) / 10);
-const hxpOf = id => (S.settings.hxp || {})[id] ?? hxpDefault(id);
+const hxpOf = id => HXP[id] ? HXP[id].xp : (S.settings.hxp || {})[id] ?? hxpDefault(id);
 const gainOf = (x, lv, bonus) => x.h ? (lv >= harvLvl(x.id) ? Math.floor(hxpOf(x.id) * (100 + bonus) / 100) : 0) : craftXp(x.id, lv, bonus);
 function freeSim(x, n, xp, bonus, stopXp = Infinity) {
   // poisson rare sans XP connue : obtenu en combat (pas d'XP de pêche), compté sans faire avancer le niveau
@@ -2617,7 +2622,7 @@ function freePanel(job, plan, list, save, auto, o) {
   const hBest = harvests.filter(id => harvLvl(id) <= lvNow && !isRare(id)).sort((a, b) => hxpOf(b) - hxpOf(a))[0];
   const target = lvToXp(o.to);
   return h("div", { class: "stack" },
-    h("p", { class: "note", text: "Ajoute les recettes à crafter" + (harvests.length ? hunt ? " et les viandes à obtenir en chassant" : " et les ressources à récolter" : "") + ", dans l'ordre, avec leur quantité : l'XP de chaque craft est recalculée au niveau atteint à ce moment-là (formule du simulateur de DofusDB). Les coûts, la revente et la liste d'achat suivent ton plan." + (harvests.length ? hunt ? " Chasse : une viande ne tombe que si tu es Chasseur au niveau demandé, avec une arme de chasse ; XP fixe par viande obtenue, la valeur proposée (10 + 2 × niveau ÷ 10) est une estimation, corrige-la avec l'XP vue en jeu. Le nombre de combats et les monstres sont dans la liste de farm." : " Récolte : XP fixe par récolte dès le niveau de la ressource ; la valeur proposée (10 + 2 × niveau ÷ 10) est une estimation, corrige-la avec l'XP vue en jeu (gardée pour la suite). La revente compte une ressource par récolte." : "") }),
+    h("p", { class: "note", text: "Ajoute les recettes à crafter" + (harvests.length ? hunt ? " et les viandes à obtenir en chassant" : " et les ressources à récolter" : "") + ", dans l'ordre, avec leur quantité : l'XP de chaque craft est recalculée au niveau atteint à ce moment-là (formule du simulateur de DofusDB). Les coûts, la revente et la liste d'achat suivent ton plan." + (harvests.length ? hunt ? " Chasse : une viande ne tombe que si tu es Chasseur au niveau demandé, avec une arme de chasse ; XP fixe par viande obtenue, la valeur proposée (10 + 2 × niveau ÷ 10) est une estimation, note l'XP vue en jeu : elle est partagée avec le groupe. Le nombre de combats et les monstres sont dans la liste de farm." : " Récolte : XP fixe par récolte dès le niveau de la ressource ; la valeur proposée (10 + 2 × niveau ÷ 10) est une estimation, note l'XP vue en jeu (fenêtre des métiers, touche J, second onglet) : elle est partagée avec le groupe. La revente compte une ressource par récolte." : "") }),
     box,
     ...[[(job === 36 ? "Poissons rares" : "Ressources rares") + " (" + protName(job) + ")", id => isRare(id) && !isBag(id)], [(job === 36 ? "Sacs de poissons" : "Sacs") + " (" + protName(job) + ")", id => isRare(id) && isBag(id)]].map(([lab, fl]) =>
     harvests.some(fl) ? h("div", { class: "row", style: "gap:6px" }, h("span", { class: "label", text: lab }),
@@ -2641,7 +2646,8 @@ function freePanel(job, plan, list, save, auto, o) {
           h("td", {}, h("span", { class: "chip job", text: st.from + " → " + st.to })),
           h("td", {}, itemLink(st.id, (st.h ? (isHunt(st.id) ? "chasse · " : isRare(st.id) ? (isBag(st.id) ? "sac · " : hNoun(st.id) + " · ") : "récolte · ") : "") + "niv. " + st.need + " · " + (g0 ? fmt.format(g0) + " XP / " + (st.h ? hNoun(st.id) : "craft au début") : "0 XP") + " · " + kk(st.xp) + " XP en tout", 26),
             st.h ? h("label", { class: "row", style: "gap:6px;margin-top:4px" }, h("span", { class: "small muted", text: "XP par " + hNoun(st.id) + " (vue en jeu)" }),
-              numInput(hxpOf(st.id), v => { const n = Math.round(+String(v).replace(/\s/g, "")); const m = { ...(S.settings.hxp || {}) }; if (n > 0 && n !== hxpDefault(st.id)) m[st.id] = Math.min(10000, n); else delete m[st.id]; S.settings.hxp = m; persist("plan"); }, { sm: true, label: "XP par récolte de " + item(st.id)[0], id: "free-hxp-" + st.i })) : null,
+              numInput(hxpOf(st.id), v => { const t = String(v).replace(/\s/g, ""), n = Math.round(+t); setHxp(st.id, t === "" || isNaN(n) || n < 0 ? null : Math.min(100000, n)); }, { sm: true, label: "XP par récolte de " + item(st.id)[0], id: "free-hxp-" + st.i }),
+              h("small", { class: HXP[st.id] ? "pos" : "muted", text: HXP[st.id] ? "noté" + (NAMES[HXP[st.id].by] ? " par " + NAMES[HXP[st.id].by] : "") + " · partagé avec le groupe" : "estimation · note la valeur vue en jeu (touche J, second onglet)" })) : null,
             st.h && F.harvest[st.id] ? protOf(st.id).map(p => h("div", { class: "row", style: "gap:6px;margin-top:4px" },
               h("span", { class: "chip job", style: "white-space:normal", text: "Protecteur possible : " + p.name }),
               p.loot.map(([it, a, b]) => h("button", { type: "button", class: "btn sm", title: "Ajouter " + item(it)[0] + " (" + pctTxt(a, b) + ") au plan", onclick: () => add(it) }, "+ " + item(it)[0] + " " + pctTxt(a, b))))) : null,
@@ -3756,6 +3762,30 @@ async function loadVolumes() {
   if (error) { console.error(error); return; }
   VOL = {}; for (const r of data || []) volAdd(r);
   lsSaveVol();
+}
+// XP par récolte lue en jeu (fenêtre des métiers, second onglet), partagée par le groupe (table harvest_xp)
+let HXP = {};
+try { HXP = JSON.parse(localStorage.getItem("atelier-hxp") || "{}"); } catch { HXP = {}; }
+const lsSaveHxp = () => { try { localStorage.setItem("atelier-hxp", JSON.stringify(HXP)); } catch {} };
+async function loadHxp() {
+  if (!SB) return;
+  const { data, error } = await SB.from("harvest_xp").select("item_id,xp,updated_by,updated_at");
+  if (error) { console.error(error); return; }
+  HXP = {}; for (const r of data || []) HXP[r.item_id] = { xp: r.xp, by: r.updated_by, t: r.updated_at };
+  lsSaveHxp();
+  // valeurs corrigées avant le partage (réglage personnel) : envoyées au groupe si personne n'a encore noté la ressource
+  const mine = Object.entries(S.settings.hxp || {}).filter(([id]) => !HXP[id]);
+  if (mine.length && ME) { for (const [id, xp] of mine) await setHxp(+id, xp, true); S.settings.hxp = {}; persist("plan"); }
+}
+async function setHxp(id, xp, quiet) {
+  if (xp == null) delete HXP[id]; else HXP[id] = { xp, by: ME, t: new Date().toISOString() };
+  lsSaveHxp();
+  if (SB && ME) {
+    if (!quiet) saveState("busy", "Enregistrement…");
+    const { error } = xp == null ? await SB.from("harvest_xp").delete().eq("item_id", +id) : await SB.from("harvest_xp").upsert({ item_id: +id, xp, updated_by: ME, updated_at: HXP[id].t });
+    if (!quiet) saveState(error ? "err" : "ok", error ? "XP non enregistrée" : "Enregistré pour le groupe");
+    if (error) console.error(error);
+  }
 }
 const volOf = id => { const l = VOL[id] || []; return l[l.length - 1] || null; };
 async function setVolume(id, v) {
