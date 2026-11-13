@@ -78,6 +78,20 @@ def job_drops(monster_refs, tr, subs, boss_dj, core_items, harvest, mons, drops)
         drops[k_].sort(key=lambda x: -x[2])
 
 
+def bag_contents(item_refs, core_items):
+    """Sacs de ressources (type 100) : effet 209 « Gagne x#2 #3 » -> {sac: [objet contenu, quantité]} (ex. Sac de Goujons = 50 Goujons)."""
+    rid = {x["rid"]: x["data"] for x in item_refs}
+    bags = {}
+    for it in (x["data"] for x in item_refs):
+        if it.get("typeId") != 100 or it.get("id") not in core_items:
+            continue
+        for e in it["possibleEffects"]["Array"]:
+            ed = rid.get(e["rid"], {})
+            if ed.get("actionId") == 209 and ed.get("value") in core_items:
+                bags[it["id"]] = [ed["value"], max(ed.get("diceNum", 0), ed.get("diceSide", 0))]
+    return bags
+
+
 def refs(name):
     return json.load(open(CACHE / name, encoding="utf-8"))["references"]["RefIds"]
 
@@ -257,7 +271,8 @@ def main():
             if it_ in harvest and s_["id"] in subs:
                 harvest[it_][2].append(s_["id"])
     job_drops(refs("monsters.json"), tr, subs, boss_dj, core_items, harvest, mons, drops)
-    farm = {"mons": mons, "drops": drops, "subs": subs, "areas": areas, "dungeons": dungeons, "harvest": harvest}
+    bags = bag_contents(refs("items.json"), core_items)
+    farm = {"mons": mons, "drops": drops, "subs": subs, "areas": areas, "dungeons": dungeons, "harvest": harvest, "bags": bags}
     json.dump(farm, open(OUT / "farm.json", "w", encoding="utf-8"), ensure_ascii=False, separators=(",", ":"))
     print(f"farm : {len(mons)} monstres, {len(drops)} objets droppables, {len(harvest)} ressources récoltables, {len(subs)} zones, {len(dungeons)} donjons")
     print(f"{len(core_items)} objets, {len(recipes)} recettes, {len(alm)} jours d'Almanax, {len(icon_ids)} icônes, version {version}")

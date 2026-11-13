@@ -1610,14 +1610,22 @@ function jobTag(d, long) {
   if (d[3] === 36 && m[5]) return long ? "apparaît en pêchant " + item(m[5])[0] + " (Pêcheur niv. " + d[4] + ")" : "pêche de " + item(m[5])[0];
   return jobName(d[3]) + " niv. " + d[4] + (d[3] === 41 ? (long ? ", arme de chasse équipée" : ", arme de chasse") : "");
 }
+// Sacs de ressources : F.bags[sac] = [objet contenu, quantité] (effet « Gagne x50 Goujon »)
+const bagOf = id => F && F.bags ? F.bags[id] || null : null;
+const bagsWith = id => F && F.bags ? Object.entries(F.bags).filter(([, b]) => b[0] === +id).map(([k, b]) => [+k, b[1]]) : [];
+// Valeur d'un sac : son prix s'il en a un, sinon le prix de son contenu
+function bagValue(id) { const v = resale(id); if (v != null) return v; const b = bagOf(id); if (!b) return null; const c = resale(b[0]); return c == null ? null : c * b[1]; }
 const ppOf = () => Math.max(1, +S.settings.pp || 100);
 const dropChance = pct => Math.min(1, pct / 100 * ppOf() / 100);
 const killsFor = (qty, pct) => Math.ceil(qty / Math.max(dropChance(pct), 1e-6));
 function sourcesEl(id, full, qty) {
   const src = sourcesOf(id); if (!src) return null;
   const { hv, dr } = src;
-  if (!hv && !dr.length) return full ? h("p", { class: "muted", text: recipe(id) ? "Cet objet se fabrique : il ne se récolte pas et n'est lâché par aucun monstre." : "Aucun monstre ne lâche cet objet et il ne se récolte pas (quête, boutique ou échange)." }) : h("span", { class: "muted small", text: recipe(id) ? "se fabrique" : "ni drop ni récolte" });
+  if (!hv && !dr.length && !bagOf(id) && !bagsWith(id).length) return full ? h("p", { class: "muted", text: recipe(id) ? "Cet objet se fabrique : il ne se récolte pas et n'est lâché par aucun monstre." : "Aucun monstre ne lâche cet objet et il ne se récolte pas (quête, boutique ou échange)." }) : h("span", { class: "muted small", text: recipe(id) ? "se fabrique" : "ni drop ni récolte" });
   const parts = [];
+  const bg = bagOf(id), inBags = bagsWith(id).filter(([k]) => D.items[k]);
+  if (bg) parts.push(h("span", {}, h("span", { class: "chip kamas", text: "Contient " + fmt.format(bg[1]) + " × " + item(bg[0])[0] + (qty ? " · " + fmt.format(bg[1] * qty) + " pour " + fmt.format(qty) + " sac" + (qty > 1 ? "s" : "") : "") })));
+  if (inBags.length) parts.push(h("span", { class: "small muted", text: "Aussi en sac : " + inBags.map(([k, q]) => item(k)[0] + " (" + fmt.format(q) + " par sac" + (F.drops[k] && F.drops[k].some(d => d[3] === 36) ? ", lâché par un Dévoreur" : "") + ")").join(", ") }));
   if (hv) parts.push(h("div", { style: "display:grid;gap:4px" },
     h("span", {}, h("span", { class: "chip job", text: "Récolte · " + jobName(hv[0]) + " niv. " + hv[1] }), " ", hv[2].length ? h("span", { class: "small muted", text: hv[2].length + " zone" + (hv[2].length > 1 ? "s" : "") }) : null),
     full ? h("div", { class: "chips" }, hv[2].slice().sort((a, b) => (F.subs[a]?.[2] || 0) - (F.subs[b]?.[2] || 0)).map(sid => h("span", { class: "chip", text: subLabel(sid) + " · niv. " + (F.subs[sid]?.[2] || "?") }))) : null));
@@ -1680,7 +1688,7 @@ function viewFarm() {
   if (isH) {
     const m = new Map();
     for (const j of hKey === "all" ? hJobs : [hKey]) for (const [id, q] of harv[j]) m.set(id, (m.get(id) || 0) + q);
-    rows = [...m.entries()].map(([id, q]) => { const o = priceAt(id), p = pick(o, S.settings.basis); return { id, buy: q, o, p, farm: true, harvest: true, cost: p == null ? null : p * q }; })
+    rows = [...m.entries()].map(([id, q]) => { const o = priceAt(id), p = pick(o, S.settings.basis) ?? (bagOf(id) ? bagValue(id) : null); return { id, buy: q, o, p, farm: true, harvest: true, cost: p == null ? null : p * q }; })
       .sort((a, c) => harvLvl(a.id) - harvLvl(c.id) || item(a.id)[0].localeCompare(item(c.id)[0], "fr"));
   } else {
     const targets = farmSrc === "plan" ? S.targets : b.items.map(id => recipe(id) ? { id, qty: 1 } : { id, qty: 1, raw: true });
@@ -2568,7 +2576,7 @@ function freeSim(x, n, xp, bonus, stopXp = Infinity) {
 function freePlan(job, list, startXp, bonus, C, B) {
   let xp = startXp; const steps = [];
   for (const [i, x] of list.entries()) {
-    const v0 = resale(x.id), lv0 = xpToLv(xp), r = freeSim(x, x.n, xp, bonus);
+    const v0 = bagOf(x.id) ? bagValue(x.id) : resale(x.id), lv0 = xpToLv(xp), r = freeSim(x, x.n, xp, bonus);
     const c0 = x.h ? null : C.craft(x.id), need = x.h ? harvLvl(x.id) : item(x.id)[1];
     steps.push({ i, id: x.id, h: !!x.h, n: x.n, from: lv0, to: xpToLv(r.xp), xp: r.xp - xp, dead: x.n - r.done, low: need > lv0, need,
       c: x.h ? 0 : c0.missing ? null : (c0.lo + c0.hi) / 2 * (1 - B.eco / 100), v: v0 == null ? null : x.h ? v0 : v0 * (1 + B.fab / 100), xpBefore: xp });
@@ -2599,7 +2607,7 @@ function freePanel(job, plan, list, save, auto, o) {
     box,
     ...[["Poissons rares (Dévoreurs)", id => isRare(id) && !isBag(id)], ["Sacs de poissons (Dévoreurs)", id => isRare(id) && isBag(id)]].map(([lab, fl]) =>
     harvests.some(fl) ? h("div", { class: "row", style: "gap:6px" }, h("span", { class: "label", text: lab }),
-      harvests.filter(fl).map(id => h("button", { type: "button", class: "chip", title: item(id)[0] + " : lâché par le " + F.mons[rareDrops(id)[0][0]][0] + ", qui apparaît en pêchant " + item(F.mons[rareDrops(id)[0][0]][5])[0] + " (Pêcheur niv. " + harvLvl(id) + ")", onclick: () => add(id) },
+      harvests.filter(fl).map(id => h("button", { type: "button", class: "chip", title: item(id)[0] + (bagOf(id) ? " (" + bagOf(id)[1] + " × " + item(bagOf(id)[0])[0] + ")" : "") + " : lâché par le " + F.mons[rareDrops(id)[0][0]][0] + ", qui apparaît en pêchant " + item(F.mons[rareDrops(id)[0][0]][5])[0] + " (Pêcheur niv. " + harvLvl(id) + ")", onclick: () => add(id) },
         icon(id, 18), item(id)[0] + " (" + harvLvl(id) + ")"))) : null),
     harvests.length ? h("div", { class: "row", style: "gap:6px" }, h("span", { class: "label", text: hunt ? "Chasser" : "Récolter" }),
       harvests.filter(id => !isRare(id)).map(id => h("button", { type: "button", class: "chip" + (id === hBest ? " up" : ""), title: item(id)[0] + " : niveau " + harvLvl(id) + ", " + hxpOf(id) + " XP par " + hNoun(id), disabled: harvLvl(id) > 200, onclick: () => add(id) },
@@ -2620,6 +2628,7 @@ function freePanel(job, plan, list, save, auto, o) {
           h("td", {}, itemLink(st.id, (st.h ? (isHunt(st.id) ? "chasse · " : isRare(st.id) ? (isBag(st.id) ? "sac de poissons · " : "poisson rare · ") : "récolte · ") : "") + "niv. " + st.need + " · " + (g0 ? fmt.format(g0) + " XP / " + (st.h ? hNoun(st.id) : "craft au début") : "0 XP") + " · " + kk(st.xp) + " XP en tout", 26),
             st.h ? h("label", { class: "row", style: "gap:6px;margin-top:4px" }, h("span", { class: "small muted", text: "XP par " + hNoun(st.id) + " (vue en jeu)" }),
               numInput(hxpOf(st.id), v => { const n = Math.round(+String(v).replace(/\s/g, "")); const m = { ...(S.settings.hxp || {}) }; if (n > 0 && n !== hxpDefault(st.id)) m[st.id] = Math.min(10000, n); else delete m[st.id]; S.settings.hxp = m; persist("plan"); }, { sm: true, label: "XP par récolte de " + item(st.id)[0], id: "free-hxp-" + st.i })) : null,
+            st.h && bagOf(st.id) ? h("span", { class: "chip kamas", style: "white-space:normal;display:inline-block;margin-top:4px", text: "Contient " + fmt.format(bagOf(st.id)[1]) + " × " + item(bagOf(st.id)[0])[0] + " → " + fmt.format(bagOf(st.id)[1] * st.n) + " au total" + (resale(st.id) == null && st.v != null ? " · revente comptée au prix du " + item(bagOf(st.id)[0])[0] : "") }) : null,
             st.h && isRare(st.id) ? (() => { const d = rareDrops(st.id).slice().sort((a, b) => b[1] - a[1])[0], m = F.mons[d[0]];
               return h("span", { class: "chip job", style: "white-space:normal;display:inline-block;margin-top:4px", text: m[0] + " (en pêchant " + item(m[5])[0] + ") : ≈ " + fmt.format(killsFor(st.n, (d[1] + d[2]) / 2)) + " combat" + (killsFor(st.n, (d[1] + d[2]) / 2) > 1 ? "s" : "") + " à " + pctTxt(d[1], d[2]) + " (" + ppOf() + " PP)" + (hxpOf(st.id) ? "" : " · sans XP de pêche") }); })() : null,
             st.low ? h("span", { class: "chip warn", text: "niveau " + st.need + " requis" }) : null,
