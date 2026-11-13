@@ -199,6 +199,7 @@ async function startOnline(session) {
     await loadObtain();
     await loadVolumes();
     await loadHxp();
+    await loadGroup();
     await loadCoefs();
     loadKm();
     // données de farm en arrière-plan : protecteurs, sacs et contrôle des cotes des ressources récoltables
@@ -252,7 +253,7 @@ async function resync() {
     }
     for (const id of new Set(redo)) aggregate(id);
     if (redo.length) persist(...new Set(redo.map(id => "s:" + id)));
-    await loadCoefs(); await loadObtain(); await loadVolumes(); await loadHxp(); await loadKm();
+    await loadCoefs(); await loadObtain(); await loadVolumes(); await loadHxp(); await loadGroup(); await loadKm();
     softRender();
   } catch (e) { console.error(e); RAW = before; for (const id in RAW) aggregate(id); }
   finally { syncing = false; }
@@ -274,6 +275,16 @@ function subscribePrices() {
       if (p.eventType === "DELETE") delete COEF[p.old.item_id]; else COEF[p.new.item_id] = { coef: +p.new.coef, by: p.new.updated_by, t: p.new.updated_at };
       try { localStorage.setItem("atelier-coef", JSON.stringify(COEF)); } catch {}
       softRender();
+    })
+    .on("postgres_changes", { event: "*", schema: "public", table: "member_jobs" }, p => {
+      if (p.eventType === "DELETE") { const r = p.old; if (MJ[r.user_id]) delete MJ[r.user_id][r.job_id]; }
+      else { const r = p.new; (MJ[r.user_id] = MJ[r.user_id] || {})[r.job_id] = r.level; }
+      softRender();
+    })
+    .on("postgres_changes", { event: "*", schema: "public", table: "orders" }, p => {
+      if (p.eventType === "DELETE") ORD = ORD.filter(o => o.id !== p.old.id);
+      else { const prev = ORD.find(o => o.id === p.new.id); ORD = [...ORD.filter(o => o.id !== p.new.id), p.new]; orderNotice(p.new, prev); }
+      renderCounts(); softRender();
     })
     .on("postgres_changes", { event: "*", schema: "public", table: "harvest_xp" }, p => {
       if (p.eventType === "DELETE") delete HXP[p.old.item_id]; else HXP[p.new.item_id] = { xp: p.new.xp, by: p.new.updated_by, t: p.new.updated_at };
@@ -864,9 +875,9 @@ function chart(id, mode) {
     const hit = s("rect", { x: x(i) - (W - L - R) / data.length / 2, y: 0, width: (W - L - R) / data.length, height: H, fill: "transparent" });
     const show = () => {
       cross.setAttribute("x1", x(i)); cross.setAttribute("x2", x(i)); cross.setAttribute("visibility", "visible");
-      tip.replaceChildren(h("strong", { text: d.long }),
+      tip.replaceChildren(...[h("strong", { text: d.long }),
         h("span", {}, h("i", { class: "k", style: "background:var(--s-hdv)" }), "HDV : " + (d.lo == null ? "aucun relevé" : range(d.lo, d.hi) + " ₭" + (d.km ? " (Kamamaster)" : d.n > 1 ? " (" + d.n + " relevés)" : ""))),
-        recipe(id) ? h("span", {}, h("i", { class: "k", style: "background:var(--s-craft)" }), "Coût du craft : " + (d.c == null ? "prix manquants" : k(d.c) + " ₭")) : null);
+        recipe(id) ? h("span", {}, h("i", { class: "k", style: "background:var(--s-craft)" }), "Coût du craft : " + (d.c == null ? "prix manquants" : k(d.c) + " ₭")) : null].filter(Boolean));
       tip.hidden = false;
       const pct = x(i) / W * 100;
       tip.style.left = pct > 60 ? "auto" : `calc(${pct}% + 12px)`;
@@ -1028,7 +1039,7 @@ async function renderSheet() {
   await ensureFarm();
   if (seq !== sheetRenderSeq || sheetStack[sheetStack.length - 1] !== id || !F) return;
   const bp = brisagePanel(id); if (bp) sheetIn.append(bp);
-  sheetIn.append(volumePanel(id), obtainPanel(id));
+  sheetIn.append(...[groupPanel(id), volumePanel(id), obtainPanel(id)].filter(Boolean));
   const src = sourcesEl(id, true);
   if (src) sheetIn.append(h("section", { class: "panel" }, h("h3", { text: "Où l'obtenir" }), src));
 }
@@ -1650,6 +1661,8 @@ function sourcesEl(id, full, qty) {
   const bg = bagOf(id), inBags = bagsWith(id).filter(([k]) => D.items[k]);
   if (bg) parts.push(h("span", {}, h("span", { class: "chip kamas", text: "Contient " + fmt.format(bg[1]) + " × " + item(bg[0])[0] + (qty ? " · " + fmt.format(bg[1] * qty) + " pour " + fmt.format(qty) + " sac" + (qty > 1 ? "s" : "") : "") })));
   if (inBags.length && !(hv && protOf(id).length)) parts.push(h("span", { class: "small muted", text: "Aussi en sac : " + inBags.map(([k, q]) => item(k)[0] + " (" + fmt.format(q) + " par sac" + (F.drops[k] && F.drops[k].find(d => d[3] && d[3] !== 41) ? ", lâché par : " + F.mons[F.drops[k].find(d => d[3] && d[3] !== 41)[0]][0] : "") + ")").join(", ") }));
+  const wc = typeof whoCan === "function" && Object.keys(MJ).length ? whoCan(id) : [];
+  if (wc.length) parts.push(h("span", { class: "small pos", text: "Dans le groupe, peut te le " + wc[0].how + " : " + wc.slice(0, 3).map(whoText).join(", ") }));
   if (hv) for (const p of protOf(id)) {
     const bag = p.loot.find(([it]) => bagOf(it) && bagOf(it)[0] === +id), rare = p.loot.filter(([it]) => !bagOf(it));
     parts.push(h("span", { class: "chip job", style: "white-space:normal", text: "Protecteur · " + p.name + " (apparaît " + harvVerb(p.job) + " " + item(id)[0] + ")" + (bag ? " : " + item(bag[0])[0] + " = " + bagOf(bag[0])[1] + " " + item(id)[0] + (qty ? " · " + fmt.format(Math.ceil(qty / bagOf(bag[0])[1])) + " sac" + (Math.ceil(qty / bagOf(bag[0])[1]) > 1 ? "s" : "") + " pour " + fmt.format(qty) : "") : "") + (rare.length ? " · rare : " + rare.map(([it, a, b]) => item(it)[0] + " " + pctTxt(a, b)).join(", ") : "") }));
@@ -2703,14 +2716,14 @@ function viewMetiers() {
   const mode = S.settings.xpmode || "cost";
   const sel = h("select", { id: "metier-job", "aria-label": "Métier" }, jobs.map(j => h("option", { value: j, selected: j === job }, jobName(j))));
   sel.addEventListener("change", () => { S.settings.job = +sel.value; metierDay = 0; persist("plan"); render(); });
-  const lvIn = numInput(lv, v => { const n = Math.max(1, Math.min(200, Math.round(+v) || 1)); S.settings.jobs = { ...(S.settings.jobs || {}), [job]: n }; const jx = { ...(S.settings.jobxp || {}) }; delete jx[job]; S.settings.jobxp = jx; persist("plan"); }, { sm: true, label: "Niveau actuel du métier", id: "metier-lv" });
+  const lvIn = numInput(lv, v => { const n = Math.max(1, Math.min(200, Math.round(+v) || 1)); S.settings.jobs = { ...(S.settings.jobs || {}), [job]: n }; const jx = { ...(S.settings.jobxp || {}) }; delete jx[job]; S.settings.jobxp = jx; persist("plan"); pushMyJobs(); }, { sm: true, label: "Niveau actuel du métier", id: "metier-lv" });
   // XP actuelle (barre d'XP du métier en jeu) : total d'XP, le niveau s'en déduit ; sinon début du niveau
   const xpSaved = (S.settings.jobxp || {})[job];
   const xpNow = xpSaved != null && xpToLv(xpSaved) === lv ? xpSaved : lvToXp(lv);
   const xpIn = numInput(xpSaved != null && xpToLv(xpSaved) === lv ? fmt.format(xpSaved) : "", v => {
     const n = parseKamas(String(v)); const jx = { ...(S.settings.jobxp || {}) };
     if (n == null || n <= 0) delete jx[job]; else { jx[job] = Math.min(lvToXp(200), Math.round(n)); S.settings.jobs = { ...(S.settings.jobs || {}), [job]: xpToLv(jx[job]) }; }
-    S.settings.jobxp = jx; persist("plan"); }, { sm: true, ph: fmt.format(lvToXp(lv)), label: "XP actuelle du métier", id: "metier-xp" });
+    S.settings.jobxp = jx; persist("plan"); pushMyJobs(); }, { sm: true, ph: fmt.format(lvToXp(lv)), label: "XP actuelle du métier", id: "metier-xp" });
   const lvStart = lvToXp(lv), lvEnd = lvToXp(Math.min(200, lv + 1)), pct = lv >= 200 ? 100 : Math.max(0, Math.min(100, (xpNow - lvStart) / (lvEnd - lvStart) * 100));
   const toIn = numInput(to, v => { const n = Math.max(2, Math.min(200, Math.round(+v) || 200)); S.settings.jobt = { ...(S.settings.jobt || {}), [job]: n }; persist("plan"); }, { sm: true, label: "Niveau visé", id: "metier-to" });
   const bonusIn = numInput(extra || "", v => { const n = Math.round(+String(v).replace("%", "").trim()); S.settings.xpbonus = n > 0 ? Math.min(500, n) : 0; persist("plan"); }, { sm: true, ph: "0", label: "Autre bonus d'XP en %", id: "metier-bonus" });
@@ -3788,6 +3801,147 @@ async function loadVolumes() {
   if (error) { console.error(error); return; }
   VOL = {}; for (const r of data || []) volAdd(r);
   lsSaveVol();
+}
+// =====================================================================
+// Groupe : métiers des membres (table member_jobs) et commandes entre membres (table orders)
+// =====================================================================
+let MJ = {}, ORD = [];
+async function loadGroup() {
+  if (!SB) return;
+  const [{ data: jobs, error: e1 }, { data: ords, error: e2 }] = await Promise.all([
+    SB.from("member_jobs").select("user_id,job_id,level"),
+    SB.from("orders").select("*").order("created_at", { ascending: false }).limit(500)]);
+  if (e1 || e2) { console.error(e1 || e2); return; }
+  MJ = {}; for (const r of jobs || []) (MJ[r.user_id] = MJ[r.user_id] || {})[r.job_id] = r.level;
+  ORD = ords || [];
+  pushMyJobs();
+}
+// Mes niveaux de métier (onglet Métiers) partagés avec le groupe
+let pushJobsT = null;
+function pushMyJobs() {
+  clearTimeout(pushJobsT);
+  pushJobsT = setTimeout(async () => {
+    if (!SB || !ME) return;
+    const mine = MJ[ME] || {}, rows = Object.entries(S.settings.jobs || {}).filter(([j, l]) => +j !== 1 && +l >= 1 && mine[j] !== +l).map(([j, l]) => ({ user_id: ME, job_id: +j, level: Math.min(200, +l), updated_at: new Date().toISOString() }));
+    if (!rows.length) return;
+    const { error } = await SB.from("member_jobs").upsert(rows);
+    if (error) { console.error(error); return; }
+    MJ[ME] = { ...mine }; for (const r of rows) MJ[ME][r.job_id] = r.level;
+  }, 800);
+}
+// Qui, dans le groupe, peut fournir un objet : le fabriquer (métier de la recette au niveau) ou le récolter / chasser
+function whoCan(id, withMe) {
+  id = +id; const out = [];
+  const r = D.recipes[id], hv = F && F.harvest[id], hunt = F && typeof isHunt === "function" && isHunt(id) ? huntLvl(id) : null;
+  for (const [u, jobs] of Object.entries(MJ)) {
+    if (u === ME && !withMe) continue;
+    if (r && r[0] !== 1 && (jobs[r[0]] || 0) >= item(id)[1]) out.push({ u, how: "fabriquer", job: r[0], lv: jobs[r[0]] });
+    else if (hv && (jobs[hv[0]] || 0) >= hv[1]) out.push({ u, how: "récolter", job: hv[0], lv: jobs[hv[0]] });
+    else if (hunt != null && (jobs[41] || 0) >= hunt) out.push({ u, how: "chasser", job: 41, lv: jobs[41] });
+  }
+  return out.sort((a, b) => b.lv - a.lv);
+}
+const whoText = w => whoName(w.u) + " (" + jobName(w.job) + " " + w.lv + ")";
+const ORD_ST = { open: ["Ouverte", ""], taken: ["Prise en charge", "kamas"], done: ["Livrée", "up"], cancelled: ["Annulée", "down"] };
+const openOrdersForMe = () => ORD.filter(o => o.status === "open" && o.requested_by !== ME);
+// Notification dans l'appli quand une commande me concerne
+function orderNotice(o, prev) {
+  if (!prev || !ME || o.status === prev.status) { if (!prev && o.requested_by !== ME && whoCan(o.item_id, true).some(w => w.u === ME)) toast("📦 " + whoName(o.requested_by) + " commande " + fmt.format(o.qty) + " × " + item(o.item_id)[0] + " : tu peux le fournir", () => { location.hash = "#groupe"; }, "Voir"); return; }
+  if (o.requested_by === ME && o.status === "taken") toast("📦 " + whoName(o.taken_by) + " s'occupe de ta commande : " + item(o.item_id)[0], () => { location.hash = "#groupe"; }, "Voir");
+  if (o.requested_by === ME && o.status === "done") toast("📦 Commande livrée par " + whoName(o.taken_by) + " : " + item(o.item_id)[0], () => { location.hash = "#groupe"; }, "Voir");
+}
+async function orderSet(o, patch, msg) {
+  const old = { ...o }; Object.assign(o, patch, { updated_at: new Date().toISOString() }); softRender(); renderCounts();
+  if (!SB || !ME) return;
+  const { error } = await SB.from("orders").update({ ...patch, updated_at: o.updated_at }).eq("id", o.id);
+  if (error) { Object.assign(o, old); softRender(); toast("Commande non mise à jour"); console.error(error); } else if (msg) toast(msg);
+}
+let OF = { item: null, qty: "", price: "", note: "", show: "open" };
+function viewGroupe() {
+  if (!F) ensureFarm().then(d => { if (d && view === "groupe") render(); });
+  const members = [...new Set([...Object.keys(NAMES), ...Object.keys(MJ)])].filter(u => u && (NAMES[u] !== undefined || MJ[u]));
+  const jobsUsed = [...new Set(Object.values(MJ).flatMap(j => Object.keys(j).map(Number)))].filter(j => j !== 1).sort((a, b) => jobName(a).localeCompare(jobName(b), "fr"));
+  const create = async () => {
+    const q = Math.round(+String(OF.qty).replace(/\s/g, "")), pr = OF.price === "" ? null : parseKamas(OF.price);
+    if (!OF.item) { toast("Choisis d'abord un objet"); return; }
+    if (!(q > 0)) { toast("Indique une quantité"); document.getElementById("of-qty")?.focus(); return; }
+    const o = { id: uuid(), item_id: OF.item, qty: q, price: pr == null ? null : Math.round(pr), note: OF.note.trim().slice(0, 300) || null, requested_by: ME, taken_by: null, status: "open", created_at: new Date().toISOString(), updated_at: new Date().toISOString() };
+    ORD = [o, ...ORD]; OF = { ...OF, item: null, qty: "", price: "", note: "" }; render();
+    if (SB && ME) { const { error } = await SB.from("orders").insert(o); if (error) { ORD = ORD.filter(x => x.id !== o.id); render(); toast("Commande non envoyée"); console.error(error); return; } }
+    toast("Commande envoyée au groupe");
+  };
+  const qtyIn = h("input", { class: "cell", id: "of-qty", inputmode: "numeric", value: OF.qty, placeholder: "ex. 200", "aria-label": "Quantité" }); qtyIn.addEventListener("input", () => { OF.qty = qtyIn.value; });
+  const prIn = h("input", { class: "cell", id: "of-price", inputmode: "decimal", value: OF.price, placeholder: "facultatif", "aria-label": "Prix proposé à l'unité" }); prIn.addEventListener("input", () => { OF.price = prIn.value; });
+  const noteIn = h("input", { class: "cell", id: "of-note", value: OF.note, placeholder: "facultatif (ex. pour mon build Crâ)", maxlength: 300, "aria-label": "Note", style: "width:100%;text-align:left" }); noteIn.addEventListener("input", () => { OF.note = noteIn.value; });
+  const can = OF.item ? whoCan(OF.item) : [];
+  const lists = {
+    open: ["À prendre", ORD.filter(o => o.status === "open" && o.requested_by !== ME)],
+    mine: ["Mes demandes", ORD.filter(o => o.requested_by === ME && o.status !== "cancelled")],
+    taken: ["À livrer", ORD.filter(o => o.taken_by === ME && o.status === "taken")],
+    all: ["Historique", ORD.filter(o => o.status === "done" || o.status === "cancelled")],
+  };
+  const cur = lists[OF.show] ? OF.show : "open";
+  const row = o => {
+    const st = ORD_ST[o.status] || ORD_ST.open, me = o.requested_by === ME, mineTaken = o.taken_by === ME, w = whoCan(o.item_id, true).filter(x => x.u !== o.requested_by);
+    const val = (() => { const pa = priceAt(o.item_id); const p = o.price ?? (pa ? nowPrice(pa) : null); return p == null ? null : p * o.qty; })();
+    return h("tr", {},
+      h("td", {}, itemLink(o.item_id, "× " + fmt.format(o.qty) + (o.price != null ? " · " + kk(o.price) + " ₭/u proposés" : "") + (o.note ? " · " + o.note : ""), 28)),
+      h("td", { class: "small" }, h("div", { text: "par " + (me ? "moi" : whoName(o.requested_by)) + " · " + ago(o.created_at.slice(0, 10)) }),
+        o.taken_by ? h("div", { class: "muted", text: "pris par " + (mineTaken ? "moi" : whoName(o.taken_by)) }) : w.length ? h("div", { class: "muted", text: "peut fournir : " + w.slice(0, 3).map(whoText).join(", ") }) : null),
+      h("td", { class: "n" }, val == null ? h("span", { class: "muted", text: "—" }) : kk(val)),
+      h("td", {}, h("span", { class: "chip " + st[1], text: st[0] })),
+      h("td", {}, h("div", { class: "row", style: "gap:6px;justify-content:flex-end" },
+        !me && o.status === "open" ? h("button", { type: "button", class: "btn sm primary", onclick: () => orderSet(o, { status: "taken", taken_by: ME }, "Tu t'occupes de cette commande") }, "Je m'en occupe") : null,
+        mineTaken && o.status === "taken" ? h("button", { type: "button", class: "btn sm primary", onclick: () => orderSet(o, { status: "done" }, "Commande livrée") }, "Livrée") : null,
+        mineTaken && o.status === "taken" ? h("button", { type: "button", class: "btn sm", onclick: () => orderSet(o, { status: "open", taken_by: null }, "Commande remise à disposition") }, "Lâcher") : null,
+        me && o.status === "taken" ? h("button", { type: "button", class: "btn sm", onclick: () => orderSet(o, { status: "done" }, "Commande reçue") }, "Reçue") : null,
+        me && (o.status === "open" || o.status === "taken") ? h("button", { type: "button", class: "btn sm", onclick: () => orderSet(o, { status: "cancelled" }, "Commande annulée") }, "Annuler") : null,
+        me && (o.status === "done" || o.status === "cancelled") ? h("button", { type: "button", class: "x", "aria-label": "Supprimer", onclick: async () => { ORD = ORD.filter(x => x.id !== o.id); render(); if (SB && ME) await SB.from("orders").delete().eq("id", o.id); } }, "×") : null)));
+  };
+  return h("div", { class: "stack" },
+    !SB ? h("p", { class: "note", text: "Connecte-toi pour partager tes métiers et passer des commandes au groupe." }) : null,
+    h("div", { class: "grid2" },
+      h("section", { class: "panel" },
+        h("h2", { text: "Commander au groupe" }),
+        h("p", { class: "note", text: "Demande une ressource ou un objet aux autres membres : ceux qui ont le métier au bon niveau le voient en premier et peuvent la prendre en charge." }),
+        OF.item ? h("div", { class: "row between jf-item" }, itemLink(OF.item, typeName(OF.item), 40), h("button", { type: "button", class: "btn sm", onclick: () => { OF.item = null; render(); } }, "Changer")) :
+          searchBox("Quel objet ou quelle ressource ?", {}, id => { OF.item = id; render(); setTimeout(() => document.getElementById("of-qty")?.focus(), 0); }, "q-order"),
+        OF.item ? h("p", { class: "small " + (can.length ? "pos" : "muted"), text: can.length ? "Peut le fournir : " + can.map(whoText).join(", ") : "Personne du groupe n'a déclaré le métier au niveau voulu (niveaux : onglet Métiers)." }) : null,
+        h("div", { class: "row", style: "gap:10px;align-items:end" },
+          h("label", { class: "fld" }, h("span", { class: "label", text: "Quantité" }), qtyIn),
+          h("label", { class: "fld" }, h("span", { class: "label", text: "Prix proposé / unité" }), prIn)),
+        h("label", { class: "fld" }, h("span", { class: "label", text: "Note" }), noteIn),
+        h("button", { type: "button", class: "btn primary big", id: "of-send", onclick: create }, "Envoyer la commande")),
+      h("section", { class: "panel" },
+        h("div", { class: "row between" }, h("h2", { text: "Métiers du groupe" }), h("a", { href: "#metiers", class: "small", text: "Mes niveaux" })),
+        h("p", { class: "note", text: "Chacun déclare ses niveaux dans l'onglet Métiers (niveau actuel) : ils sont partagés ici automatiquement." }),
+        jobsUsed.length ? h("div", { class: "tablewrap" }, h("table", { class: "mjobs" },
+          h("thead", {}, h("tr", {}, h("th", { text: "Métier" }), h("th", { text: "Membres (niveau)" }))),
+          h("tbody", {}, jobsUsed.map(j => h("tr", {}, h("td", {}, h("strong", { text: jobName(j) })),
+            h("td", {}, h("div", { class: "chips" }, Object.entries(MJ).filter(([, js]) => js[j]).sort((a, b) => b[1][j] - a[1][j]).map(([u, js]) =>
+              h("span", { class: "chip" + (u === ME ? " job" : ""), text: (u === ME ? "moi" : whoName(u)) + " " + js[j] }))))))))) :
+          h("p", { class: "muted", text: "Aucun métier déclaré pour l'instant. Indique ton niveau actuel dans l'onglet Métiers." }),
+        h("p", { class: "small muted", text: members.length + " membre" + (members.length > 1 ? "s" : "") + " dans le groupe" }))),
+    h("section", { class: "panel", id: "orders" },
+      h("div", { class: "row between" }, h("h2", { text: "Commandes" }),
+        h("span", { class: "seg wrap", role: "group", "aria-label": "Commandes" }, Object.entries(lists).map(([k2, [l, arr]]) =>
+          h("button", { type: "button", "aria-pressed": cur === k2 ? "true" : "false", onclick: () => { OF.show = k2; render(); } }, l + " (" + arr.length + ")")))),
+      lists[cur][1].length ? h("div", { class: "tablewrap" }, h("table", {},
+        h("thead", {}, h("tr", {}, h("th", { text: "Objet" }), h("th", { text: "Demande" }), h("th", { class: "n", text: "Valeur" }), h("th", { text: "État" }), h("th", { text: "" }))),
+        h("tbody", {}, lists[cur][1].map(row)))) :
+        h("div", { class: "empty" }, h("strong", { text: { open: "Aucune commande à prendre", mine: "Aucune demande en cours", taken: "Rien en cours", all: "Pas encore d'historique" }[cur] }),
+          h("span", { text: cur === "mine" ? "Utilise le formulaire ci-dessus, ou le bouton « Commander au groupe » d'une fiche objet." : "Les commandes des membres apparaissent ici en direct." }))));
+}
+// Fiche objet : qui peut le fournir, et commande en un clic
+function groupPanel(id) {
+  if (!SB || !Object.keys(MJ).length) return null;
+  const w = whoCan(id), open = ORD.filter(o => o.item_id === +id && (o.status === "open" || o.status === "taken"));
+  if (!w.length && !open.length) return null;
+  return h("section", { class: "panel" },
+    h("div", { class: "row between" }, h("h3", { style: "margin:0", text: "Dans le groupe" }),
+      h("button", { type: "button", class: "btn sm", onclick: () => { OF = { ...OF, item: +id, qty: "", show: "mine" }; sheet.close(); location.hash = "#groupe"; } }, "Commander au groupe")),
+    w.length ? h("p", { class: "small", text: "Peut le " + w[0].how + " : " + w.map(whoText).join(", ") }) : null,
+    open.map(o => h("p", { class: "small muted", text: "Commande en cours : " + fmt.format(o.qty) + " pour " + (o.requested_by === ME ? "moi" : whoName(o.requested_by)) + (o.taken_by ? ", prise par " + (o.taken_by === ME ? "moi" : whoName(o.taken_by)) : "") })));
 }
 // XP par récolte lue en jeu (fenêtre des métiers, second onglet), partagée par le groupe (table harvest_xp)
 let HXP = {};
@@ -4945,14 +5099,14 @@ const svgI = name => { const el = s("svg", { class: "i", viewBox: "0 0 24 24", "
 const TABS = [
   ["accueil", "Accueil", "home", "--c-home"], ["plan", "Plan de craft", "hammer", "--c-craft", "c-plan"], ["rentabilite", "Rentabilité", "trend", "--c-gold"],
   ["prix", "Prix HDV", "coins", "--c-gold", "c-prix"], ["tournee", "Tournée HDV", "route", "--c-gold", "c-tour"], ["journal", "Journal", "ledger", "--c-journal"], ["alertes", "Alertes", "bell", "--c-gold", "c-alert"], ["farm", "Farm", "leaf", "--c-farm"], ["metiers", "Métiers", "up", "--c-craft"], ["brisage", "Brisage", "rune", "--c-alm"], ["serveur", "Vue d'ensemble", "globe", "--c-oru"], ["almanax", "Almanax", "calendar", "--c-alm"], ["carte", "Carte", "map", "--c-oru"], ["cotes", "Cotes HDV", "chart", "--c-oru"], ["tendances", "Tendances", "trend", "--c-oru"], ["donjons", "Donjons", "castle", "--c-oru"], ["builds", "Builds", "shield", "--c-build", "c-builds"], ["comparer", "Comparer", "compare", "--c-build"], ["cosmetiques", "Cosmétiques", "shield", "--c-build"],
-  ["stock", "Inventaire", "bag", "--c-stock", "c-stock"], ["encyclopedie", "Encyclopédie", "book", "--c-ency"], ["compte", "Compte", "user", "--c-save"],
+  ["stock", "Inventaire", "bag", "--c-stock", "c-stock"], ["groupe", "Groupe", "user", "--c-craft", "c-groupe"], ["encyclopedie", "Encyclopédie", "book", "--c-ency"], ["compte", "Compte", "user", "--c-save"],
 ];
 // Sections regroupées : menu latéral (bureau), barre du bas + sous-onglets (téléphone)
 const GROUPS = [
   ["accueil", "Accueil", "home", "--c-home", ["accueil", "almanax"]],
   ["marche", "Marché", "coins", "--c-gold", ["prix", "tournee", "rentabilite", "journal", "alertes"]],
   ["orukam", "Orukam", "globe", "--c-oru", ["serveur", "cotes", "tendances", "donjons", "carte", "brisage"]],
-  ["production", "Production", "hammer", "--c-craft", ["plan", "metiers", "farm", "stock"]],
+  ["production", "Production", "hammer", "--c-craft", ["plan", "metiers", "farm", "stock", "groupe"]],
   ["equipement", "Équipement", "shield", "--c-build", ["builds", "comparer", "cosmetiques", "encyclopedie"]],
   ["compte", "Compte", "user", "--c-save", ["compte"]],
 ];
@@ -4963,7 +5117,7 @@ try { lastInGroup = JSON.parse(localStorage.getItem("atelier-nav") || "{}"); } c
 // Icônes du jeu pour les menus (objets de Dofus, planche d'icônes locale) ; dessin de secours sinon
 const GI = { accueil: 548, almanax: 21014, marche: 8425, prix: 8425, tournee: 14978, rentabilite: 745, journal: 678, alertes: 1339,
   orukam: 737, serveur: 737, cotes: 489, tendances: 1328, donjons: 8437, carte: 15378, brisage: 1519,
-  production: 147, plan: 147, metiers: 14146, farm: 289, stock: 1699, equipement: 2411, builds: 2411, comparer: 22444, cosmetiques: 8069, encyclopedie: 2337, compte: 11270 };
+  production: 147, plan: 147, groupe: 1575, metiers: 14146, farm: 289, stock: 1699, equipement: 2411, builds: 2411, comparer: 22444, cosmetiques: 8069, encyclopedie: 2337, compte: 11270 };
 // Icônes des menus : petite planche dédiée (data/icons/menu.webp, tools/build_menu_icons.py, même ordre que GI)
 // au lieu d'une vingtaine de grandes planches d'icônes chargées au démarrage
 const MENU_IDS = [...new Set(Object.values(GI))];
@@ -5037,6 +5191,7 @@ function heroFor(v) {
     builds: ["Builds", "Importe un build, vois ses stats, son coût et ce qu'il faut farmer.", "shield", bsel ? bsel.items : []],
     cosmetiques: ["Cosmétiques", "Apparats, objets vivants et montures d'apparat, avec leur prix à Orukam, et la garde-robe de tes builds.", "shield", cosmIds().filter(id => item(id)[3] >= 0 && item(id)[2] === 246).slice(0, 8)],
     stock: ["Inventaire", "Ce que tu as sous la main, valorisé au prix du groupe.", "bag", Object.keys(S.stock).map(Number)],
+    groupe: ["Groupe", "Les métiers de chacun et les commandes entre membres : demande ce qu'il te manque à ceux qui savent le faire.", "user", ORD.map(o => o.item_id)],
     encyclopedie: ["Encyclopédie", fmt.format(INDEX.length) + " objets, " + fmt.format(Object.keys(D.recipes).length) + " recettes, effets, drops et panoplies.", "book", []],
     tournee: ["Tournée HDV", TOUR && TOUR.i < TOUR.ids.length ? "Objet " + (TOUR.i + 1) + " sur " + TOUR.ids.length + " · HDV " + hdvName(hdvOf(TOUR.ids[TOUR.i])) : "Relève à la chaîne les prix qui manquent, rangés par hôtel des ventes.", "route", TOUR && TOUR.i < TOUR.ids.length ? TOUR.ids.slice(TOUR.i, TOUR.i + 8) : tourCandidates().ids],
     alertes: ["Alertes de prix", "Sois prévenu quand un objet passe sous ton prix d'achat, dépasse ton prix de vente, ou quand un craft devient rentable.", "bell", (S.alerts || []).map(a => a.item)],
@@ -5099,13 +5254,14 @@ function decorate(root, v) {
 // =====================================================================
 // Rendu et navigation
 // =====================================================================
-const VIEWS = { tendances: viewTendances, almanax: viewAlmanax, carte: viewCarte, serveur: viewServeur, cotes: viewCotes, donjons: viewDonjons, brisage: viewBrisage, comparer: viewComparer, alertes: viewAlertes, metiers: viewMetiers, journal: viewJournal, tournee: viewTournee, farm: viewFarm, builds: viewBuilds, cosmetiques: viewCosmetiques, accueil: viewAccueil, plan: viewPlan, rentabilite: viewRentabilite, prix: viewPrix, stock: viewStock, encyclopedie: viewEncyclopedie, compte: viewSauvegarde };
+const VIEWS = { tendances: viewTendances, almanax: viewAlmanax, carte: viewCarte, serveur: viewServeur, cotes: viewCotes, donjons: viewDonjons, brisage: viewBrisage, comparer: viewComparer, alertes: viewAlertes, metiers: viewMetiers, journal: viewJournal, tournee: viewTournee, farm: viewFarm, builds: viewBuilds, cosmetiques: viewCosmetiques, accueil: viewAccueil, plan: viewPlan, rentabilite: viewRentabilite, prix: viewPrix, stock: viewStock, groupe: viewGroupe, encyclopedie: viewEncyclopedie, compte: viewSauvegarde };
 function renderCounts() {
   const set = (id, n) => { const el = document.getElementById(id); if (el) { el.textContent = n; el.dataset.z = n ? "0" : "1"; } };
   set("c-plan", S.targets.length);
   set("c-stock", Object.keys(S.stock).length);
   set("c-prix", Object.keys(prices()).length);
   set("c-builds", S.builds.length);
+  set("c-groupe", openOrdersForMe().length + ORD.filter(o => o.taken_by === ME && o.status === "taken").length);
   const tour = TOUR && TOUR.i < TOUR.ids.length ? TOUR.ids.length - TOUR.i : tourCandidates().ids.length;
   set("c-tour", tour);
   const fired = triggeredAlerts().length;
