@@ -197,6 +197,7 @@ async function startOnline(session) {
     await loadProfiles();
     await loadTrades();
     await loadObtain();
+    await loadVolumes();
     await loadCoefs();
     loadKm();
     saveState("ok", "Synchronisé avec le groupe");
@@ -248,7 +249,7 @@ async function resync() {
     }
     for (const id of new Set(redo)) aggregate(id);
     if (redo.length) persist(...new Set(redo.map(id => "s:" + id)));
-    await loadCoefs(); await loadObtain(); await loadKm();
+    await loadCoefs(); await loadObtain(); await loadVolumes(); await loadKm();
     softRender();
   } catch (e) { console.error(e); RAW = before; for (const id in RAW) aggregate(id); }
   finally { syncing = false; }
@@ -270,6 +271,11 @@ function subscribePrices() {
       if (p.eventType === "DELETE") delete COEF[p.old.item_id]; else COEF[p.new.item_id] = { coef: +p.new.coef, by: p.new.updated_by, t: p.new.updated_at };
       try { localStorage.setItem("atelier-coef", JSON.stringify(COEF)); } catch {}
       softRender();
+    })
+    .on("postgres_changes", { event: "*", schema: "public", table: "item_volume" }, p => {
+      if (p.eventType === "DELETE") { const r = p.old; VOL[r.item_id] = (VOL[r.item_id] || []).filter(x => x.day !== r.day); }
+      else volAdd(p.new);
+      lsSaveVol(); softRender();
     })
     .on("postgres_changes", { event: "*", schema: "public", table: "item_obtain" }, p => {
       if (p.eventType === "DELETE") delete OBT[p.old.item_id];
@@ -1004,7 +1010,7 @@ async function renderSheet() {
   await ensureFarm();
   if (seq !== sheetRenderSeq || sheetStack[sheetStack.length - 1] !== id || !F) return;
   const bp = brisagePanel(id); if (bp) sheetIn.append(bp);
-  sheetIn.append(obtainPanel(id));
+  sheetIn.append(volumePanel(id), obtainPanel(id));
   const src = sourcesEl(id, true);
   if (src) sheetIn.append(h("section", { class: "panel" }, h("h3", { text: "Où l'obtenir" }), src));
 }
@@ -1440,7 +1446,8 @@ document.addEventListener("paste", e => {
 
 // Tri et catégorie de la liste des prix (gardés dans les réglages)
 const PRIX_SORTS = [["nom", "Nom (A → Z)"], ["nomd", "Nom (Z → A)"], ["prixa", "Prix croissant"], ["prixd", "Prix décroissant"], ["type", "Type"], ["niveau", "Niveau décroissant"],
-  ["age", "À revérifier en priorité"], ["recent", "Relevés les plus récents"], ["hausse", "Plus fortes hausses (7 j)"], ["baisse", "Plus fortes baisses (7 j)"]];
+  ["age", "À revérifier en priorité"], ["recent", "Relevés les plus récents"], ["hausse", "Plus fortes hausses (7 j)"], ["baisse", "Plus fortes baisses (7 j)"],
+  ["ventes1", "Plus vendus (24 h)"], ["ventes7", "Plus vendus (7 jours)"], ["ventes30", "Plus vendus (30 jours)"]];
 function viewPrix() {
   const allIds = Object.keys(prices()).map(Number).filter(id => obsOf(id).length && D.items[id]);
   const prixSort = S.settings.prixSort || "nom", prixCat = S.settings.prixCat || "";
@@ -1452,6 +1459,9 @@ function viewPrix() {
     type: (a, b) => typeName(a.id).localeCompare(typeName(b.id), "fr") || byName(a, b), niveau: (a, b) => item(b.id)[1] - item(a.id)[1] || byName(a, b),
     age: (a, b) => (a.last.d < b.last.d ? -1 : a.last.d > b.last.d ? 1 : byName(a, b)), recent: (a, b) => (a.last.d > b.last.d ? -1 : a.last.d < b.last.d ? 1 : byName(a, b)),
     hausse: (a, b) => (b.varp ?? -1e9) - (a.varp ?? -1e9) || byName(a, b), baisse: (a, b) => (a.varp ?? 1e9) - (b.varp ?? 1e9) || byName(a, b),
+    ventes1: (a, b) => ((volOf(b.id) || {}).d1 ?? -1) - ((volOf(a.id) || {}).d1 ?? -1) || byName(a, b),
+    ventes7: (a, b) => ((volOf(b.id) || {}).d7 ?? -1) - ((volOf(a.id) || {}).d7 ?? -1) || byName(a, b),
+    ventes30: (a, b) => ((volOf(b.id) || {}).d30 ?? -1) - ((volOf(a.id) || {}).d30 ?? -1) || byName(a, b),
   };
   const rows = ids.map(id => {
     const o = obsOf(id), last = o[o.length - 1];
@@ -1491,7 +1501,7 @@ function viewPrix() {
       rows.length ? h("div", { class: "tablewrap" }, h("table", {},
         h("thead", {}, h("tr", {}, h("th", { text: "Objet" }), h("th", { class: "n", text: "Dernière fourchette" }), h("th", { class: "n", text: "Prix actuel" }), h("th", { text: "Relevé" }), h("th", { text: "12 semaines" }), h("th", { class: "n", text: "Var. 7 j+" }), h("th", { text: "Ton relevé du jour (basse · haute · actuel)" }))),
         h("tbody", {}, rows.map(r => h("tr", {},
-          h("td", {}, itemLink(r.id, r.n + " relevé" + (r.n > 1 ? "s" : ""), 26)),
+          h("td", {}, itemLink(r.id, r.n + " relevé" + (r.n > 1 ? "s" : "") + (volOf(r.id) ? " · vendus : " + [["d1", "24 h"], ["d7", "7 j"], ["d30", "30 j"]].filter(([k]) => volOf(r.id)[k] != null).map(([k, l]) => fmt.format(volOf(r.id)[k]) + " en " + l).join(", ") : ""), 26)),
           h("td", { class: "n" }, range(r.last.lo, r.last.hi), SH && r.last.by ? h("small", { class: "muted", style: "display:block", text: "par " + whoName(r.last.by[0]) }) : null),
           h("td", { class: "n" }, r.last.cur != null ? h("strong", { style: "color:var(--kamas)", text: k(r.last.cur) }) : h("span", { class: "muted", text: "—" })),
           h("td", {}, h("span", { class: "chip" + (ageDays(r.last.d) >= 7 ? " warn" : ""), text: ago(r.last.d) })),
@@ -3561,6 +3571,62 @@ async function setObtain(id, data) {
     saveState(error ? "err" : "ok", error ? "Obtention non enregistrée" : "Enregistré pour le groupe");
     if (error) console.error(error);
   }
+}
+// =====================================================================
+// Ventes à l'HDV : quantités achetées par les joueurs sur 24 h, 7 jours et 30 jours, relevées en jeu
+// Partagé par le groupe (table item_volume, un relevé par objet et par jour, historique gardé)
+// =====================================================================
+let VOL = {};
+try { VOL = JSON.parse(localStorage.getItem("atelier-volumes") || "{}"); } catch { VOL = {}; }
+const lsSaveVol = () => { try { localStorage.setItem("atelier-volumes", JSON.stringify(VOL)); } catch {} };
+function volAdd(r) {
+  const l = (VOL[r.item_id] || []).filter(x => x.day !== r.day);
+  l.push({ day: r.day, d1: r.d1, d7: r.d7, d30: r.d30, by: r.updated_by, t: r.updated_at });
+  VOL[r.item_id] = l.sort((a, b) => a.day < b.day ? -1 : a.day > b.day ? 1 : 0);
+}
+async function loadVolumes() {
+  if (!SB) return;
+  const { data, error } = await SB.from("item_volume").select("item_id,day,d1,d7,d30,updated_by,updated_at");
+  if (error) { console.error(error); return; }
+  VOL = {}; for (const r of data || []) volAdd(r);
+  lsSaveVol();
+}
+const volOf = id => { const l = VOL[id] || []; return l[l.length - 1] || null; };
+async function setVolume(id, v) {
+  const r = { item_id: +id, day: today(), d1: v.d1, d7: v.d7, d30: v.d30, updated_by: ME, updated_at: new Date().toISOString() };
+  volAdd(r); lsSaveVol();
+  if (SB && ME) {
+    saveState("busy", "Enregistrement…");
+    const { error } = await SB.from("item_volume").upsert(r);
+    saveState(error ? "err" : "ok", error ? "Ventes non enregistrées" : "Enregistré pour le groupe");
+    if (error) console.error(error);
+  }
+}
+function volumePanel(id) {
+  const v = volOf(id), hist = (VOL[id] || []).slice(-6).reverse();
+  const p = nowPrice(priceAt(id));
+  const num = x => x == null || x === "" ? null : Math.max(0, Math.round(+String(x).replace(/\s/g, "")) || 0);
+  const ins = {};
+  const field = (k, label) => { ins[k] = h("input", { class: "cell", inputmode: "numeric", id: "vol-" + k, value: v && v[k] != null ? fmt.format(v[k]) : "", placeholder: "—", "aria-label": label });
+    return h("label", { class: "fld" }, h("span", { class: "label", text: label }), ins[k]); };
+  const per = (q, days) => q == null ? "—" : fmt.format(Math.round(q / days * 10) / 10) + " / jour";
+  return h("section", { class: "panel" },
+    h("div", { class: "row between" }, h("h3", { style: "margin:0", text: "Ventes à l'HDV" }),
+      v ? h("small", { class: "muted", text: "relevé " + (v.day === today() ? "aujourd'hui" : "le " + parseD(v.day).toLocaleDateString("fr-FR", { day: "numeric", month: "short" })) + (NAMES[v.by] ? " par " + NAMES[v.by] : "") }) : null),
+    h("p", { class: "note", text: "Quantités achetées par les joueurs, telles qu'affichées à l'hôtel des ventes en jeu. Partagé avec le groupe." }),
+    h("div", { class: "row", style: "gap:10px;align-items:end" }, field("d1", "En 24 h"), field("d7", "En 7 jours"), field("d30", "En 30 jours"),
+      h("button", { type: "button", class: "btn primary", id: "vol-save", onclick: () => {
+        const x = { d1: num(ins.d1.value), d7: num(ins.d7.value), d30: num(ins.d30.value) };
+        if (x.d1 == null && x.d7 == null && x.d30 == null) { toast("Indique au moins une quantité"); return; }
+        setVolume(id, x); toast("Ventes enregistrées"); renderSheet();
+      } }, "Enregistrer")),
+    v ? h("div", { class: "tiles" },
+      [["d1", "24 h", 1], ["d7", "7 jours", 7], ["d30", "30 jours", 30]].map(([k, l, d]) => h("div", { class: "tile" }, h("span", { class: "label", text: "Vendus en " + l }),
+        h("span", { class: "v", text: v[k] == null ? "—" : fmt.format(v[k]) }),
+        h("span", { class: "small muted", text: per(v[k], d) + (v[k] != null && p != null ? " · ≈ " + kk(v[k] * p) + " ₭ échangés" : "") })))) : null,
+    hist.length > 1 ? h("div", { class: "tablewrap" }, h("table", {}, h("thead", {}, h("tr", {}, h("th", { text: "Relevé" }), h("th", { class: "n", text: "24 h" }), h("th", { class: "n", text: "7 j" }), h("th", { class: "n", text: "30 j" }))),
+      h("tbody", {}, hist.map(x => h("tr", {}, h("td", { text: parseD(x.day).toLocaleDateString("fr-FR", { day: "numeric", month: "short" }) }),
+        ...["d1", "d7", "d30"].map(k => h("td", { class: "n", text: x[k] == null ? "—" : fmt.format(x[k]) }))))))) : null);
 }
 // Pierre de capture adaptée à une âme : la moins chère parmi celles qui capturent jusqu'au niveau du monstre
 const soulOf = id => (D.souls || {})[id] || null;
