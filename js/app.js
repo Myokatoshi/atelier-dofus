@@ -201,6 +201,8 @@ async function startOnline(session) {
     await loadHxp();
     await loadCoefs();
     loadKm();
+    // données de farm en arrière-plan : protecteurs, sacs et contrôle des cotes des ressources récoltables
+    ensureFarm().then(d => { if (d) { PRICE_VER++; softRender(); } });
     saveState("ok", "Synchronisé avec le groupe");
   } catch (e) {
     console.error(e);
@@ -477,16 +479,25 @@ function priceAt(id, at) {
 const kmDoubt = id => (KM && S.settings.km !== false && KM.doubt && KM.doubt[id]) || null;
 // Prix inhabituel : cote Kamamaster plus de 50 fois au-dessus de la médiane des objets du même type
 // et de niveau proche (± 20). Simple avertissement : le prix reste utilisé (une ressource de boss peut valoir cher)
-let ODD = null, oddKey = null;
+// Ressources récoltables (si les données de farm sont chargées) : comparées aux ressources du même métier
+// de niveau proche (± 40, au moins 3) : plus de 15 fois au-dessus de leur médiane = à vérifier (ex. Obsidienne)
+let ODD = null, oddKey = null, ODDH = new Set();
 function kmOdd(id) {
   if (!KM || S.settings.km === false || !D) return null;
-  if (oddKey !== KM.fetched) {
-    oddKey = KM.fetched; ODD = new Map();
+  if (oddKey !== KM.fetched + "|" + !!F) {
+    oddKey = KM.fetched + "|" + !!F; ODD = new Map(); ODDH = new Set();
+    if (F) {
+      const hv = Object.entries(F.harvest).filter(([k]) => KM.prices[k] && D.items[k]).map(([k, v]) => [+k, v[0], v[1], KM.prices[k]]);
+      for (const [i, j, lv, p] of hv) {
+        const peers = hv.filter(x => x[0] !== i && x[1] === j && Math.abs(x[2] - lv) <= 40).map(x => x[3]).sort((a, b) => a - b);
+        if (peers.length >= 3) { const med = peers[peers.length >> 1]; if (p > 15 * med) { ODD.set(i, med); ODDH.add(i); } }
+      }
+    }
     const by = new Map();
     for (const [k, p] of Object.entries(KM.prices)) { const it = D.items[k]; if (!it) continue; if (!by.has(it[2])) by.set(it[2], []); by.get(it[2]).push([it[1], p, +k]); }
     for (const lst of by.values()) for (const [lv, p, i] of lst) {
       const peers = lst.filter(x => x[2] !== i && Math.abs(x[0] - lv) <= 20).map(x => x[1]).sort((a, b) => a - b);
-      if (peers.length >= 5) { const med = peers[peers.length >> 1]; if (p > 50 * med) ODD.set(i, med); }
+      if (peers.length >= 5 && !ODD.has(i)) { const med = peers[peers.length >> 1]; if (p > 50 * med) ODD.set(i, med); }
     }
   }
   return ODD.get(+id) ?? null;
@@ -514,7 +525,7 @@ function craftOddMap() {
 const craftOdd = id => craftOddMap().get(+id) || null;
 const oddOf = (id, o) => o && o.src === "km" ? (kmOdd(id) ?? (craftOdd(id) ? craftOdd(id).cost : null)) : null;
 const oddText = id => { const t = kmOdd(id), c = craftOdd(id);
-  return [t != null ? "prix inhabituel : les objets du même type et de niveau proche valent ~" + kk(t) + " ₭" : null,
+  return [t != null ? (ODDH.has(+id) ? "prix inhabituel : les autres ressources de " + jobName(F.harvest[id][0]) + " de niveau proche valent ~" : "prix inhabituel : les objets du même type et de niveau proche valent ~") + kk(t) + " ₭" : null,
     c ? "cote " + (c.up ? "plus de 10 fois au-dessus" : "plus de 10 fois en dessous") + " du coût de craft (~" + kk(c.cost) + " ₭)" : null].filter(Boolean).join(" ; ") + ". À vérifier à l'HDV"; };
 const oddChip = (id, o) => oddOf(id, o) ? h("span", { class: "chip warn", title: oddText(id), text: "à vérifier" }) : null;
 // Cotes Kamamaster à vérifier : douteuses (écartées) ou inhabituelles (gardées), pour les objets que le groupe n'a pas relevés
@@ -535,7 +546,7 @@ function suspectsPanel() {
     h("div", { class: "row between" }, h("h2", { text: "Cotes Kamamaster à vérifier" }),
       h("div", { class: "row", style: "gap:8px" }, h("span", { class: "chip warn", text: list.length + " objet" + (list.length > 1 ? "s" : "") }),
         h("button", { type: "button", class: "btn sm", onclick: () => { tourSetup.extra = [...new Set([...(tourSetup.extra || []), ...list.map(x => x.id)])]; saveTour(); location.hash = "#tournee"; } }, "Les relever (tournée HDV)"))),
-    h("p", { class: "note", text: "Cotes Kamamaster jamais relevées par le groupe et suspectes : « inhabituelle » = plus de 50 fois le prix des objets du même type et de niveau proche ; « chère / bradée vs craft » = plus de 10 fois au-dessus ou en dessous du coût de ses ingrédients (souvent un ingrédient mal coté) ; ces cotes restent utilisées dans les calculs, sauf la revente des métiers ; « douteuse » = plus de 3 fois au-dessus ou en dessous de ses derniers jours (écartée). Un seul relevé du groupe remplace la cote et retire l'objet de cette liste. Les plus suspectes d'abord." }),
+    h("p", { class: "note", text: "Cotes Kamamaster jamais relevées par le groupe et suspectes : « inhabituelle » = plus de 50 fois le prix des objets du même type et de niveau proche (ressources récoltables : plus de 15 fois celui des autres ressources du même métier) ; « chère / bradée vs craft » = plus de 10 fois au-dessus ou en dessous du coût de ses ingrédients (souvent un ingrédient mal coté) ; ces cotes restent utilisées dans les calculs, sauf la revente des métiers ; « douteuse » = plus de 3 fois au-dessus ou en dessous de ses derniers jours (écartée). Un seul relevé du groupe remplace la cote et retire l'objet de cette liste. Les plus suspectes d'abord." }),
     h("div", { class: "tablewrap" }, h("table", {},
       h("thead", {}, h("tr", {}, h("th", { text: "Objet" }), h("th", { class: "n", text: "Cote Kamamaster" }), h("th", { class: "n hide-m", text: "Référence" }), h("th", {}), h("th", { text: "Ton relevé (basse · haute · actuel)" }))),
       h("tbody", {}, list.slice(0, suspN).map(x => h("tr", {},
