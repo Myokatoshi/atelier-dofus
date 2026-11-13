@@ -710,3 +710,4 @@ select.sm { padding: 4px 8px; font-size: .8rem; }
 li.fx-pass { list-style: none; margin: 6px 0; padding: 6px 8px; border-left: 3px solid var(--kamas); background: var(--sunk); border-radius: 8px; }
 li.fx-pass strong { color: var(--kamas); }
 .icard .sales { display: grid; gap: 4px; padding-top: 6px; border-top: 1px dashed var(--line); }
+table.free .chip { white-space: nowrap; }

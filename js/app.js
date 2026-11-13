@@ -667,6 +667,7 @@ function find(q, opts = {}) {
   const out = [];
   for (const e of INDEX) {
     if (opts.craftOnly && !e.craft) continue;
+    if (opts.job != null && !(D.recipes[e.id] && D.recipes[e.id][0] === opts.job)) continue;
     if (opts.type && e.type !== opts.type) continue;
     if (opts.sup != null && (D.types[e.type] || [0, 0])[1] !== opts.sup) continue;
     if (opts.types && !opts.types.includes(e.type)) continue;
@@ -2507,7 +2508,73 @@ function xpPlan(job, from, to, bonus, mode, C, B = { eco: 0, fab: 0 }, startXp =
   }
   return { steps };
 }
+// Plan libre (comme le simulateur de DofusDB) : recettes et quantités choisies, dans l'ordre ; l'XP de chaque craft
+// est recalculée au niveau atteint à ce moment-là (une recette trop haute ou 100 niveaux en dessous ne rapporte rien)
+function freeSim(id, n, xp, bonus, stopXp = Infinity) {
+  let done = 0, gained = 0;
+  while (done < n && xp < Math.min(stopXp, lvToXp(200))) {
+    const lv = xpToLv(xp), g = craftXp(id, lv, bonus);
+    if (!g) break;
+    const k = Math.min(n - done, Math.ceil((Math.min(stopXp, lvToXp(lv + 1)) - xp) / g));
+    done += k; xp += k * g; gained += k * g;
+  }
+  return { done, xp: Math.min(xp, lvToXp(200)), gained };
+}
+function freePlan(job, list, startXp, bonus, C, B) {
+  let xp = startXp; const steps = [];
+  for (const [i, x] of list.entries()) {
+    const c0 = C.craft(x.id), v0 = resale(x.id), lv0 = xpToLv(xp), r = freeSim(x.id, x.n, xp, bonus);
+    steps.push({ i, id: x.id, n: x.n, from: lv0, to: xpToLv(r.xp), xp: r.xp - xp, dead: x.n - r.done, low: item(x.id)[1] > lv0,
+      c: c0.missing ? null : (c0.lo + c0.hi) / 2 * (1 - B.eco / 100), v: v0 == null ? null : v0 * (1 + B.fab / 100), xpBefore: xp });
+    xp = r.xp;
+  }
+  return { steps, xp, free: true };
+}
+// Nombre de crafts d'une recette pour aller d'une XP à une autre (s'arrête si elle ne rapporte plus rien)
+function craftsTo(id, xp, stopXp, bonus) { return freeSim(id, 1e7, xp, bonus, stopXp).done; }
 let metierF = { sort: "xp", all: false }, metierDay = 0;
+function freePanel(job, plan, list, save, auto, o) {
+  const move = (i, d) => { const l = list.slice(); const [x] = l.splice(i, 1); l.splice(Math.max(0, Math.min(l.length, i + d)), 0, x); save(l); };
+  const setN = (i, n) => { const l = list.slice(); l[i] = { ...l[i], n: Math.max(1, Math.min(1e6, Math.round(n) || 1)) }; save(l); };
+  const add = id => {
+    const r = recipe(id); if (!r || r[0] !== job) { toast("Ce n'est pas une recette de " + jobName(job)); return; }
+    const n = craftsTo(id, plan.xp, lvToXp(Math.min(200, xpToLv(plan.xp) + 1)), o.bonus);
+    save([...list, { id, n: Math.max(1, n) }]); toast(item(id)[0] + " ajouté au plan libre");
+  };
+  const box = searchBox("Ajouter une recette de " + jobName(job) + "…", { job, limit: 30 }, add, "free-add");
+  const target = lvToXp(o.to);
+  return h("div", { class: "stack" },
+    h("p", { class: "note", text: "Ajoute les recettes que tu veux crafter, dans l'ordre, avec leur quantité : l'XP de chaque craft est recalculée au niveau atteint à ce moment-là (formule du simulateur de DofusDB). Les coûts, la revente et la liste d'achat suivent ton plan." }),
+    box,
+    h("div", { class: "row", style: "gap:8px" },
+      auto.steps.length ? h("button", { type: "button", class: "btn sm", onclick: () => { save(auto.steps.map(x => ({ id: x.id, n: x.n }))); toast("Plan automatique recopié : modifie-le à ta façon"); } }, list.length ? "Remplacer par le plan automatique" : "Partir du plan automatique") : null,
+      list.length ? h("button", { type: "button", class: "btn sm", onclick: () => { for (const st of plan.steps) { const t = S.targets.find(x => x.id === st.id); if (t) t.qty += st.n; else S.targets.push({ id: st.id, qty: st.n }); } persist("plan"); toast("Plan libre ajouté au plan de craft"); } }, "Ajouter au plan de craft") : null,
+      list.length ? h("button", { type: "button", class: "btn sm", onclick: () => { if (confirm("Vider le plan libre de " + jobName(job) + " ?")) save([]); } }, "Vider") : null),
+    plan.steps.length ? h("div", { class: "tablewrap" }, h("table", { class: "free" },
+      h("thead", {}, h("tr", {}, h("th", { text: "Niveaux" }), h("th", { text: "Recette" }), h("th", { class: "n", text: "Crafts" }), h("th", { class: "n", text: "Coût" }), h("th", { class: "n hide-m", text: "Revente" }), h("th", { class: "n", text: "Bilan" }), h("th", { text: "" }))),
+      h("tbody", {}, plan.steps.map(st => {
+        const g0 = craftXp(st.id, st.from, o.bonus);
+        const fill = craftsTo(st.id, st.xpBefore, target, o.bonus), fillNext = craftsTo(st.id, st.xpBefore, lvToXp(Math.min(200, st.from + 1)), o.bonus);
+        const b = st.c != null && st.v != null ? (st.v * (1 - taxRate()) - st.c) * st.n : null;
+        return h("tr", {},
+          h("td", {}, h("span", { class: "chip job", text: st.from + " → " + st.to })),
+          h("td", {}, itemLink(st.id, "niv. " + item(st.id)[1] + " · " + (g0 ? fmt.format(g0) + " XP / craft au début" : "0 XP") + " · " + kk(st.xp) + " XP en tout", 26),
+            st.low ? h("span", { class: "chip warn", text: "niveau " + item(st.id)[1] + " requis" }) : null,
+            st.dead ? h("span", { class: "chip warn", text: fmt.format(st.dead) + " craft" + (st.dead > 1 ? "s" : "") + " sans XP" }) : null),
+          h("td", { class: "n" }, numInput(st.n, v => setN(st.i, +String(v).replace(/\s/g, "")), { sm: true, label: "Crafts de " + item(st.id)[0], id: "free-n-" + st.i, noRender: true }),
+            h("div", { class: "row", style: "gap:4px;justify-content:flex-end;margin-top:4px" },
+              fillNext && fillNext !== st.n && st.from < 200 ? h("button", { type: "button", class: "btn sm", title: "Crafts pour passer au niveau " + (st.from + 1), onclick: () => setN(st.i, fillNext) }, "→ " + (st.from + 1)) : null,
+              fill && fill !== st.n && o.to > st.from + 1 ? h("button", { type: "button", class: "btn sm", title: "Crafts pour atteindre le niveau " + o.to + " (ou tant que la recette rapporte de l'XP)", onclick: () => setN(st.i, fill) }, "→ " + Math.min(o.to, xpToLv(freeSim(st.id, fill, st.xpBefore, o.bonus).xp))) : null)),
+          h("td", { class: "n" }, st.c == null ? h("span", { class: "chip warn", text: "prix manquants" }) : kk(st.c * st.n), st.c != null ? h("small", { class: "muted", style: "display:block", text: k(st.c) + " ₭/craft" }) : null),
+          h("td", { class: "n hide-m" }, st.v == null ? h("span", { class: "muted", text: "sans prix" }) : kk(st.v * st.n), unitSrc(st.id)),
+          h("td", { class: "n " + (b == null ? "muted" : b >= 0 ? "pos" : "neg"), text: b == null ? "—" : (b >= 0 ? "+" : "") + kk(b) }),
+          h("td", {}, h("div", { class: "row", style: "gap:4px;flex-wrap:nowrap" },
+            h("button", { type: "button", class: "btn sm", "aria-label": "Monter", disabled: st.i === 0, onclick: () => move(st.i, -1) }, "↑"),
+            h("button", { type: "button", class: "btn sm", "aria-label": "Descendre", disabled: st.i === list.length - 1, onclick: () => move(st.i, 1) }, "↓"),
+            h("button", { type: "button", class: "btn sm", "aria-label": "Retirer", onclick: () => save(list.filter((_, j) => j !== st.i)) }, "✕"))));
+      })))) : h("div", { class: "empty" }, h("strong", { text: "Plan libre vide" }), h("span", { text: "Cherche une recette de " + jobName(job) + " ci-dessus, ou pars du plan automatique et modifie-le." })),
+    plan.steps.length ? h("p", { class: "note", text: "Niveau atteint : " + xpToLv(plan.xp) + (xpToLv(plan.xp) < 200 ? " (" + fmt.format(Math.round(plan.xp - lvToXp(xpToLv(plan.xp)))) + " XP dans le niveau)" : "") + (plan.xp >= target ? " · objectif " + o.to + " atteint." : " · il manque " + kk(target - plan.xp) + " XP pour le niveau " + o.to + ".") + " Bilan après taxe HDV (" + (S.settings.tax || 0) + " %)." }) : null);
+}
 function viewMetiers() {
   ensureXpRatios();
   if (!XPR) return h("div", { class: "loading", text: "Chargement des données d'XP…" });
@@ -2542,7 +2609,11 @@ function viewMetiers() {
   daySel.addEventListener("change", () => { metierDay = +daySel.value; render(); });
   const nextB = upcoming[0] || null;
   const C = coster(undefined, true); // prix actuels : achat des ingrédients et revente au même moment
-  const plan = xpPlan(job, lv, to, bonus, mode, C, B, xpNow);
+  const auto = xpPlan(job, lv, to, bonus, mode, C, B, xpNow);
+  const pmode = (S.settings.jobpm || {})[job] === "libre" ? "libre" : "auto";
+  const freeList = ((S.settings.jobfree || {})[job] || []).filter(x => D.items[x.id] && D.recipes[x.id]);
+  const saveFree = l => { S.settings.jobfree = { ...(S.settings.jobfree || {}), [job]: l }; persist("plan"); render(); };
+  const plan = pmode === "libre" ? freePlan(job, freeList, xpNow, bonus, C, B) : auto;
   const totN = plan.steps.reduce((t, s) => t + s.n, 0), unknown = plan.steps.filter(s => s.c == null);
   const totC = plan.steps.reduce((t, s) => t + (s.c ?? 0) * s.n, 0);
   const totV = plan.steps.reduce((t, s) => t + (s.v ?? 0) * s.n, 0), noSell = plan.steps.filter(s => s.v == null);
@@ -2582,7 +2653,8 @@ function viewMetiers() {
         B.list.length ? B.list.map(({ e, f }) => h("span", { class: "chip " + (f.kind === "xp" ? "kamas" : "job"), title: e.title + " : " + e.text, text: fxLabel(f) + (["xp", "eco", "fab"].includes(f.kind) ? "" : " (non chiffré)") })) : h("span", { class: "small muted", text: "aucun ce jour-là" }),
         extra ? h("span", { class: "chip", text: "Autre bonus d'XP +" + extra + " %" }) : null),
       h("div", { class: "tiles" },
-        h("div", { class: "tile" }, h("span", { class: "label", text: "Crafts nécessaires" }), h("span", { class: "v", text: plan.stuck ? "—" : fmt.format(totN) }), h("span", { class: "small muted", text: kk(Math.max(0, lvToXp(to) - xpNow)) + " XP du niveau " + lv + (xpNow > lvStart ? " (" + Math.floor(pct) + " %)" : "") + " au " + to + " · " + plan.steps.length + " étape" + (plan.steps.length > 1 ? "s" : "") })),
+        h("div", { class: "tile" }, h("span", { class: "label", text: plan.free ? "Crafts du plan libre" : "Crafts nécessaires" }), h("span", { class: "v", text: plan.stuck ? "—" : fmt.format(totN) }),
+          plan.free ? h("span", { class: "small " + (plan.xp >= lvToXp(to) ? "pos" : "muted"), text: "niveau atteint : " + xpToLv(plan.xp) + (plan.xp >= lvToXp(to) ? " (objectif " + to + " atteint)" : " · objectif " + to + " : encore " + kk(lvToXp(to) - plan.xp) + " XP") }) : null, h("span", { class: "small muted", text: kk(Math.max(0, lvToXp(to) - xpNow)) + " XP du niveau " + lv + (xpNow > lvStart ? " (" + Math.floor(pct) + " %)" : "") + " au " + to + " · " + plan.steps.length + " étape" + (plan.steps.length > 1 ? "s" : "") })),
         h("div", { class: "tile" }, h("span", { class: "label", text: "Coût des ingrédients" }), h("span", { class: "v", text: kk(totC) + (unknown.length ? "+" : "") }), h("span", { class: "small muted", text: unknown.length ? unknown.length + " étape(s) sans prix complet" : "aux prix d'Orukam" })),
         h("div", { class: "tile kamas" }, h("span", { class: "label", text: "Bilan après revente" }), h("span", { class: "v " + (bilan >= 0 ? "pos" : "neg"), text: (bilan >= 0 ? "+" : "") + kk(bilan) }), h("span", { class: "small muted", text: "revente " + kk(totV) + " ₭ − taxe HDV " + (S.settings.tax || 0) + " % (" + kk(totTax) + " ₭) − ingrédients" + (noSell.length ? " · " + noSell.length + " craft(s) sans prix de vente" : "") })),
         h("div", { class: "tile" }, h("span", { class: "label", text: "Prochain bonus · " + jobName(job) }),
@@ -2593,6 +2665,10 @@ function viewMetiers() {
     h("div", { class: "grid2 wide-left" },
       h("section", { class: "panel" },
         h("div", { class: "row between" }, h("h2", { text: "Plan de montée" }),
+          h("span", { class: "seg", role: "group", "aria-label": "Type de plan" }, [["auto", "Automatique"], ["libre", "Libre"]].map(([v, l]) =>
+            h("button", { type: "button", id: "plan-" + v, "aria-pressed": pmode === v ? "true" : "false", onclick: () => { S.settings.jobpm = { ...(S.settings.jobpm || {}), [job]: v }; persist("plan"); render(); } }, l)))),
+        pmode === "libre" ? freePanel(job, plan, freeList, saveFree, auto, { xpNow, to, bonus, lv }) : h("div", { class: "stack" },
+        h("div", { class: "row between" }, h("span", { class: "small muted", text: "Recettes choisies par l'atelier (" + ({ cost: "le moins cher", net: "le plus rentable", xp: "le moins de crafts" }[mode]) + ")" }),
           plan.steps.length ? h("button", { type: "button", class: "btn sm", onclick: () => { for (const s of plan.steps) { const t = S.targets.find(x => x.id === s.id); if (t) t.qty += s.n; else S.targets.push({ id: s.id, qty: s.n }); } persist("plan"); toast(plan.steps.length + " recette(s) ajoutée(s) au plan de craft"); render(); } }, "Tout ajouter au plan de craft") : null),
         plan.steps.length ? h("div", { class: "tablewrap" }, h("table", {},
           h("thead", {}, h("tr", {}, h("th", { text: "Niveaux" }), h("th", { text: "Recette" }), h("th", { class: "n", text: "Crafts" }), h("th", { class: "n", text: "Coût" }), h("th", { class: "n hide-m", text: "Revente" }), h("th", { class: "n", text: "Bilan" }))),
@@ -2603,7 +2679,7 @@ function viewMetiers() {
             h("td", { class: "n" }, s.c == null ? h("span", { class: "chip warn", text: "prix manquants" }) : kk(s.c * s.n), s.c != null ? h("small", { class: "muted", style: "display:block", text: k(s.c) + " ₭/craft" }) : null),
             h("td", { class: "n hide-m" }, s.v == null ? h("span", { class: "muted", text: oddOf(s.id, priceAt(s.id)) ? "non comptée" : "sans prix" }) : kk(s.v * s.n), unitSrc(s.id)),
             (() => { const b = s.c != null && s.v != null ? (s.v * (1 - taxRate()) - s.c) * s.n : null; return h("td", { class: "n " + (b == null ? "muted" : b >= 0 ? "pos" : "neg"), text: b == null ? "—" : (b >= 0 ? "+" : "") + kk(b) }); })()))))) :
-          h("div", { class: "empty" }, h("strong", { text: lv >= to ? "Objectif atteint" : "Aucune recette disponible" }), h("span", { text: lv >= to ? "Indique un objectif plus haut que ton niveau actuel." : "Aucune recette de ce métier ne rapporte d'XP à ton niveau." })),
+          h("div", { class: "empty" }, h("strong", { text: lv >= to ? "Objectif atteint" : "Aucune recette disponible" }), h("span", { text: lv >= to ? "Indique un objectif plus haut que ton niveau actuel." : "Aucune recette de ce métier ne rapporte d'XP à ton niveau." }))),
         plan.stuck ? h("p", { class: "note", text: "Bloqué au niveau " + plan.stuck + " : aucune recette ne rapporte d'XP." }) : null,
         plan.steps.length ? h("p", { class: "note", text: "Revente au prix actuel à l'HDV (relevé du groupe s'il existe, sinon cote Kamamaster) ; le bilan retire la taxe HDV (" + (S.settings.tax || 0) + " %, réglable dans Rentabilité) et le coût des ingrédients ; une cote Kamamaster « à vérifier » n'est pas comptée tant que le groupe ne l'a pas relevée. Écouler des centaines d'exemplaires du même objet fait baisser son prix : le bilan réel sera souvent plus bas, surtout sur les étapes à gros volume." }) : null),
       h("section", { class: "panel" },
