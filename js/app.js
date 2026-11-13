@@ -1602,6 +1602,14 @@ function sourcesOf(id) {
   return { hv, dr };
 }
 // Chance de drop effective avec la prospection : taux × PP / 100, plafonnée à 100 %
+// Drops réservés à un métier : [monstre, taux, taux, métier, niveau] (viandes : Chasseur avec une arme de chasse ;
+// poissons rares et sacs : « Dévoreur » qui apparaît en pêchant un poisson, F.mons[m][5])
+function jobTag(d, long) {
+  if (!d[3]) return "";
+  const m = F.mons[d[0]];
+  if (d[3] === 36 && m[5]) return long ? "apparaît en pêchant " + item(m[5])[0] + " (Pêcheur niv. " + d[4] + ")" : "pêche de " + item(m[5])[0];
+  return jobName(d[3]) + " niv. " + d[4] + (d[3] === 41 ? (long ? ", arme de chasse équipée" : ", arme de chasse") : "");
+}
 const ppOf = () => Math.max(1, +S.settings.pp || 100);
 const dropChance = pct => Math.min(1, pct / 100 * ppOf() / 100);
 const killsFor = (qty, pct) => Math.ceil(qty / Math.max(dropChance(pct), 1e-6));
@@ -1618,22 +1626,25 @@ function sourcesEl(id, full, qty) {
       h("span", { class: "label", text: "Lâché par " + dr.length + " monstre" + (dr.length > 1 ? "s" : "") }),
       h("div", { class: "tablewrap" }, h("table", {},
         h("thead", {}, h("tr", {}, h("th", { text: "Monstre" }), h("th", { class: "n", text: "Niveau" }), h("th", { class: "n", text: "Taux" }), h("th", { class: "n", text: "Avec " + ppOf() + " PP" }), h("th", { text: "Où" }))),
-        h("tbody", {}, dr.map(([mid, a, b]) => {
-          const m = F.mons[mid];
-          const where = m[3].slice(0, 4).map(subLabel).join(", ") + (m[3].length > 4 ? " +" + (m[3].length - 4) : "");
+        h("tbody", {}, dr.map(d => {
+          const [mid, a, b] = d, m = F.mons[mid];
+          const where = (m[5] ? "zones de pêche : " : "") + m[3].slice(0, 4).map(subLabel).join(", ") + (m[3].length > 4 ? " +" + (m[3].length - 4) : "");
           return h("tr", {},
-            h("td", {}, h("span", { class: "nm", text: m[0] }), m[4] ? h("span", { class: "chip warn", style: "margin-left:6px", text: "Boss · " + djName(m[4]) }) : null),
+            h("td", {}, h("span", { class: "nm", text: m[0] }), m[4] ? h("span", { class: "chip warn", style: "margin-left:6px", text: "Boss · " + djName(m[4]) }) : null,
+              d[3] ? h("span", { class: "chip job", style: "margin-left:6px", text: (d[3] === 41 ? "Chasse · " : "Pêche · ") + jobTag(d, true) }) : null),
             h("td", { class: "n", text: m[1] === m[2] ? m[1] : m[1] + "–" + m[2] }),
             h("td", { class: "n", text: pctTxt(a, b) }),
             h("td", { class: "n", text: pctTxt(dropChance((a + b) / 2) * 100, dropChance((a + b) / 2) * 100) }),
             h("td", { class: "small", text: where || "—" }));
         }))))));
   } else if (dr.length) {
-    const bits = dr.slice(0, 3).map(([mid, a, b]) => {
-      const m = F.mons[mid];
-      return m[0] + " (niv. " + m[1] + (m[2] !== m[1] ? "–" + m[2] : "") + ", " + pctTxt(a, b) + (m[4] ? ", boss " + djName(m[4]) : "") + ")";
+    const bits = dr.slice(0, 3).map(d => {
+      const [mid, a, b] = d, m = F.mons[mid];
+      return m[0] + " (niv. " + m[1] + (m[2] !== m[1] ? "–" + m[2] : "") + ", " + pctTxt(a, b) + (m[4] ? ", boss " + djName(m[4]) : "") + (d[3] === 36 ? ", " + jobTag(d) : "") + ")";
     });
-    parts.push(h("span", { class: "small", text: "Drop : " + bits.join(", ") + (dr.length > 3 ? " + " + (dr.length - 3) + " autres" : "") }));
+    const jd = dr.find(d => d[3]);
+    if (jd) parts.push(h("span", {}, h("span", { class: "chip job", text: (jd[3] === 41 ? "Chasse · " : "Pêche · ") + (jd[3] === 41 ? jobTag(jd) : "Dévoreur, " + jobTag(jd, true)) })));
+    parts.push(h("span", { class: "small", text: (jd && jd[3] === 41 ? "Viande lâchée par : " : "Drop : ") + bits.join(", ") + (dr.length > 3 ? " + " + (dr.length - 3) + " autres" : "") }));
     if (qty) {
       // Le monstre le plus « rentable » : le moins de combats pour la quantité voulue
       const [mid, a, b] = dr.slice().sort((x, y) => (y[1] + y[2]) - (x[1] + x[2]))[0];
@@ -1650,7 +1661,7 @@ function zonesFor(ids) {
   for (const id of ids) {
     const s_ = sourcesOf(id); if (!s_) continue;
     if (s_.hv) for (const sid of s_.hv[2]) add(sid, id, "récolte");
-    for (const [mid, , b] of s_.dr) { if (b < 1) continue; const m = F.mons[mid]; for (const sid of m[3]) add(sid, id, m[0] + " " + pctTxt(b, b)); }
+    for (const d of s_.dr) { const [mid, , b] = d; if (b < 1) continue; const m = F.mons[mid]; for (const sid of m[3]) add(sid, id, (d[3] === 41 ? "chasse : " : d[3] === 36 ? "pêche : " : "") + m[0] + " " + pctTxt(b, b)); }
   }
   return [...z.entries()].map(([sid, m]) => ({ sid, res: [...m.entries()] })).sort((a, b) => b.res.length - a.res.length || anomalyOf(b.sid) - anomalyOf(a.sid) || (F.subs[a.sid][2] - F.subs[b.sid][2])).slice(0, 12);
 }
