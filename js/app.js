@@ -4233,6 +4233,33 @@ function djCalc(d) {
   }).sort((a, b) => (b.v ?? -1) - (a.v ?? -1));
   return { tot, kh: tot * 60 / min, min, drops, missing, an };
 }
+// Protecteurs des ressources dans l'onglet Donjons : butin attendu par combat (sac à 100 %, ressource rare selon la prospection)
+let djP = { job: 0, open: false };
+function protSection(nq) {
+  if (!F) { ensureFarm().then(() => { if (view === "donjons") render(); }); return null; }
+  const all = Object.keys(F.harvest).map(Number).flatMap(rid => protOf(rid).map(p => ({ rid, p })));
+  const jobs = [...new Set(all.map(x => x.p.job))].sort((a, b) => jobName(a).localeCompare(jobName(b), "fr"));
+  const rows = all.filter(x => (!djP.job || x.p.job === djP.job) && (!nq || norm(x.p.name).includes(nq) || norm(item(x.rid)[0]).includes(nq))).map(x => {
+    const loot = x.p.loot.map(([it, a, b]) => { const ch = b >= 100 ? 1 : dropChance((a + b) / 2), v = bagOf(it) ? bagValue(it) : resale(it); return { it, a, b, ch, v, ev: v == null ? null : v * ch }; });
+    return { ...x, loot, ev: loot.reduce((t, l) => t + (l.ev || 0), 0), miss: loot.filter(l => l.v == null).length };
+  }).sort((a, b) => b.ev - a.ev);
+  const seg = h("span", { class: "seg wrap", role: "group", "aria-label": "Métier" }, [[0, "Tous"], ...jobs.map(j => [j, jobName(j)])].map(([v, l]) =>
+    h("button", { type: "button", "aria-pressed": djP.job === v ? "true" : "false", onclick: () => { djP.job = v; djP.open = true; render(); } }, l)));
+  const d = h("details", { class: "panel dj", id: "dj-prot", open: djP.open },
+    h("summary", {}, h("strong", { text: "Protecteurs des ressources" }), h("span", { class: "chip", style: "margin-left:8px", text: rows.length + " protecteur" + (rows.length > 1 ? "s" : "") })),
+    h("p", { class: "note", text: "Pas des donjons : ils apparaissent pendant la récolte d'une ressource (Dévoreurs, Épouvantails, Arbres ensorcelés, Craqueboules, Bulbes). Valeur par combat = sac de 50 ressources (100 %) + ressource rare (taux × ta prospection " + ppOf() + "), aux prix actuels." }),
+    h("div", { class: "row", style: "gap:8px" }, seg),
+    rows.length ? h("div", { class: "tablewrap" }, h("table", {},
+      h("thead", {}, h("tr", {}, h("th", { text: "Protecteur" }), h("th", { text: "Butin" }), h("th", { class: "n", text: "Par combat" }))),
+      h("tbody", {}, rows.map(r => h("tr", {},
+        h("td", {}, h("strong", { text: r.p.name }), h("small", { class: "muted", style: "display:block", text: "niv. " + (r.p.lo === r.p.hi ? r.p.lo : r.p.lo + "–" + r.p.hi) + " · apparaît " + harvVerb(r.p.job) + " " + item(r.rid)[0] + " (" + jobName(r.p.job) + " niv. " + F.harvest[r.rid][1] + ")" }),
+          h("button", { type: "button", class: "link small", onclick: () => { mapF.sel = [r.rid]; saveMapSel(); location.hash = "#carte"; } }, "Voir où sur la carte")),
+        h("td", {}, r.loot.map(l => h("div", { class: "small" }, itemLink(l.it, pctTxt(l.a, l.b) + (l.v != null ? " · ≈ " + kk(l.v) + " ₭" : " · sans prix"), 22)))),
+        h("td", { class: "n" }, h("strong", { text: kk(r.ev) + " ₭" }), r.miss ? h("small", { class: "muted", style: "display:block", text: r.miss + " sans prix" }) : null)))))) :
+      h("p", { class: "muted", text: "Aucun protecteur pour ce filtre." }));
+  d.addEventListener("toggle", () => { djP.open = d.open; });
+  return d;
+}
 function viewDonjons() {
   ensureKmDungeons();
   if (!KMD) return h("div", { class: "loading", text: "Chargement des donjons d'Orukam…" });
@@ -4289,7 +4316,8 @@ function viewDonjons() {
       h("div", { class: "filters" }, h("div", { class: "search" }, q), lv("min", "Niv. min"), lv("max", "Niv. max"), h("label", { class: "check" }, anCb, "En anomalie seulement")),
       h("p", { class: "note", text: "Valeur des drops attendus par passage (calcul de Kamamaster pour une équipe de 4), avec l'anomalie de ton choix (réglage général ou par donjon ; vide = anomalie actuelle d'Orukam), ajustée à ta prospection et au nombre de tes personnages, aux prix d'Orukam : relevé du groupe s'il existe, sinon cote Kamamaster (hors cotes douteuses). Règle la durée d'un passage dans chaque donjon pour un kamas/heure à ton rythme. Les âmes et ressources de quête ne sont pas comptées." })),
     rows.length ? h("div", { class: "djlist" }, rows.slice(0, djF.n).map(card)) : h("div", { class: "empty" }, h("strong", { text: "Aucun donjon ne correspond" }), h("span", { text: "Change la recherche ou les filtres." })),
-    rows.length > djF.n ? h("div", { class: "row", style: "justify-content:center" }, h("button", { type: "button", class: "btn", onclick: () => { djF.n += 40; render(); } }, "Afficher plus (" + (rows.length - djF.n) + " restants)")) : null);
+    rows.length > djF.n ? h("div", { class: "row", style: "justify-content:center" }, h("button", { type: "button", class: "btn", onclick: () => { djF.n += 40; render(); } }, "Afficher plus (" + (rows.length - djF.n) + " restants)")) : null,
+    protSection(nq));
 }
 
 // =====================================================================
