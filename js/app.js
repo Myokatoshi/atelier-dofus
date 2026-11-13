@@ -4510,35 +4510,39 @@ function lineChart(series, opt = {}) {
   return box;
 }
 // Courbe d'un objet sur la période : prix (relevés du groupe ou cote Kamamaster), min / max et dates
-function itemChart(ser, from, to) {
+function itemChart(ser, from, to, opt = {}) {
+  const unit = opt.unit ?? " ₭", fv = opt.fmt || kk;
   const W = 300, H = 130, L = 4, R = 4, T = 16, B = 32;
   const pts = ser.filter(([d]) => d >= from && d <= to);
   // Couleur de la tendance sur la période : vert si le prix monte, rouge s'il baisse
   const trend = pts.length > 1 ? Math.sign(pts[pts.length - 1][1] - pts[0][1]) : 0;
   const svg = s("svg", { class: "ichart" + (trend > 0 ? " up" : trend < 0 ? " down" : ""), viewBox: `0 0 ${W} ${H}`, "aria-hidden": "true" });
-  if (!pts.length) { svg.append(s("text", { class: "axis", x: W / 2, y: H / 2, "text-anchor": "middle" }, "pas de prix sur la période")); return svg; }
+  if (!pts.length) { svg.append(s("text", { class: "axis", x: W / 2, y: H / 2, "text-anchor": "middle" }, opt.empty || "pas de prix sur la période")); return svg; }
   const t0 = parseD(from).getTime(), t1 = parseD(to).getTime() || t0 + 1;
   const vals = pts.map(p => p[1]); let mn = Math.min(...vals), mx = Math.max(...vals);
   if (mx === mn) { mn *= .95; mx *= 1.05; if (mx === mn) { mn -= 1; mx += 1; } }
   const x = d => L + (parseD(d).getTime() - t0) / (t1 - t0 || 1) * (W - L - R), y = v => T + (1 - (v - mn) / (mx - mn)) * (H - T - B);
   for (const v of [mn, mx]) svg.append(s("line", { class: "grid", x1: L, x2: W - R, y1: y(v), y2: y(v) }));
-  svg.append(s("text", { class: "axis", x: L, y: y(mx) - 4 }, "max " + kk(Math.max(...vals))), s("text", { class: "axis", x: L, y: y(mn) + 12 }, "min " + kk(Math.min(...vals))));
+  svg.append(s("text", { class: "axis", x: L, y: y(mx) - 4 }, "max " + fv(Math.max(...vals))), s("text", { class: "axis", x: L, y: y(mn) + 12 }, "min " + fv(Math.min(...vals))));
   const dl = d => { const t = parseD(d); return t.getDate() + " " + MOIS[t.getMonth()]; };
   svg.append(s("text", { class: "axis", x: L, y: H - 3 }, dl(from)), s("text", { class: "axis", x: W - R, y: H - 3, "text-anchor": "end" }, dl(to)));
   const line = pts.map((p, i) => (i ? "L" : "M") + x(p[0]).toFixed(1) + " " + y(p[1]).toFixed(1)).join("");
   if (pts.length > 1) svg.append(s("path", { d: line + "L" + x(pts[pts.length - 1][0]).toFixed(1) + " " + (H - B) + "L" + x(pts[0][0]).toFixed(1) + " " + (H - B) + "Z", class: "ichart-area" }));
   svg.append(s("path", { d: line, class: "ichart-line" }));
-  for (const p of pts) { const c = s("circle", { cx: x(p[0]), cy: y(p[1]), r: pts.length > 20 ? 1.6 : 2.6, class: "ichart-dot" }); c.append(s("title", {}, dl(p[0]) + " : " + k(p[1]) + " ₭")); svg.append(c); }
+  for (const p of pts) { const c = s("circle", { cx: x(p[0]), cy: y(p[1]), r: pts.length > 20 ? 1.6 : 2.6, class: "ichart-dot" }); c.append(s("title", {}, dl(p[0]) + " : " + (opt.fmt ? fv(p[1]) : k(p[1])) + unit)); svg.append(c); }
   return svg;
 }
-let trF = { days: 30, fam: "runes", cat: "", q: "", sort: "hausse", n: 24, cmp: [], base: false };
+let trF = { days: 30, fam: "runes", cat: "", q: "", sort: "hausse", n: 24, cmp: [], base: false, cmpWhat: "prix" };
+const perDayOf = x => x.d1 != null ? x.d1 : x.d7 != null ? x.d7 / 7 : x.d30 != null ? x.d30 / 30 : null;
+const salesSeries = id => (VOL[id] || []).map(x => [x.day, perDayOf(x)]).filter(x => x[1] != null);
+const fmtQ = v => fmt.format(Math.round(v * 10) / 10);
 function viewTendances() {
   needKmh();
   if (!KMH) return h("div", { class: "loading", text: "Chargement de l'historique des prix…" });
   const last = KMH.dates[KMH.dates.length - 1] || today(), end = today() > last ? today() : last;
   const from = iso(new Date(parseD(end).getTime() - (trF.days - 1) * 864e5));
-  const famF = { runes: id => RUNE_TYPES.has(item(id)[2]), res: FAMILIES[1][3], cons: FAMILIES[2][3], fav: id => favs().includes(id) }[trF.fam] || (() => true);
-  const pool = cotedIds().filter(famF);
+  const famF = { runes: id => RUNE_TYPES.has(item(id)[2]), res: FAMILIES[1][3], cons: FAMILIES[2][3], fav: id => favs().includes(id), ventes: id => !!(VOL[id] || []).length }[trF.fam] || (() => true);
+  const pool = (trF.fam === "ventes" ? Object.keys(VOL).map(Number).filter(id => D.items[id]) : cotedIds()).filter(famF);
   const types = new Map(); for (const id of pool) types.set(item(id)[2], (types.get(item(id)[2]) || 0) + 1);
   if (trF.cat && !types.has(+trF.cat)) trF.cat = "";
   const nq = norm(trF.q || "");
@@ -4548,22 +4552,23 @@ function viewTendances() {
     return { id, ser, win, o, now, v };
   });
   const byName = (a, b) => item(a.id)[0].localeCompare(item(b.id)[0], "fr");
-  const SORT = { hausse: (a, b) => (b.v ?? -1e9) - (a.v ?? -1e9) || byName(a, b), baisse: (a, b) => (a.v ?? 1e9) - (b.v ?? 1e9) || byName(a, b), nom: byName, prix: (a, b) => (b.now ?? -1) - (a.now ?? -1) || byName(a, b) };
+  for (const r of list) { const ss = salesSeries(r.id).filter(([d]) => d >= from); r.sales = ss; r.sNow = ss.length ? ss[ss.length - 1][1] : null; r.sv = ss.length > 1 && ss[0][1] ? (r.sNow - ss[0][1]) / ss[0][1] * 100 : null; }
+  const SORT = { ventes: (a, b) => (b.sNow ?? -1) - (a.sNow ?? -1) || byName(a, b), vhausse: (a, b) => (b.sv ?? -1e9) - (a.sv ?? -1e9) || byName(a, b), hausse: (a, b) => (b.v ?? -1e9) - (a.v ?? -1e9) || byName(a, b), baisse: (a, b) => (a.v ?? 1e9) - (b.v ?? 1e9) || byName(a, b), nom: byName, prix: (a, b) => (b.now ?? -1) - (a.now ?? -1) || byName(a, b) };
   list.sort(SORT[trF.sort] || byName);
-  const famSeg = h("span", { class: "seg", role: "group", "aria-label": "Famille" }, [["runes", "Runes"], ["res", "Ressources"], ["cons", "Consommables"], ["fav", "Mes objets suivis"]].map(([v, l]) =>
+  const famSeg = h("span", { class: "seg", role: "group", "aria-label": "Famille" }, [["runes", "Runes"], ["res", "Ressources"], ["cons", "Consommables"], ["fav", "Mes objets suivis"], ["ventes", "Ventes relevées"]].map(([v, l]) =>
     h("button", { type: "button", "aria-pressed": trF.fam === v ? "true" : "false", onclick: () => { trF.fam = v; trF.cat = ""; trF.n = 24; render(); } }, l)));
   const daysSeg = h("span", { class: "seg", role: "group", "aria-label": "Période" }, [[7, "7 j"], [30, "30 j"], [90, "90 j"]].map(([v, l]) =>
     h("button", { type: "button", "aria-pressed": trF.days === v ? "true" : "false", onclick: () => { trF.days = v; render(); } }, l)));
   const catSel = h("select", { id: "tr-cat", "aria-label": "Catégorie" }, h("option", { value: "" }, "Toutes les catégories (" + pool.length + ")"),
     [...types.entries()].map(([t, n]) => [t, (D.types[t] || ["Autre"])[0], n]).sort((a, b) => a[1].localeCompare(b[1], "fr")).map(([t, nm, n]) => h("option", { value: t, selected: String(t) === String(trF.cat) }, nm + " (" + n + ")")));
   catSel.addEventListener("change", () => { trF.cat = catSel.value; trF.n = 24; render(); });
-  const sortSel = h("select", { id: "tr-sort", "aria-label": "Trier" }, [["hausse", "Plus fortes hausses"], ["baisse", "Plus fortes baisses"], ["prix", "Prix décroissant"], ["nom", "Nom"]].map(([v, l]) => h("option", { value: v, selected: trF.sort === v }, l)));
+  const sortSel = h("select", { id: "tr-sort", "aria-label": "Trier" }, [["hausse", "Plus fortes hausses"], ["baisse", "Plus fortes baisses"], ["prix", "Prix décroissant"], ["ventes", "Plus vendus (par jour)"], ["vhausse", "Ventes en plus forte hausse"], ["nom", "Nom"]].map(([v, l]) => h("option", { value: v, selected: trF.sort === v }, l)));
   sortSel.addEventListener("change", () => { trF.sort = sortSel.value; render(); });
   const q = h("input", { type: "search", id: "q-tr", placeholder: trF.fam === "runes" ? "Chercher une rune (Fo, Ine, Pa…)" : "Chercher un objet", value: trF.q, "aria-label": "Chercher" });
   q.addEventListener("input", () => { trF.q = q.value; trF.n = 24; clearTimeout(q._t); q._t = setTimeout(render, 250); });
   const toggleCmp = id => { const i = trF.cmp.indexOf(id); if (i >= 0) trF.cmp.splice(i, 1); else { if (trF.cmp.length >= 6) trF.cmp.shift(); trF.cmp.push(id); } render(); };
   // Comparaison : courbes superposées des objets cochés
-  const cmpSeries = trF.cmp.map((id, i) => { const pts = seriesOf(id).filter(([d]) => d >= from); const b0 = pts.length ? pts[0][1] : 1;
+  const cmpSeries = trF.cmp.map((id, i) => { const pts = (trF.cmpWhat === "ventes" ? salesSeries(id) : seriesOf(id)).filter(([d]) => d >= from); const b0 = pts.length ? pts[0][1] || 1 : 1;
     return { name: item(id)[0], color: MAP_COLORS[i], pts: trF.base ? pts.map(([d, v]) => [d, v / b0 * 100]) : pts }; });
   const shown = list.slice(0, trF.n);
   const histNote = "Historique des cotes d'Orukam depuis le " + parseD(KMH.dates[0] || today()).toLocaleDateString("fr-FR", { day: "numeric", month: "long" }) + " (" + KMH.dates.length + " jour" + (KMH.dates.length > 1 ? "s" : "") + ") : chaque courbe s'allonge d'un point par jour (jusqu'à 90). Les relevés du groupe y sont ajoutés le jour où ils sont faits.";
@@ -4575,10 +4580,12 @@ function viewTendances() {
       h("p", { class: "note", text: "Une courbe par objet : prix de chaque jour, minimum et maximum de la période, prix actuel et variation. Coche « Comparer » sur plusieurs objets pour superposer leurs courbes. Touche une carte pour la fiche complète. " + histNote })),
     trF.cmp.length ? h("section", { class: "panel" },
       h("div", { class: "row between" }, h("h2", { text: "Comparaison" }),
-        h("div", { class: "row", style: "gap:8px" }, h("span", { class: "seg", role: "group" }, [[false, "Prix"], [true, "Base 100"]].map(([v, l]) =>
+        h("div", { class: "row", style: "gap:8px" }, h("span", { class: "seg", role: "group" }, [[false, "Valeurs"], [true, "Base 100"]].map(([v, l]) =>
           h("button", { type: "button", "aria-pressed": trF.base === v ? "true" : "false", onclick: () => { trF.base = v; render(); } }, l))),
           h("button", { type: "button", class: "btn sm", onclick: () => { trF.cmp = []; render(); } }, "Vider"))),
-      lineChart(cmpSeries, { base: trF.base ? 100 : null, label: "Comparaison des prix", fmt: v => trF.base ? Math.round(v) : kk(v) })) : null,
+      h("span", { class: "seg", role: "group", "aria-label": "Comparer" }, [["prix", "Courbe des prix"], ["ventes", "Courbe des ventes"]].map(([v, l]) =>
+        h("button", { type: "button", "aria-pressed": trF.cmpWhat === v ? "true" : "false", onclick: () => { trF.cmpWhat = v; render(); } }, l))),
+      lineChart(cmpSeries, { base: trF.base ? 100 : null, label: trF.cmpWhat === "ventes" ? "Comparaison des ventes" : "Comparaison des prix", fmt: v => trF.base ? Math.round(v) : trF.cmpWhat === "ventes" ? fmtQ(v) : kk(v) })) : null,
     shown.length ? h("div", { class: "icards" }, shown.map(r => h("div", { class: "icard" },
       h("div", { class: "row between", style: "gap:6px;flex-wrap:nowrap" }, itemLink(r.id, typeName(r.id) + " · niv. " + item(r.id)[1], 28),
         h("label", { class: "check small", title: "Superposer dans la comparaison" }, (() => { const c = h("input", { type: "checkbox", checked: trF.cmp.includes(r.id) }); c.addEventListener("change", () => toggleCmp(r.id)); return c; })(), "Comparer")),
@@ -4586,7 +4593,12 @@ function viewTendances() {
         h("strong", { style: "color:var(--kamas);font-size:1.1rem", text: r.now != null ? k(r.now) + " ₭" : "—" }),
         h("span", { class: "chip " + (r.v == null ? "" : r.v > 0.5 ? "up" : r.v < -0.5 ? "down" : ""), text: r.v == null ? "pas assez d'historique" : (r.v > 0 ? "▲ +" : r.v < 0 ? "▼ " : "") + r.v.toFixed(1).replace(".", ",") + " % sur " + trF.days + " j" })),
       h("button", { type: "button", class: "ichart-btn", "aria-label": "Courbe complète de " + item(r.id)[0], onclick: () => openSheet(r.id) }, itemChart(r.ser, from, end)),
-      h("small", { class: "muted", text: r.o ? srcLabel(r.o) : "aucun prix" })))) :
+      h("small", { class: "muted", text: r.o ? srcLabel(r.o) : "aucun prix" }),
+      (VOL[r.id] || []).length ? h("div", { class: "sales" },
+        h("div", { class: "row between", style: "gap:6px" }, h("span", { class: "label", text: "Ventes par jour" }),
+          h("span", { class: "chip " + (r.sv == null ? "" : r.sv > 0.5 ? "up" : r.sv < -0.5 ? "down" : ""), text: (r.sNow != null ? fmtQ(r.sNow) + " / jour" : "—") + (r.sv != null ? " · " + (r.sv > 0 ? "▲ +" : r.sv < 0 ? "▼ " : "") + r.sv.toFixed(1).replace(".", ",") + " %" : "") })),
+        h("button", { type: "button", class: "ichart-btn", "aria-label": "Ventes de " + item(r.id)[0], onclick: () => openSheet(r.id) }, itemChart(r.sales, from, end, { unit: " / jour", fmt: fmtQ, empty: "pas de relevé de ventes sur la période" })),
+        h("small", { class: "muted", text: (() => { const v = volOf(r.id); return "dernier relevé : " + [["d1", "24 h"], ["d7", "7 j"], ["d30", "30 j"]].filter(([k2]) => v[k2] != null).map(([k2, l]) => fmt.format(v[k2]) + " en " + l).join(", "); })() })) : null))) :
       h("div", { class: "empty" }, h("strong", { text: trF.fam === "fav" && !favs().length ? "Tu ne suis encore aucun objet" : "Aucun objet ne correspond" }), h("span", { text: trF.fam === "fav" ? "Ajoute des objets suivis avec l'étoile dans Cotes HDV." : "Change la recherche, la famille ou la catégorie." })),
     list.length > shown.length ? h("div", { class: "row", style: "justify-content:center" }, h("button", { type: "button", class: "btn", onclick: () => { trF.n += 48; render(); } }, "Afficher plus (" + fmt.format(list.length - shown.length) + " restants)")) : null,
     (() => { const det = h("details", { class: "panel" }, h("summary", {}, h("strong", { text: "Indice global du marché (runes, ressources, consommables)" })));
