@@ -1631,7 +1631,11 @@ function sourcesEl(id, full, qty) {
   const parts = [];
   const bg = bagOf(id), inBags = bagsWith(id).filter(([k]) => D.items[k]);
   if (bg) parts.push(h("span", {}, h("span", { class: "chip kamas", text: "Contient " + fmt.format(bg[1]) + " × " + item(bg[0])[0] + (qty ? " · " + fmt.format(bg[1] * qty) + " pour " + fmt.format(qty) + " sac" + (qty > 1 ? "s" : "") : "") })));
-  if (inBags.length) parts.push(h("span", { class: "small muted", text: "Aussi en sac : " + inBags.map(([k, q]) => item(k)[0] + " (" + fmt.format(q) + " par sac" + (F.drops[k] && F.drops[k].find(d => d[3] && d[3] !== 41) ? ", lâché par : " + F.mons[F.drops[k].find(d => d[3] && d[3] !== 41)[0]][0] : "") + ")").join(", ") }));
+  if (inBags.length && !(hv && protOf(id).length)) parts.push(h("span", { class: "small muted", text: "Aussi en sac : " + inBags.map(([k, q]) => item(k)[0] + " (" + fmt.format(q) + " par sac" + (F.drops[k] && F.drops[k].find(d => d[3] && d[3] !== 41) ? ", lâché par : " + F.mons[F.drops[k].find(d => d[3] && d[3] !== 41)[0]][0] : "") + ")").join(", ") }));
+  if (hv) for (const p of protOf(id)) {
+    const bag = p.loot.find(([it]) => bagOf(it) && bagOf(it)[0] === +id), rare = p.loot.filter(([it]) => !bagOf(it));
+    parts.push(h("span", { class: "chip job", style: "white-space:normal", text: "Protecteur · " + p.name + " (apparaît " + harvVerb(p.job) + " " + item(id)[0] + ")" + (bag ? " : " + item(bag[0])[0] + " = " + bagOf(bag[0])[1] + " " + item(id)[0] + (qty ? " · " + fmt.format(Math.ceil(qty / bagOf(bag[0])[1])) + " sac" + (Math.ceil(qty / bagOf(bag[0])[1]) > 1 ? "s" : "") + " pour " + fmt.format(qty) : "") : "") + (rare.length ? " · rare : " + rare.map(([it, a, b]) => item(it)[0] + " " + pctTxt(a, b)).join(", ") : "") }));
+  }
   if (hv) parts.push(h("div", { style: "display:grid;gap:4px" },
     h("span", {}, h("span", { class: "chip job", text: "Récolte · " + jobName(hv[0]) + " niv. " + hv[1] }), " ", hv[2].length ? h("span", { class: "small muted", text: hv[2].length + " zone" + (hv[2].length > 1 ? "s" : "") }) : null),
     full ? h("div", { class: "chips" }, hv[2].slice().sort((a, b) => (F.subs[a]?.[2] || 0) - (F.subs[b]?.[2] || 0)).map(sid => h("span", { class: "chip", text: subLabel(sid) + " · niv. " + (F.subs[sid]?.[2] || "?") }))) : null));
@@ -1737,6 +1741,10 @@ function viewFarm() {
             h("div", { class: "row between" }, h("strong", { text: subLabel(z.sid) }), h("span", { class: "chips" }, h("span", { class: "chip", text: "niv. " + sb[2] }), anomalyOf(z.sid) ? h("span", { class: "chip kamas", text: "Anomalie +" + anomalyOf(z.sid) + " %" }) : null, sb[3] >= 0 ? h("span", { class: "chip warn", text: "Donjon" }) : null, h("span", { class: "chip job", text: z.res.length + " ressource" + (z.res.length > 1 ? "s" : "") }))),
             h("div", { class: "chips" }, z.res.map(([rid, how]) => h("button", { type: "button", class: "chip", onclick: () => openSheet(rid), title: how }, item(rid)[0] + " · " + how)))); })) :
             h("p", { class: "muted", text: "Choisis « Farmer » sur au moins une ressource : les zones qui en regroupent le plus s'afficheront ici." })),
+        (() => { const ps = farmed.flatMap(r => F.harvest[r.id] ? protOf(r.id).map(p => [r.id, p]) : []);
+          return ps.length ? h("section", { class: "panel", id: "farm-prot" }, h("h2", { text: "Protecteurs à croiser" }),
+            h("p", { class: "note", text: "En récoltant ces ressources, leur protecteur peut apparaître : battu, il lâche un sac de 50 ressources et parfois une ressource rare." }),
+            h("div", { style: "display:grid;gap:8px" }, ps.map(([rid, p]) => protCard(p, rid, () => { mapF.sel = [rid]; saveMapSel(); location.hash = "#carte"; })))) : null; })(),
         djs.size ? h("section", { class: "panel" }, h("h2", { text: "Donjons utiles" }),
           h("div", { style: "display:grid;gap:8px" }, [...djs.entries()].sort((a, b) => b[1].size - a[1].size).map(([dj, set]) => h("div", { class: "row between" },
             h("span", {}, h("strong", { text: djName(dj) }), h("span", { class: "muted small", text: " · niv. conseillé " + (F.dungeons[dj]?.[1] || "?") })),
