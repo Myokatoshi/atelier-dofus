@@ -683,6 +683,7 @@ function find(q, opts = {}) {
   const out = [];
   for (const e of INDEX) {
     if (opts.craftOnly && !e.craft) continue;
+    if (opts.only && !opts.only.has(e.id)) continue;
     if (opts.job != null && !(D.recipes[e.id] && D.recipes[e.id][0] === opts.job) && !(opts.harvest && harvJob(e.id) === opts.job)) continue;
     if (opts.type && e.type !== opts.type) continue;
     if (opts.sup != null && (D.types[e.type] || [0, 0])[1] !== opts.sup) continue;
@@ -2825,9 +2826,17 @@ const ALERT_KIND = {
   buy: ["Acheter sous", "quand la moyenne basse passe sous"],
   sell: ["Vendre au-dessus", "quand la moyenne haute dépasse"],
   craft: ["Craft rentable", "quand la marge nette par craft atteint"],
+  prot: ["Butin de protecteur", "quand la valeur moyenne du butin par combat du protecteur de cette ressource atteint"],
 };
+// Alerte « butin de protecteur » : a.item = ressource récoltée qui fait apparaître le protecteur
+const protAlertRow = rid => protRows().find(r => r.rid === +rid) || null;
 // État d'une alerte d'après le dernier prix connu du groupe
 function alertState(a, C) {
+  if (a.kind === "prot") {
+    const r = protAlertRow(a.item);
+    if (!r) return { ok: false, cur: null, o: null, r };
+    return { ok: r.ev >= a.price, cur: r.ev, o: null, r, key: "p:" + Math.round(r.ev) };
+  }
   const o = priceAt(a.item);
   if (a.kind === "craft") {
     if (!recipe(a.item)) return { ok: false, cur: null, o };
@@ -2840,6 +2849,7 @@ function alertState(a, C) {
 }
 function alertText(a, st) {
   const nm = item(a.item)[0];
+  if (a.kind === "prot") return (st.r ? st.r.p.name : "Protecteur de " + nm) + " : butin ≈ " + kk(st.cur) + " par combat (seuil " + kk(a.price) + ")";
   if (a.kind === "craft") return nm + " : marge de " + kk(st.cur) + " par craft (seuil " + kk(a.price) + ")";
   return nm + (a.kind === "buy" ? " à " + kk(st.cur) + ", sous ton prix d'achat de " : " à " + kk(st.cur) + ", au-dessus de ton prix de vente de ") + kk(a.price);
 }
@@ -2905,7 +2915,8 @@ function viewAlertes() {
   let hint = null, ph = "ex. 1 200";
   if (AF.item) {
     const st = alertState({ kind: AF.kind, item: AF.item, price: 0 }, C);
-    if (AF.kind === "craft") { hint = !recipe(AF.item) ? "Cet objet ne se fabrique pas." : st.cur == null ? "Marge inconnue : il manque des prix." : "Marge actuelle : " + k(st.cur) + " ₭ par craft"; ph = "ex. 5k"; }
+    if (AF.kind === "prot") { const r = protAlertRow(AF.item); hint = r ? r.p.name + " · butin actuel ≈ " + kk(r.ev) + " ₭ par combat" : "Pas de protecteur pour cette ressource."; ph = r ? k(Math.round(r.ev * 1.3)) : ph; }
+    else if (AF.kind === "craft") { hint = !recipe(AF.item) ? "Cet objet ne se fabrique pas." : st.cur == null ? "Marge inconnue : il manque des prix." : "Marge actuelle : " + k(st.cur) + " ₭ par craft"; ph = "ex. 5k"; }
     else if (st.o) { hint = "Dernier relevé : " + range(st.o.lo, st.o.hi) + " ₭ (" + ago(st.o.d) + ")"; ph = k(AF.kind === "buy" ? st.o.lo * .9 : st.o.hi * 1.1); }
     else hint = "Pas encore de prix relevé pour cet objet.";
   }
@@ -2915,6 +2926,7 @@ function viewAlertes() {
     const p = parseKamas(AF.price);
     if (!AF.item) { toast("Choisis d'abord un objet"); document.getElementById("q-alert")?.focus(); return; }
     if (AF.kind === "craft" && !recipe(AF.item)) { toast("Cet objet ne se fabrique pas"); return; }
+    if (AF.kind === "prot" && !protAlertRow(AF.item)) { toast("Pas de protecteur pour cette ressource"); return; }
     if (p == null) { priceIn.focus(); toast("Indique un seuil en kamas"); return; }
     S.alerts = [...(S.alerts || []), { id: uuid(), kind: AF.kind, item: AF.item, price: p, at: Date.now(), notified: null }];
     persist("plan"); toast("Alerte créée : " + ALERT_KIND[AF.kind][0].toLowerCase() + " " + kk(p) + " pour " + item(AF.item)[0]);
@@ -2931,8 +2943,8 @@ function viewAlertes() {
             h("button", { type: "button", "aria-pressed": AF.kind === v ? "true" : "false", onclick: () => { AF.kind = v; AF.price = ""; render(); } }, l)))),
         h("p", { class: "note", text: "Préviens-moi " + ALERT_KIND[AF.kind][1] + " ce seuil. Les alertes utilisent les prix relevés par tout le groupe." }),
         AF.item ? h("div", { class: "row between jf-item" }, itemLink(AF.item, typeName(AF.item), 40), h("button", { type: "button", class: "btn sm", onclick: () => { AF.item = null; render(); } }, "Changer")) :
-          searchBox(AF.kind === "craft" ? "Quel objet veux-tu crafter ?" : "Quel objet surveiller ?", { craftOnly: AF.kind === "craft" }, id => { AF.item = id; render(); setTimeout(() => document.getElementById("af-price")?.focus(), 30); }, "q-alert"),
-        h("label", { class: "jf-field" }, h("span", { text: AF.kind === "craft" ? "Marge minimale par craft (kamas)" : "Prix à l'unité (kamas)" }), priceIn, hint ? h("small", { class: "jf-unit", text: hint }) : null),
+          searchBox(AF.kind === "craft" ? "Quel objet veux-tu crafter ?" : AF.kind === "prot" ? "Quelle ressource récoltes-tu ? (son protecteur)" : "Quel objet surveiller ?", { craftOnly: AF.kind === "craft", only: AF.kind === "prot" ? new Set(protRows().map(r => r.rid)) : null }, id => { AF.item = id; render(); setTimeout(() => document.getElementById("af-price")?.focus(), 30); }, "q-alert"),
+        h("label", { class: "jf-field" }, h("span", { text: AF.kind === "craft" ? "Marge minimale par craft (kamas)" : AF.kind === "prot" ? "Butin minimal par combat (kamas)" : "Prix à l'unité (kamas)" }), priceIn, hint ? h("small", { class: "jf-unit", text: hint }) : null),
         h("button", { type: "button", class: "btn primary big", onclick: create }, "Créer l'alerte")),
       h("section", { class: "panel" },
         h("h2", { text: "Notifications" }),
@@ -2951,12 +2963,14 @@ function viewAlertes() {
         h("tbody", {}, list.map(({ a, st }) => {
           // Variation de prix qu'il reste pour atteindre le seuil
           const gap = st.cur != null && st.cur > 0 && a.kind !== "craft" ? Math.round((a.price - st.cur) / st.cur * 100) : null;
-          const act = !st.ok ? null : a.kind === "craft"
+          const act = !st.ok ? null : a.kind === "prot"
+            ? h("button", { type: "button", class: "btn sm", onclick: () => { mapF.sel = [+a.item]; saveMapSel(); location.hash = "#carte"; } }, "Voir où")
+            : a.kind === "craft"
             ? h("button", { type: "button", class: "btn sm", onclick: () => { addTarget(a.item); toast(item(a.item)[0] + " ajouté au plan"); } }, "+ Plan")
             : h("button", { type: "button", class: "btn sm", onclick: () => { JF = { ...JF, kind: a.kind === "buy" ? "achat" : "vente", item: a.item }; location.hash = "#journal"; } }, a.kind === "buy" ? "J'ai acheté" : "J'ai vendu");
           return h("tr", {},
-            h("td", {}, itemLink(a.item, typeName(a.item), 28)),
-            h("td", { class: "small", text: ALERT_KIND[a.kind][0] + " " + kk(a.price) }),
+            h("td", {}, itemLink(a.item, a.kind === "prot" ? (st.r ? st.r.p.name : "protecteur") : typeName(a.item), 28)),
+            h("td", { class: "small", text: ALERT_KIND[a.kind][0] + " " + kk(a.price) + (a.kind === "prot" ? " / combat" : "") }),
             h("td", { class: "n", text: st.cur == null ? "—" : kk(st.cur) }),
             h("td", {}, st.ok ? h("span", { class: "verdict good", text: "Déclenchée" + (st.o ? " · " + ago(st.o.d) : "") }) :
               h("span", { class: "verdict none", text: st.cur == null ? "Pas de prix" : gap != null ? "Il manque " + (gap > 0 ? "+" : "") + gap + " %" : "En attente" })),
@@ -4313,7 +4327,9 @@ function protSection(nq) {
       h("thead", {}, h("tr", {}, h("th", { text: "Protecteur" }), h("th", { text: "Butin" }), h("th", { class: "n", text: "Par combat" }))),
       h("tbody", {}, rows.map(r => h("tr", {},
         h("td", {}, h("strong", { text: r.p.name }), h("small", { class: "muted", style: "display:block", text: "niv. " + (r.p.lo === r.p.hi ? r.p.lo : r.p.lo + "–" + r.p.hi) + " · apparaît " + harvVerb(r.p.job) + " " + item(r.rid)[0] + " (" + jobName(r.p.job) + " niv. " + F.harvest[r.rid][1] + ")" }),
-          h("button", { type: "button", class: "link small", onclick: () => { mapF.sel = [r.rid]; saveMapSel(); location.hash = "#carte"; } }, "Voir où sur la carte")),
+          h("div", { class: "row", style: "gap:10px" },
+            h("button", { type: "button", class: "link small", onclick: () => { mapF.sel = [r.rid]; saveMapSel(); location.hash = "#carte"; } }, "Voir où sur la carte"),
+            h("button", { type: "button", class: "link small", onclick: () => { AF = { kind: "prot", item: r.rid, price: "" }; location.hash = "#alertes"; } }, "🔔 Alerte"))),
         h("td", {}, r.loot.map(l => h("div", { class: "small" }, itemLink(l.it, pctTxt(l.a, l.b) + (l.v != null ? " · ≈ " + kk(l.v) + " ₭" : " · sans prix"), 22)))),
         h("td", { class: "n" }, h("strong", { text: kk(r.ev) + " ₭" }), r.miss ? h("small", { class: "muted", style: "display:block", text: r.miss + " sans prix" }) : null)))))) :
       h("p", { class: "muted", text: "Aucun protecteur pour ce filtre." }));

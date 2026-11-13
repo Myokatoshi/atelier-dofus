@@ -14,6 +14,12 @@ async function core() {
   return CORE;
 }
 
+let FARM: any = null, FARM_AT = 0;
+async function farm() {
+  if (!FARM || Date.now() - FARM_AT > 6 * 3600e3) { FARM = await (await fetch(SITE + "data/farm.json")).json(); FARM_AT = Date.now(); }
+  return FARM;
+}
+
 Deno.serve(async () => {
   const pub = Deno.env.get("VAPID_PUBLIC_KEY"), priv = Deno.env.get("VAPID_PRIVATE_KEY");
   if (!pub || !priv) return Response.json({ error: "Clés VAPID manquantes dans les secrets" }, { status: 500 });
@@ -37,7 +43,21 @@ Deno.serve(async () => {
   // Objets dont il faut le prix : objets des alertes + ingrédients (récursifs) des alertes de craft
   const need = new Set<number>();
   const addRec = (id: number, depth = 0) => { need.add(id); const r = recipe(id); if (r && depth < 6) for (const [ing] of r[1]) if (!need.has(ing)) addRec(ing, depth + 1); };
-  for (const u of users) for (const a of u.plan.alerts) a.kind === "craft" ? addRec(+a.item) : need.add(+a.item);
+  // Alertes « butin de protecteur » (a.item = ressource récoltée) : prix du butin de ses protecteurs (sacs : contenu)
+  const hasProt = users.some(u => u.plan.alerts.some((a: any) => a.kind === "prot"));
+  const F = hasProt ? await farm() : null;
+  const protLoot = (rid: number) => {
+    if (!F) return [];
+    const mids = new Set(Object.entries(F.mons).filter(([, m]: any) => m[5] === rid).map(([k]) => +k));
+    const out: [number, number, number][] = [];
+    for (const [it, ds] of Object.entries(F.drops) as any) for (const d of ds) if (mids.has(d[0]) && d[3]) out.push([+it, d[1], d[2]]);
+    return out;
+  };
+  for (const u of users) for (const a of u.plan.alerts) {
+    if (a.kind === "craft") addRec(+a.item);
+    else if (a.kind === "prot") { for (const [it] of protLoot(+a.item)) { need.add(it); const b = F.bags?.[it]; if (b) need.add(b[0]); } }
+    else need.add(+a.item);
+  }
 
   // Prix du groupe : dernier relevé de chaque objet (jour le plus récent, puis mise à jour la plus récente)
   const group = new Map<number, Obs & { t: string }>();
@@ -60,6 +80,26 @@ Deno.serve(async () => {
     return g || km; // le relevé du groupe passe toujours avant Kamamaster
   };
   const nowPrice = (o: Obs | null) => (o ? (o.cur ?? (o.lo + o.hi) / 2) : null);
+  // Comme dans l'appli : une cote Kamamaster de ressource récoltable plus de 15 fois au-dessus des ressources
+  // du même métier de niveau proche (± 40, au moins 3) est « à vérifier » et n'est pas comptée
+  const oddHarv = (id: number) => {
+    if (!F || !KM?.prices || group.has(id) || !F.harvest[id] || !KM.prices[id]) return false;
+    const [j, lv] = F.harvest[id];
+    const peers = Object.entries(F.harvest).filter(([k, v]: any) => +k !== id && v[0] === j && Math.abs(v[1] - lv) <= 40 && KM.prices[k]).map(([k]) => KM.prices[k]).sort((x: number, y: number) => x - y);
+    return peers.length >= 3 && KM.prices[id] > 15 * peers[peers.length >> 1];
+  };
+  const resale = (id: number) => oddHarv(id) ? null : nowPrice(priceAt(id));
+  const protValue = (rid: number, pp: number) => {
+    let v = 0, n = 0;
+    for (const [it, a, b] of protLoot(rid)) {
+      const bag = F.bags?.[it]; const own = resale(it);
+      const p = own != null ? own : bag ? (resale(bag[0]) != null ? resale(bag[0])! * bag[1] : null) : null;
+      if (p == null) continue;
+      const ch = b >= 100 ? 1 : Math.min(1, (a + b) / 2 / 100 * pp / 100);
+      v += p * ch; n++;
+    }
+    return n ? v : null;
+  };
 
   // Coût de craft en fourchette : pour chaque ingrédient, la voie la moins chère (acheter ou fabriquer)
   const best = new Map<number, { lo: number; hi: number; missing: number }>();
@@ -85,7 +125,12 @@ Deno.serve(async () => {
     for (const a of u.plan.alerts) {
       const id = +a.item, o = priceAt(id);
       let ok = false, key: string | null = null, msg = "";
-      if (a.kind === "craft") {
+      if (a.kind === "prot") {
+        const v = protValue(id, Math.max(1, +(u.plan.settings?.pp || 100)));
+        ok = v != null && v >= a.price; key = v == null ? null : "p:" + Math.round(v);
+        const mon = F ? (Object.values(F.mons) as any[]).find(m => m[5] === id) : null;
+        msg = `${mon ? mon[0] : "Protecteur de " + name(id)} : butin ≈ ${fmt.format(Math.round(v ?? 0))} ₭ par combat (seuil ${fmt.format(a.price)} ₭)`;
+      } else if (a.kind === "craft") {
         if (!recipe(id)) continue;
         const c = craftOf(id);
         const m = !o || c.missing ? null : ((o.lo + o.hi) / 2) * (1 - tax) - (c.lo + c.hi) / 2;
