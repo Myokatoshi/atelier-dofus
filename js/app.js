@@ -1150,6 +1150,7 @@ function viewAccueil() {
           stale.length ? h("div", { class: "tablewrap" }, h("table", {}, h("tbody", {}, stale.slice(0, 6).map(x => h("tr", {},
             h("td", {}, itemLink(x.id, range(x.o.lo, x.o.hi) + " ₭")), h("td", {}, h("span", { class: "chip warn", text: ago(x.o.d) }))))))) :
             h("p", { class: "muted", text: "Tous tes relevés datent de moins d'une semaine." })),
+        protTopPanel(5, "accueil"),
         SH ? h("section", { class: "panel" },
           h("h2", { text: "Dernières mises à jour du groupe" }),
           recent.length ? h("div", { class: "tablewrap" }, h("table", {}, h("tbody", {}, recent.slice(0, 8).map(r => h("tr", {},
@@ -4190,6 +4191,7 @@ function viewServeur() {
         anom.length ? h("div", { style: "display:grid;gap:6px" }, anom.map(([sid, b]) => h("div", { class: "row between" },
           h("span", { text: F ? subLabel(+sid).replace(/ · anomalie.*$/, "") : "Zone " + sid }), h("span", { class: "chip kamas", text: "+" + b + " %" })))) :
           h("p", { class: "muted", text: "Aucune zone en anomalie en ce moment." }))),
+    protTopPanel(6, "serveur"),
     h("section", { class: "panel" },
       h("h2", { text: "Autres outils pour Orukam" }),
       h("div", { class: "links-grid" },
@@ -4265,14 +4267,31 @@ function djCalc(d) {
 }
 // Protecteurs des ressources dans l'onglet Donjons : butin attendu par combat (sac à 100 %, ressource rare selon la prospection)
 let djP = { job: 0, open: false };
-function protSection(nq) {
-  if (!F) { ensureFarm().then(() => { if (view === "donjons") render(); }); return null; }
-  const all = Object.keys(F.harvest).map(Number).flatMap(rid => protOf(rid).map(p => ({ rid, p })));
-  const jobs = [...new Set(all.map(x => x.p.job))].sort((a, b) => jobName(a).localeCompare(jobName(b), "fr"));
-  const rows = all.filter(x => (!djP.job || x.p.job === djP.job) && (!nq || norm(x.p.name).includes(nq) || norm(item(x.rid)[0]).includes(nq))).map(x => {
+// Tous les protecteurs avec leur butin et sa valeur attendue par combat, du plus rentable au moins rentable
+function protRows() {
+  if (!F) return [];
+  return Object.keys(F.harvest).map(Number).flatMap(rid => protOf(rid).map(p => ({ rid, p }))).map(x => {
     const loot = x.p.loot.map(([it, a, b]) => { const ch = b >= 100 ? 1 : dropChance((a + b) / 2), v = bagOf(it) ? bagValue(it) : resale(it); return { it, a, b, ch, v, ev: v == null ? null : v * ch }; });
     return { ...x, loot, ev: loot.reduce((t, l) => t + (l.ev || 0), 0), miss: loot.filter(l => l.v == null).length };
   }).sort((a, b) => b.ev - a.ev);
+}
+// Encadré « Protecteurs les plus rentables » (accueil, vue d'ensemble Orukam)
+function protTopPanel(n, back) {
+  if (!F) { ensureFarm().then(() => { if (view === back) render(); }); return null; }
+  const top = protRows().filter(r => r.ev > 0).slice(0, n);
+  return h("section", { class: "panel", id: "prot-top" },
+    h("div", { class: "row between" }, h("h2", { text: "Protecteurs les plus rentables" }), h("a", { href: "#donjons", class: "small", onclick: () => { djP.open = true; setTimeout(() => document.getElementById("dj-prot")?.scrollIntoView({ block: "start" }), 300); }, text: "Tous les protecteurs" })),
+    top.length ? h("div", { class: "tablewrap" }, h("table", {}, h("tbody", {}, top.map(r => h("tr", {},
+      h("td", {}, h("strong", { text: r.p.name }), h("small", { class: "muted", style: "display:block", text: "en " + harvVerb(r.p.job).replace("en ", "") + " " + item(r.rid)[0] + " · " + jobName(r.p.job) + " niv. " + F.harvest[r.rid][1] + " · " + r.loot.map(l => item(l.it)[0]).join(", ") })),
+      h("td", { class: "n" }, h("strong", { style: "color:var(--kamas)", text: kk(r.ev) + " ₭" }), h("small", { class: "muted", style: "display:block", text: "par combat" }))))))) :
+      h("p", { class: "muted", text: "Aucun butin de protecteur chiffré pour l'instant." }),
+    h("p", { class: "note", text: "Un protecteur apparaît parfois pendant la récolte de sa ressource. Valeur moyenne de son butin (sac de 50 ressources + ressource rare selon ta prospection), aux prix actuels." }));
+}
+function protSection(nq) {
+  if (!F) { ensureFarm().then(() => { if (view === "donjons") render(); }); return null; }
+  const all = protRows();
+  const jobs = [...new Set(all.map(x => x.p.job))].sort((a, b) => jobName(a).localeCompare(jobName(b), "fr"));
+  const rows = all.filter(x => (!djP.job || x.p.job === djP.job) && (!nq || norm(x.p.name).includes(nq) || norm(item(x.rid)[0]).includes(nq)));
   const seg = h("span", { class: "seg wrap", role: "group", "aria-label": "Métier" }, [[0, "Tous"], ...jobs.map(j => [j, jobName(j)])].map(([v, l]) =>
     h("button", { type: "button", "aria-pressed": djP.job === v ? "true" : "false", onclick: () => { djP.job = v; djP.open = true; render(); } }, l)));
   const d = h("details", { class: "panel dj", id: "dj-prot", open: djP.open },
