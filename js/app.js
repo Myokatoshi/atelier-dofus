@@ -5258,6 +5258,8 @@ fetch(PATH.core).then(r => r.json()).then(d => {
   D = d; buildIndex(); buildTabs();
   loadKm();
   document.getElementById("ver").textContent = "Dofus " + d.v;
+  // Version de l'appli affichée en bas de page (nom du cache du service worker : atelier-vNN)
+  try { caches.keys().then(ks => { const v = ks.map(x => /^atelier-v(\d+)$/.exec(x)).filter(Boolean).map(m => +m[1]).sort((a, b) => b - a)[0]; if (v) document.getElementById("ver").textContent = "Dofus " + d.v + " · appli v" + v; }); } catch {}
   route();
   connect();
   initSample();

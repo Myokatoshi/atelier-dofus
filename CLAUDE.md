@@ -2,7 +2,7 @@
 
 - Application web statique (PWA), sans build : `index.html`, `css/app.css`, `js/app.js`, `sw.js`.
 - Mise en ligne : chaque push sur `main` est recopié sur `gh-pages` (workflow « Mise en ligne »), publié sur https://myokatoshi.github.io/atelier-dofus/.
-- À chaque changement de l'appli, incrémenter `VERSION` dans `sw.js` (sinon les utilisateurs gardent l'ancienne version en cache).
+- À chaque changement de l'appli, incrémenter `VERSION` dans `sw.js` (sinon les utilisateurs gardent l'ancienne version en cache). L'appli installée vérifie les mises à jour au démarrage, à chaque retour sur l'appli et toutes les 30 min (`index.html`), puis se recharge seule ; le numéro de version (« appli vNN », lu dans le nom du cache) est affiché en bas de page.
 - Commits signés avec l'adresse anonyme GitHub (configurée dans `.git/config` du dépôt), jamais l'adresse e-mail personnelle.
 - L'utilisateur ne veut pas gérer la technique : faire soi-même tout ce qui est possible, ne lui demander une action que si elle est nouvelle et indispensable.
 - L'interface est uniquement en thème sombre. Couleurs de tendance partout : vert (`--good`, `.pos`, `.chip.up`) pour une hausse, rouge (`--bad`, `.neg`, `.chip.down`) pour une baisse, courbes comprises (`.ichart.up/.down`, `.spark.up/.down`).

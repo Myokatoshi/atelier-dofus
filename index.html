@@ -55,7 +55,13 @@
     const hadController = !!navigator.serviceWorker.controller;
     let reloaded = false;
     navigator.serviceWorker.addEventListener("controllerchange", () => { if (hadController && !reloaded) { reloaded = true; location.reload(); } });
-    addEventListener("load", () => navigator.serviceWorker.register("sw.js", { updateViaCache: "none" }).then(r => r.update()).catch(() => {}));
+    // Vérifie les mises à jour au démarrage, à chaque retour sur l'appli (une appli installée reste souvent ouverte
+    // en arrière-plan sans jamais redémarrer) et toutes les 30 minutes
+    addEventListener("load", () => navigator.serviceWorker.register("sw.js", { updateViaCache: "none" }).then(r => {
+      r.update();
+      document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") r.update().catch(() => {}); });
+      setInterval(() => r.update().catch(() => {}), 30 * 60e3);
+    }).catch(() => {}));
   }
 </script>
 </body>
