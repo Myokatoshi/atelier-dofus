@@ -1141,24 +1141,34 @@ function profitRows() {
 }
 
 function viewAccueil() {
-  ensureXpRatios(); // calendrier complet de l'Almanax (événements datés, bonus de métier)
+  ensureXpRatios(); needKmh(); ensureKmDungeons();
   const rows = profitRows().filter(r => r.m != null);
-  const best = rows.filter(r => r.m > 0).sort((a, b) => b.m - a.m).slice(0, 6);
-  const stale = Object.keys(prices()).map(Number).map(id => ({ id, o: priceAt(id) })).filter(x => x.o && ageDays(x.o.d) >= 7).sort((a, b) => a.o.d < b.o.d ? -1 : 1);
+  const best = rows.filter(r => r.m > 0).sort((a, b) => b.m - a.m).slice(0, 5);
+  const stale = Object.keys(prices()).map(Number).map(id => ({ id, o: priceAt(id) })).filter(x => x.o && ageDays(x.o.d) >= 7);
   const stockVal = Object.entries(S.stock).reduce((t, [id, q]) => { const o = priceAt(id); return t + (o ? midOf(o) * q : 0); }, 0);
   const recent = [];
   if (SH) for (const [id, by] of Object.entries(RAW)) for (const [u, list] of Object.entries(by)) for (const o of (Array.isArray(list) ? list : [])) recent.push({ id: +id, u, o });
   recent.sort((a, b) => a.o.d < b.o.d ? 1 : a.o.d > b.o.d ? -1 : 0);
   const fired = triggeredAlerts();
+  // Hausses et baisses (historique d'Orukam + relevés du groupe)
+  const ids = cotedIds(), span = histDays(), win = Math.max(1, Math.min(7, span));
+  const movers = span >= 1 ? ids.map(id => { const ser = seriesOf(id), last = ser[ser.length - 1]; return { id, v: varOf(ser, win), p: last ? last[1] : 0 }; }).filter(r => r.v != null && r.p >= 500 && Math.abs(r.v) >= 1) : [];
+  const ups = movers.filter(r => r.v > 0).sort((a, b) => b.v - a.v).slice(0, 6), downs = movers.filter(r => r.v < 0).sort((a, b) => a.v - b.v).slice(0, 6);
+  const moverList = (list, empty) => list.length ? h("div", { class: "tablewrap" }, h("table", {}, h("tbody", {}, list.map(r => h("tr", {},
+    h("td", {}, itemLink(r.id, typeName(r.id), 26)), h("td", { class: "n", text: k(r.p) + " ₭" }), varCell(r.v)))))) : h("p", { class: "muted", text: empty });
+  const djs = KMD && KMD.list.length ? KMD.list.map(d => ({ d, c: djCalc(d) })).sort((a, b) => b.c.kh - a.c.kh).slice(0, 5) : [];
+  const anom = KM ? Object.entries(KM.anomalies || {}).sort((a, b) => b[1] - a[1]) : [];
+  const susp = kmSuspects().length, toTake = typeof openOrdersForMe === "function" ? openOrdersForMe().length : 0;
+  const tile = (href, label, v, sub, cls, onclick) => h("a", { class: "tile" + (cls ? " " + cls : ""), href, style: "text-decoration:none;color:inherit", onclick }, h("span", { class: "label", text: label }), h("span", { class: "v", text: v }), h("span", { class: "small muted", text: sub }));
   return h("div", { class: "stack" },
     fired.length ? h("section", { class: "panel alert-panel" },
       h("div", { class: "row between" }, h("h2", { text: "🔔 " + fired.length + " alerte" + (fired.length > 1 ? "s" : "") + " déclenchée" + (fired.length > 1 ? "s" : "") }), h("a", { href: "#alertes", class: "small", text: "Toutes les alertes" })),
       h("div", { style: "display:grid;gap:6px" }, fired.slice(0, 5).map(({ a, st }) => h("div", { class: "row between" }, itemLink(a.item, alertText(a, st), 28), h("span", { class: "verdict good", text: ALERT_KIND[a.kind][0] }))))) : null,
     h("div", { class: "tiles" },
-      h("div", { class: "tile kamas" }, h("span", { class: "label", text: "Valeur du stock" }), h("span", { class: "v", text: kk(stockVal) }), h("span", { class: "small muted", text: Object.keys(S.stock).length + " objets, au prix moyen" })),
-      h("div", { class: "tile" }, h("span", { class: "label", text: "Prix suivis" }), h("span", { class: "v", text: Object.keys(prices()).length }), h("span", { class: "small muted", text: Object.values(prices()).reduce((t, o) => t + o.reduce((u, x) => u + (x.n || 1), 0), 0) + " relevés" + (SH ? " du groupe" : "") })),
-      h("div", { class: "tile" }, h("span", { class: "label", text: "Crafts rentables" }), h("span", { class: "v", text: rows.filter(r => r.m > 0).length }), h("span", { class: "small muted", text: "sur " + rows.length + " chiffrés" })),
-      h("div", { class: "tile" }, h("span", { class: "label", text: "À revérifier" }), h("span", { class: "v", text: stale.length }), h("span", { class: "small muted", text: "relevés de plus de 7 jours" }))),
+      tile("#stock", "Valeur du stock", kk(stockVal), Object.keys(S.stock).length + " objets en inventaire", "kamas"),
+      tile("#rentabilite", "Crafts rentables", String(rows.filter(r => r.m > 0).length), "sur " + rows.length + " chiffrés"),
+      tile("#prix", "Prix à revérifier", String(stale.length + susp), stale.length + " relevé" + (stale.length > 1 ? "s" : "") + " de plus de 7 j · " + susp + " cote" + (susp > 1 ? "s" : "") + " suspecte" + (susp > 1 ? "s" : ""), stale.length + susp ? "warn" : "", () => { S.settings.prixSort = "age"; if (susp && !stale.length) pxF.susp = true; }),
+      tile("#groupe", "Commandes à prendre", String(toTake), "demandes des membres du groupe")),
     h("div", { class: "grid2b" },
       almanaxCard(),
       h("div", { class: "stack" },
@@ -1167,20 +1177,25 @@ function viewAccueil() {
           best.length ? h("div", { class: "tablewrap" }, h("table", {}, h("tbody", {}, best.map(r => h("tr", {},
             h("td", {}, itemLink(r.id, jobName(recipe(r.id)[0]) + " · niv. " + item(r.id)[1])),
             h("td", { class: "n pos", text: "+" + kk(r.m) }), h("td", {}, verdictEl(r.v))))))) :
-            h("div", { class: "empty" }, h("strong", { text: "Aucun craft chiffré pour l'instant" }), h("span", { text: "Relève le prix HDV d'un objet et de ses ingrédients : sa marge apparaîtra ici. Commence par la fiche d'un objet que tu crafts souvent." }))),
+            h("div", { class: "empty" }, h("strong", { text: "Aucun craft chiffré pour l'instant" }), h("span", { text: "Relève le prix d'un objet et de ses ingrédients : sa marge apparaîtra ici." }))),
         h("section", { class: "panel" },
-          h("div", { class: "row between" }, h("h2", { text: "Prix à revérifier" }), h("a", { href: "#prix", class: "small", text: "Tous les prix" })),
-          stale.length ? h("div", { class: "tablewrap" }, h("table", {}, h("tbody", {}, stale.slice(0, 6).map(x => h("tr", {},
-            h("td", {}, itemLink(x.id, range(x.o.lo, x.o.hi) + " ₭")), h("td", {}, h("span", { class: "chip warn", text: ago(x.o.d) }))))))) :
-            h("p", { class: "muted", text: "Tous tes relevés datent de moins d'une semaine." })),
-        protTopPanel(5, "accueil"),
-        SH ? h("section", { class: "panel" },
-          h("h2", { text: "Dernières mises à jour du groupe" }),
-          recent.length ? h("div", { class: "tablewrap" }, h("table", {}, h("tbody", {}, recent.slice(0, 8).map(r => h("tr", {},
-            h("td", {}, itemLink(r.id, range(r.o.lo, r.o.hi) + " ₭")),
-            h("td", { class: "small muted", text: "par " + whoName(r.u) }),
-            h("td", {}, h("span", { class: "chip", text: ago(r.o.d) }))))))) :
-            h("p", { class: "muted", text: "Aucun prix partagé pour l'instant. Le premier relevé que tu saisis sera visible par tout le groupe." })) : null)));
+          h("div", { class: "row between" }, h("h2", { text: "Donjons les plus rentables" }), h("a", { href: "#donjons", class: "small", text: "Tous les donjons" })),
+          djs.length ? h("div", { class: "tablewrap" }, h("table", {}, h("tbody", {}, djs.map(({ d, c }) => h("tr", {},
+            h("td", {}, h("a", { href: "#donjons", onclick: () => { djF.open = new Set([d.id]); djF.q = d.n; } }, h("strong", { text: d.n })), h("small", { class: "muted", style: "display:block", text: "niv. " + (d.lv ?? "?") + (d.an ? " · anomalie +" + d.an + " %" : "") })),
+            h("td", { class: "n" }, h("strong", { style: "color:var(--kamas)", text: kk(c.kh) + " ₭/h" }))))))) : h("p", { class: "muted", text: KMD ? "Données des donjons indisponibles." : "Chargement…" }),
+          h("a", { href: "#carte", class: "small", text: anom.length ? anom.length + " zone" + (anom.length > 1 ? "s" : "") + " en anomalie (jusqu'à +" + anom[0][1] + " % de drop) : voir la carte" : "Aucune zone en anomalie en ce moment" })),
+        protTopPanel(5, "accueil"))),
+    h("div", { class: "grid2 even" },
+      h("section", { class: "panel" }, h("div", { class: "row between" }, h("h2", { text: "▲ Plus fortes hausses" }), h("a", { href: "#tendances", class: "small", text: span >= 1 ? "sur " + win + " j · Tendances" : "Tendances" })), moverList(ups, span >= 1 ? "Aucune hausse marquée." : "Les tendances apparaissent après un jour d'historique.")),
+      h("section", { class: "panel" }, h("div", { class: "row between" }, h("h2", { text: "▼ Plus fortes baisses" }), h("a", { href: "#tendances", class: "small", text: span >= 1 ? "sur " + win + " j · Tendances" : "Tendances" })), moverList(downs, span >= 1 ? "Aucune baisse marquée." : "Les tendances apparaissent après un jour d'historique."))),
+    SH ? h("section", { class: "panel" },
+      h("div", { class: "row between" }, h("h2", { text: "Dernières mises à jour du groupe" }), h("a", { href: "#prix", class: "small", onclick: () => { pxF.src = "group"; S.settings.prixSort = "recent"; }, text: "Tous les relevés" })),
+      recent.length ? h("div", { class: "tablewrap" }, h("table", {}, h("tbody", {}, recent.slice(0, 6).map(r => h("tr", {},
+        h("td", {}, itemLink(r.id, range(r.o.lo, r.o.hi) + " ₭")),
+        h("td", { class: "small muted", text: "par " + whoName(r.u) }),
+        h("td", {}, h("span", { class: "chip", text: ago(r.o.d) }))))))) :
+        h("p", { class: "muted", text: "Aucun prix partagé pour l'instant. Le premier relevé que tu saisis sera visible par tout le groupe." })) : null,
+    h("p", { class: "note", text: "Les relevés du groupe arrivent en direct. Les données de Kamamaster (cotes d'Orukam, brisage, anomalies, donjons) sont vérifiées toutes les heures" + (KM && KM.anomaliesAt ? " ; anomalies changées " + agoTime(KM.anomaliesAt) : "") + ". Source : kamamaster.fr." }));
 }
 
 
@@ -1478,68 +1493,83 @@ document.addEventListener("paste", e => {
 const PRIX_SORTS = [["nom", "Nom (A → Z)"], ["nomd", "Nom (Z → A)"], ["prixa", "Prix croissant"], ["prixd", "Prix décroissant"], ["type", "Type"], ["niveau", "Niveau décroissant"],
   ["age", "À revérifier en priorité"], ["recent", "Relevés les plus récents"], ["hausse", "Plus fortes hausses (7 j)"], ["baisse", "Plus fortes baisses (7 j)"],
   ["ventes1", "Plus vendus (24 h)"], ["ventes7", "Plus vendus (7 jours)"], ["ventes30", "Plus vendus (30 jours)"]];
+// Prix : une seule liste (relevés du groupe + cotes Kamamaster d'Orukam), filtres, objets suivis, « à vérifier »,
+// relevé rapide ; la tournée de relevés est l'onglet voisin (#tournee)
+let pxF = { q: "", src: "all", fav: false, susp: false, min: "", max: "", n: 100 };
 function viewPrix() {
-  const allIds = Object.keys(prices()).map(Number).filter(id => obsOf(id).length && D.items[id]);
+  needKmh();
   const prixSort = S.settings.prixSort || "nom", prixCat = S.settings.prixCat || "";
-  const ids = allIds.filter(id => !prixCat || String(item(id)[2]) === String(prixCat));
+  const groupIds = Object.keys(prices()).map(Number).filter(id => obsOf(id).length && D.items[id]);
+  const base = pxF.src === "group" ? groupIds : cotedIds();
+  const suspSet = pxF.susp ? new Set(kmSuspects().map(x => x.id)) : null;
+  const nq = norm(pxF.q || "");
+  const inBase = base.filter(id => (!suspSet || suspSet.has(id)) && (!pxF.fav || favs().includes(id)) && (!nq || norm(item(id)[0]).includes(nq))
+    && (!pxF.min || item(id)[1] >= +pxF.min) && (!pxF.max || item(id)[1] <= +pxF.max));
+  const cats = new Map(); for (const id of inBase) cats.set(item(id)[2], (cats.get(item(id)[2]) || 0) + 1);
+  const ids = inBase.filter(id => !prixCat || String(item(id)[2]) === String(prixCat));
+  const rows = ids.map(id => {
+    const o = priceAt(id), ser = seriesOf(id), obs = obsOf(id), last = obs[obs.length - 1] || null;
+    return { id, o, p: o ? nowPrice(o) : null, ser, v7: varOf(ser, 7), v30: varOf(ser, 30), vAll: varOf(ser, 1), last, n: obs.length, d: last ? last.d : o ? o.d : "" };
+  }).filter(r => r.p != null || kmDoubt(r.id));
   const byName = (a, b) => item(a.id)[0].localeCompare(item(b.id)[0], "fr");
+  const nn = v => v ?? -Infinity;
   const PS = {
     nom: byName, nomd: (a, b) => -byName(a, b),
-    prixa: (a, b) => (nowPrice(a.last) ?? 0) - (nowPrice(b.last) ?? 0) || byName(a, b), prixd: (a, b) => (nowPrice(b.last) ?? 0) - (nowPrice(a.last) ?? 0) || byName(a, b),
+    prixa: (a, b) => (a.p ?? Infinity) - (b.p ?? Infinity) || byName(a, b), prixd: (a, b) => (b.p ?? -1) - (a.p ?? -1) || byName(a, b),
     type: (a, b) => typeName(a.id).localeCompare(typeName(b.id), "fr") || byName(a, b), niveau: (a, b) => item(b.id)[1] - item(a.id)[1] || byName(a, b),
-    age: (a, b) => (a.last.d < b.last.d ? -1 : a.last.d > b.last.d ? 1 : byName(a, b)), recent: (a, b) => (a.last.d > b.last.d ? -1 : a.last.d < b.last.d ? 1 : byName(a, b)),
-    hausse: (a, b) => (b.varp ?? -1e9) - (a.varp ?? -1e9) || byName(a, b), baisse: (a, b) => (a.varp ?? 1e9) - (b.varp ?? 1e9) || byName(a, b),
+    age: (a, b) => (!a.last) - (!b.last) || (a.d < b.d ? -1 : a.d > b.d ? 1 : byName(a, b)), recent: (a, b) => (a.d > b.d ? -1 : a.d < b.d ? 1 : byName(a, b)),
+    hausse: (a, b) => nn(b.v7 ?? b.vAll) - nn(a.v7 ?? a.vAll) || byName(a, b), baisse: (a, b) => ((a.v7 ?? a.vAll) ?? Infinity) - ((b.v7 ?? b.vAll) ?? Infinity) || byName(a, b),
     ventes1: (a, b) => ((volOf(b.id) || {}).d1 ?? -1) - ((volOf(a.id) || {}).d1 ?? -1) || byName(a, b),
     ventes7: (a, b) => ((volOf(b.id) || {}).d7 ?? -1) - ((volOf(a.id) || {}).d7 ?? -1) || byName(a, b),
     ventes30: (a, b) => ((volOf(b.id) || {}).d30 ?? -1) - ((volOf(a.id) || {}).d30 ?? -1) || byName(a, b),
   };
-  const rows = ids.map(id => {
-    const o = obsOf(id), last = o[o.length - 1];
-    const prev = [...o].reverse().find(x => ageDays(x.d) >= 7 && x.d < last.d);
-    const varp = prev ? (midOf(last) - midOf(prev)) / midOf(prev) * 100 : null;
-    return { id, last, n: o.length, varp };
-  }).sort(PS[prixSort] || byName);
-  // Catégories présentes parmi les relevés, avec leur nombre
-  const cats = new Map(); for (const id of allIds) cats.set(item(id)[2], (cats.get(item(id)[2]) || 0) + 1);
-  const catSel = h("select", { id: "prix-cat", "aria-label": "Catégorie" }, h("option", { value: "" }, "Toutes les catégories (" + allIds.length + ")"),
+  rows.sort(PS[prixSort] || byName);
+  const catSel = h("select", { id: "prix-cat", "aria-label": "Catégorie" }, h("option", { value: "" }, "Toutes les catégories (" + inBase.length + ")"),
     [...cats.entries()].map(([t, n]) => [t, (D.types[t] || ["Autre"])[0], n]).sort((a, b) => a[1].localeCompare(b[1], "fr")).map(([t, nm, n]) => h("option", { value: t, selected: String(t) === String(prixCat) }, nm + " (" + n + ")")));
-  catSel.addEventListener("change", () => { S.settings.prixCat = catSel.value; persist("plan"); render(); });
+  catSel.addEventListener("change", () => { S.settings.prixCat = catSel.value; pxF.n = 100; persist("plan"); render(); });
   const sortSel = h("select", { id: "prix-sort", "aria-label": "Trier" }, PRIX_SORTS.map(([v, l]) => h("option", { value: v, selected: prixSort === v }, l)));
   sortSel.addEventListener("change", () => { S.settings.prixSort = sortSel.value; persist("plan"); render(); });
-  const toShare = pendingShare();
-  const kmBox = KM ? h("section", { class: "panel" }, h("div", { class: "row between" },
-    h("div", { style: "display:grid;gap:3px;max-width:75ch" },
-      h("strong", { text: "Prix Kamamaster · " + KM.server }),
-      h("span", { class: "note", text: fmt.format(Object.keys(KM.prices).length) + " objets, mis à jour le " + new Date(KM.fetched).toLocaleDateString("fr-FR", { day: "numeric", month: "long" }) + " (vérifiés toutes les heures sur kamamaster.fr). Ils servent seulement pour les objets que le groupe n'a jamais relevés : un prix unique, utilisé comme basse, haute et actuel. Une cote qui s'écarte de plus de 3 fois de ses derniers jours est écartée comme douteuse" + (KM.doubt && Object.keys(KM.doubt).length ? " (" + Object.keys(KM.doubt).length + " en ce moment)" : "") + ". Aussi récupérés : " + Object.keys(KM.coefs || {}).length + " coefficients de brisage, les zones en anomalie et l'historique des prix (courbes)." })),
-    (() => { const c = h("input", { type: "checkbox", id: "km-on", checked: S.settings.km !== false }); c.addEventListener("change", () => { S.settings.km = c.checked; persist("plan"); render(); }); return h("label", { class: "check" }, c, "Utiliser ces prix"); })())) : null;
-  const tourN = tourCandidates().ids.length;
+  const q = h("input", { type: "search", id: "q-prixf", placeholder: "Filtrer la liste", value: pxF.q, "aria-label": "Filtrer la liste" });
+  q.addEventListener("input", () => { pxF.q = q.value; pxF.n = 100; clearTimeout(q._t); q._t = setTimeout(render, 250); });
+  const lv = (key, ph) => { const el = h("input", { type: "number", id: "prix-" + key, min: 1, max: 200, placeholder: ph, value: pxF[key], "aria-label": ph }); el.addEventListener("change", () => { pxF[key] = el.value; pxF.n = 100; render(); }); return el; };
+  const cb = (key, label) => { const c = h("input", { type: "checkbox", id: "prix-" + key, checked: !!pxF[key] }); c.addEventListener("change", () => { pxF[key] = c.checked; pxF.n = 100; render(); }); return h("label", { class: "check" }, c, label); };
+  const srcSeg = h("span", { class: "seg", role: "group", "aria-label": "Source" }, [["all", "Toutes les cotes"], ["group", "Relevés du groupe (" + groupIds.length + ")"]].map(([v, l]) =>
+    h("button", { type: "button", "aria-pressed": pxF.src === v ? "true" : "false", onclick: () => { pxF.src = v; pxF.n = 100; render(); } }, l)));
+  const toShare = pendingShare(), susp = kmSuspects();
+  const shown = rows.slice(0, pxF.n);
+  const imp = importPanel(), sp = susp.length ? suspectsPanel() : null;
   return h("div", { class: "stack" },
-    tourN ? h("section", { class: "panel" }, h("div", { class: "row between" },
-      h("span", { text: tourN + " prix à relever pour ton plan, tes builds et l'Almanax." }),
-      h("a", { href: "#tournee", class: "btn primary", style: "text-decoration:none" }, "Lancer la tournée HDV"))) : null,
-    kmBox,
-    suspectsPanel(),
-    SH && toShare.length ? h("section", { class: "panel" },
-      h("div", { class: "row between" }, h("span", { text: "Tu as des relevés personnels sur " + toShare.length + " objet" + (toShare.length > 1 ? "s" : "") + " qui ne sont pas encore dans les prix du groupe." }),
-        h("button", { type: "button", class: "btn primary", onclick: shareMine }, "Les partager avec le groupe"))) : null,
-    importPanel(),
+    // Bandeau d'actions : tournée, cotes à vérifier, partage, Kamamaster
     h("section", { class: "panel" },
-      h("div", { class: "row between" }, h("h2", { text: SH ? "Prix du groupe à l'HDV" : "Prix relevés à l'HDV" }),
-        h("span", { class: "chip", text: ids.length + (ids.length !== allIds.length ? " / " + allIds.length : "") + " objets suivis" })),
-      h("div", { class: "filters" }, h("label", { class: "selbox" }, h("span", { class: "label", text: "Trier" }), sortSel), h("label", { class: "selbox" }, h("span", { class: "label", text: "Catégorie" }), catSel)),
-      searchBox("Ajouter un relevé pour un objet", {}, id => openSheet(id), "q-prix"),
-      rows.length ? h("div", { class: "tablewrap" }, h("table", {},
-        h("thead", {}, h("tr", {}, h("th", { text: "Objet" }), h("th", { class: "n", text: "Dernière fourchette" }), h("th", { class: "n", text: "Prix actuel" }), h("th", { text: "Relevé" }), h("th", { text: "12 semaines" }), h("th", { class: "n", text: "Var. 7 j+" }), h("th", { text: "Ton relevé du jour (basse · haute · actuel)" }))),
-        h("tbody", {}, rows.map(r => h("tr", {},
-          h("td", {}, itemLink(r.id, r.n + " relevé" + (r.n > 1 ? "s" : "") + (volOf(r.id) ? " · vendus : " + [["d1", "24 h"], ["d7", "7 j"], ["d30", "30 j"]].filter(([k]) => volOf(r.id)[k] != null).map(([k, l]) => fmt.format(volOf(r.id)[k]) + " en " + l).join(", ") : ""), 26)),
-          h("td", { class: "n" }, range(r.last.lo, r.last.hi), SH && r.last.by ? h("small", { class: "muted", style: "display:block", text: "par " + whoName(r.last.by[0]) }) : null),
-          h("td", { class: "n" }, r.last.cur != null ? h("strong", { style: "color:var(--kamas)", text: k(r.last.cur) }) : h("span", { class: "muted", text: "—" })),
-          h("td", {}, h("span", { class: "chip" + (ageDays(r.last.d) >= 7 ? " warn" : ""), text: ago(r.last.d) })),
-          h("td", {}, sparkline(r.id)),
-          h("td", { class: "n " + (r.varp == null ? "muted" : r.varp >= 0 ? "pos" : "neg"), text: r.varp == null ? "—" : (r.varp >= 0 ? "▲ +" : "▼ ") + Math.round(r.varp) + " %" }),
-          h("td", {}, quickObs(r.id))))))) :
-        h("div", { class: "empty" }, h("strong", { text: "Aucun prix relevé" }), h("span", { text: "Cherche un objet ci-dessus pour saisir sa moyenne basse et sa moyenne haute à l'HDV. Chaque relevé est daté : c'est ce qui construit les courbes par semaine et par mois." })),
-      h("p", { class: "note", text: "Saisis ou corrige ton relevé du jour directement dans les cases (Entrée pour valider) : moyenne basse, moyenne haute et prix actuel sont obligatoires ; une case laissée vide garde la valeur grisée. Pour corriger un relevé d'un autre jour, ouvre la fiche de l'objet. La variation compare le dernier relevé à celui d'au moins 7 jours plus tôt." })));
+      h("div", { class: "row", style: "gap:10px" },
+        susp.length ? h("button", { type: "button", class: "btn", onclick: () => { pxF.susp = !pxF.susp; render(); } }, (pxF.susp ? "Voir toute la liste" : "Cotes à vérifier (" + susp.length + ")")) : null,
+        SH && toShare.length ? h("button", { type: "button", class: "btn", onclick: shareMine }, "Partager mes " + toShare.length + " relevés personnels") : null),
+      KM ? h("div", { class: "row between", style: "margin-top:8px" },
+        h("span", { class: "small muted", text: "Cotes Kamamaster d'Orukam : " + fmt.format(Object.keys(KM.prices).length) + " objets, mises à jour le " + new Date(KM.fetched).toLocaleDateString("fr-FR", { day: "numeric", month: "long" }) + ". Un relevé du groupe passe toujours avant." }),
+        (() => { const c = h("input", { type: "checkbox", id: "km-on", checked: S.settings.km !== false }); c.addEventListener("change", () => { S.settings.km = c.checked; persist("plan"); render(); }); return h("label", { class: "check small" }, c, "Utiliser les cotes"); })()) : null),
+    pxF.susp && sp ? sp : null,
+    h("section", { class: "panel" },
+      h("div", { class: "row between" }, h("h2", { text: pxF.susp ? "Cotes à vérifier" : pxF.src === "group" ? "Relevés du groupe" : "Tous les prix" }), h("span", { class: "chip", text: fmt.format(rows.length) + " objet" + (rows.length > 1 ? "s" : "") })),
+      h("div", { class: "row", style: "gap:8px" }, srcSeg),
+      h("div", { class: "filters" }, h("div", { class: "search" }, q), h("label", { class: "selbox" }, h("span", { class: "label", text: "Trier" }), sortSel), h("label", { class: "selbox" }, h("span", { class: "label", text: "Catégorie" }), catSel),
+        lv("min", "Niv. min"), lv("max", "Niv. max"), cb("fav", "Mes objets suivis (" + favs().length + ")")),
+      shown.length ? h("div", { class: "tablewrap" }, h("table", {},
+        h("thead", {}, h("tr", {}, h("th", {}), h("th", { text: "Objet" }), h("th", { class: "n", text: "Prix actuel" }), h("th", { class: "hide-m", text: "Source" }), h("th", { class: "n", text: "7 j" }), h("th", { class: "n hide-m", text: "30 j" }), h("th", { class: "hide-m", text: "Courbe" }), h("th", { text: "Relever" }))),
+        h("tbody", {}, shown.map(r => { const v = volOf(r.id); return h("tr", {},
+          h("td", {}, favBtn(r.id)),
+          h("td", {}, itemLink(r.id, typeName(r.id) + " · niv. " + item(r.id)[1] + (r.n ? " · " + r.n + " relevé" + (r.n > 1 ? "s" : "") : "") + (v ? " · vendus : " + [["d1", "24 h"], ["d7", "7 j"], ["d30", "30 j"]].filter(([k2]) => v[k2] != null).map(([k2, l]) => fmt.format(v[k2]) + " en " + l).join(", ") : ""), 26)),
+          r.o ? h("td", { class: "n" }, h("strong", { style: "color:var(--kamas)", text: k(r.p) }), oddOf(r.id, r.o) ? h("span", { style: "display:block" }, oddChip(r.id, r.o)) : null,
+              r.o.src !== "km" && Math.round(r.o.lo) !== Math.round(r.o.hi) ? h("small", { class: "muted", style: "display:block", text: range(r.o.lo, r.o.hi) }) : null)
+            : h("td", { class: "n" }, h("span", { class: "chip warn", title: doubtText(r.id), text: "douteuse" }), h("small", { class: "muted", style: "display:block", text: kk(kmDoubt(r.id)[0]) + " ₭ ?" })),
+          h("td", { class: "small muted hide-m" }, h("span", { class: r.last && ageDays(r.last.d) >= 7 ? "chip warn" : "", text: r.o ? srcLabel(r.o) : doubtText(r.id) }), SH && r.last && r.last.by ? h("span", { style: "display:block", text: "par " + whoName(r.last.by[0]) }) : null),
+          varCell(r.v7), (c => { c.classList.add("hide-m"); return c; })(varCell(r.v30)),
+          h("td", { class: "hide-m" }, sparkSeries(r.ser)),
+          h("td", {}, quickObs(r.id))); })))) :
+        h("div", { class: "empty" }, h("strong", { text: pxF.fav && !favs().length ? "Tu ne suis encore aucun objet" : "Aucun objet ne correspond" }),
+          h("span", { text: pxF.fav && !favs().length ? "Clique sur l'étoile d'un objet pour le suivre." : "Change les filtres, ou cherche l'objet avec la recherche tout en haut pour ouvrir sa fiche et saisir son prix." })),
+      rows.length > shown.length ? h("div", { class: "row", style: "justify-content:center" }, h("button", { type: "button", class: "btn", onclick: () => { pxF.n += 200; render(); } }, "Afficher plus (" + fmt.format(rows.length - shown.length) + ")")) : null,
+      h("p", { class: "note", text: "Prix actuel : le dernier relevé du groupe s'il existe, sinon la cote Kamamaster d'Orukam. « Relever » : moyenne basse, moyenne haute et prix actuel du jour, partagés en direct avec le groupe (Entrée pour valider). Une cote qui s'écarte de plus de 3 fois de ses derniers jours est « douteuse », une cote inhabituelle ou incohérente avec le craft est « à vérifier » : relève-les à l'HDV." })),
+    imp ? h("details", { class: "panel dj" }, h("summary", {}, h("strong", { text: "Importer des prix depuis une capture de l'HDV" })), imp) : null);
 }
 
 function viewStock() {
@@ -4276,7 +4306,7 @@ function ensureKmDungeons() {
   return kmdLoading;
 }
 // Recharge la vue quand une donnée chargée à la demande arrive
-function redrawOrukam() { if (["serveur", "cotes", "donjons", "tendances"].includes(view)) render(); }
+function redrawOrukam() { if (["accueil", "prix", "donjons", "tendances"].includes(view)) render(); }
 function needKmh() { if (!KMH) { const p = ensureKmHistory(); if (p && !kmRedraw) { kmRedraw = true; p.then(() => { kmRedraw = false; redrawOrukam(); }); } } }
 // Âge d'une date-heure en clair (« il y a 3 h »)
 function agoTime(t) {
@@ -4332,99 +4362,7 @@ function favBtn(id) {
 }
 function srcLabel(o) { return !o ? "aucun prix" : o.src === "km" ? "Kamamaster · " + ago(o.d) : "groupe · " + ago(o.d); }
 
-function viewServeur() {
-  needKmh(); ensureKmDungeons();
-  if (!F) ensureFarm().then(d => { if (d) redrawOrukam(); });
-  const ids = cotedIds();
-  const todayN = Object.values(prices()).filter(o => o.length && o[o.length - 1].d === today()).length;
-  const span = histDays(), win = Math.max(1, Math.min(7, span));
-  const movers = span >= 1 ? ids.map(id => { const ser = seriesOf(id), last = ser[ser.length - 1]; return { id, v: varOf(ser, win), p: last ? last[1] : 0 }; }).filter(r => r.v != null && r.p >= 500 && Math.abs(r.v) >= 1) : [];
-  const ups = movers.filter(r => r.v > 0).sort((a, b) => b.v - a.v).slice(0, 8), downs = movers.filter(r => r.v < 0).sort((a, b) => a.v - b.v).slice(0, 8);
-  const moverList = (list, empty) => list.length ? h("div", { class: "tablewrap" }, h("table", {}, h("tbody", {}, list.map(r => h("tr", {},
-    h("td", {}, itemLink(r.id, typeName(r.id), 26)), h("td", { class: "n", text: k(r.p) + " ₭" }), varCell(r.v)))))) : h("p", { class: "muted", text: empty });
-  const firstDay = KMH && KMH.dates.length ? parseD(KMH.dates[0]) : new Date();
-  const ready = new Date(firstDay); ready.setDate(ready.getDate() + 1);
-  const noTrend = "Les tendances apparaîtront dès le " + ready.toLocaleDateString("fr-FR", { day: "numeric", month: "long" }) + " : l'historique d'Orukam est enregistré depuis le " + firstDay.toLocaleDateString("fr-FR", { day: "numeric", month: "long" }) + ".";
-  const djs = KMD && KMD.list.length ? KMD.list.map(d => ({ d, c: djCalc(d) })).sort((a, b) => b.c.kh - a.c.kh).slice(0, 5) : [];
-  const anom = KM ? Object.entries(KM.anomalies || {}).sort((a, b) => b[1] - a[1]) : [];
-  return h("div", { class: "stack" },
-    h("div", { class: "tiles" },
-      h("div", { class: "tile" }, h("span", { class: "label", text: "Objets cotés" }), h("span", { class: "v", text: fmt.format(ids.length) }), h("span", { class: "small muted", text: "prix du groupe et de Kamamaster" })),
-      h("div", { class: "tile kamas" }, h("span", { class: "label", text: "Relevés du groupe aujourd'hui" }), h("span", { class: "v", text: todayN }), h("span", { class: "small muted", text: SH ? "reçus en direct" : "mode local" })),
-      h("div", { class: "tile" }, h("span", { class: "label", text: "Prix Kamamaster changés" }), h("span", { class: "v", style: "font-size:1.25rem", text: KM ? agoTime(KMC?.changed || KM.fetched) : "—" }), h("span", { class: "small muted", text: KMC ? "vérifié " + agoTime(KMC.checked) + " · toutes les heures" : "vérifié toutes les heures" })),
-      (() => { const n = kmSuspects().length; return h("a", { class: "tile", href: "#prix", style: "text-decoration:none;color:inherit", onclick: () => setTimeout(() => document.getElementById("a-verifier")?.scrollIntoView({ behavior: "smooth" }), 300) }, h("span", { class: "label", text: "Cotes à vérifier" }), h("span", { class: "v", style: n ? "color:var(--bad)" : null, text: n }), h("span", { class: "small muted", text: n ? "prix Kamamaster suspects → les relever" : "aucune cote suspecte" })); })(),
-      h("div", { class: "tile" }, h("span", { class: "label", text: "Zones en anomalie" }), h("span", { class: "v", text: anom.length }), h("span", { class: "small muted", text: "bonus de drop en cours" + (KM && KM.anomaliesAt ? " · changé " + agoTime(KM.anomaliesAt) : "") }))),
-    h("section", { class: "panel" },
-      h("p", { class: "note", style: "margin:0", text: "Les relevés du groupe arrivent en direct : dès qu'un membre enregistre un prix, il s'affiche chez tout le monde. Les données de Kamamaster (prix d'Orukam, brisage, anomalies, donjons) sont vérifiées toutes les heures : Kamamaster ne les met lui-même à jour qu'environ une fois par jour, parfois moins, et il n'existe pas d'accès direct au serveur du jeu. Dès que le groupe a relevé un objet, son prix passe avant celui de Kamamaster ; les cotes Kamamaster qui s'écartent de plus de 3 fois de leurs derniers jours sont écartées comme douteuses. Source : kamamaster.fr." })),
-    h("div", { class: "grid2 even" },
-      h("section", { class: "panel" }, h("div", { class: "row between" }, h("h2", { text: "▲ Plus fortes hausses" }), h("span", { class: "chip", text: span >= 1 ? "sur " + win + " j" : "bientôt" })), moverList(ups, span >= 1 ? "Aucune hausse notable." : noTrend)),
-      h("section", { class: "panel" }, h("div", { class: "row between" }, h("h2", { text: "▼ Plus fortes baisses" }), h("span", { class: "chip", text: span >= 1 ? "sur " + win + " j" : "bientôt" })), moverList(downs, span >= 1 ? "Aucune baisse notable." : noTrend))),
-    h("div", { class: "grid2 even" },
-      h("section", { class: "panel" },
-        h("div", { class: "row between" }, h("h2", { text: "Donjons les plus rentables" }), h("a", { href: "#donjons", class: "small", text: "Tous les donjons" })),
-        djs.length ? h("div", { class: "tablewrap" }, h("table", {}, h("tbody", {}, djs.map(({ d, c }) => h("tr", {},
-          h("td", {}, h("a", { href: "#donjons", onclick: () => { djF.open = new Set([d.id]); djF.q = d.n; } }, h("strong", { text: d.n })), h("small", { class: "muted", style: "display:block", text: "niv. " + (d.lv ?? "?") + (d.an ? " · anomalie +" + d.an + " %" : "") + (c.drops[0] && c.tot && oddOf(c.drops[0].id, c.drops[0].o) && c.drops[0].v / c.tot > .5 ? " · ⚠ à vérifier" : "") })),
-          h("td", { class: "n" }, h("strong", { style: "color:var(--kamas)", text: kk(c.kh) + " ₭/h" }))))))) : h("p", { class: "muted", text: KMD ? "Données des donjons indisponibles." : "Chargement…" })),
-      h("section", { class: "panel" },
-        h("div", { class: "row between" }, h("h2", { text: "Zones en anomalie" }), h("a", { href: "#farm", class: "small", text: "Liste de farm" })),
-        anom.length ? h("div", { style: "display:grid;gap:6px" }, anom.map(([sid, b]) => h("div", { class: "row between" },
-          h("span", { text: F ? subLabel(+sid).replace(/ · anomalie.*$/, "") : "Zone " + sid }), h("span", { class: "chip kamas", text: "+" + b + " %" })))) :
-          h("p", { class: "muted", text: "Aucune zone en anomalie en ce moment." }))),
-    protTopPanel(6, "serveur"),
-    h("section", { class: "panel" },
-      h("h2", { text: "Autres outils pour Orukam" }),
-      h("div", { class: "links-grid" },
-        [["#cotes", "Cotes HDV", "Tous les objets cotés, leur tendance et ta liste d'objets suivis.", "chart"],
-         ["#brisage", "Brisage", "Les équipements à crafter puis briser, aux prix des runes d'Orukam.", "rune"],
-         ["#rentabilite", "Crafts rentables", "Crafter et revendre ou acheter directement, taxe déduite.", "trend"],
-         ["#metiers", "Monter un métier", "Le craft le moins cher par point d'expérience.", "up"]].map(([href, t, d, ic]) =>
-          h("a", { href, class: "linkcard" }, h("span", { class: "ib" }, gameIcon(href.slice(1), ic, 30)), h("span", {}, h("strong", { text: t }), h("small", { class: "muted", style: "display:block", text: d })))))));
-}
 
-let cotF = { q: "", type: "", sort: "nom", fav: false, susp: false, min: "", max: "", n: 100 };
-function viewCotes() {
-  needKmh();
-  const all = cotedIds();
-  const typeCount = new Map();
-  for (const id of all) typeCount.set(item(id)[2], (typeCount.get(item(id)[2]) || 0) + 1);
-  const types = [...typeCount.entries()].map(([t, n]) => [t, (D.types[t] || ["Autre"])[0], n]).sort((a, b) => a[1].localeCompare(b[1], "fr"));
-  const nq = norm(cotF.q || "");
-  const span = histDays();
-  const suspSet = cotF.susp ? new Set(kmSuspects().map(x => x.id)) : null;
-  let rows = all.filter(id => (!suspSet || suspSet.has(id)) && (!cotF.fav || favs().includes(id)) && (!cotF.type || item(id)[2] === +cotF.type) && (!nq || norm(item(id)[0]).includes(nq)) && (!cotF.min || item(id)[1] >= +cotF.min) && (!cotF.max || item(id)[1] <= +cotF.max))
-    .map(id => { const o = priceAt(id), ser = seriesOf(id); return { id, o, p: nowPrice(o), ser, v7: varOf(ser, 7), v30: varOf(ser, 30), vAll: varOf(ser, 1) }; }).filter(r => r.p != null || kmDoubt(r.id));
-  const byName = (a, b) => item(a.id)[0].localeCompare(item(b.id)[0], "fr");
-  const nn = v => v ?? -Infinity;
-  const SORTS = { nom: byName, prixd: (a, b) => (b.p ?? -1) - (a.p ?? -1) || byName(a, b), prixa: (a, b) => (a.p ?? Infinity) - (b.p ?? Infinity) || byName(a, b), hausse: (a, b) => nn(b.v7 ?? b.vAll) - nn(a.v7 ?? a.vAll) || byName(a, b), baisse: (a, b) => ((a.v7 ?? a.vAll ?? Infinity) - (b.v7 ?? b.vAll ?? Infinity)) || byName(a, b), niveau: (a, b) => item(b.id)[1] - item(a.id)[1] || byName(a, b) };
-  rows.sort(SORTS[cotF.sort] || byName);
-  const q = h("input", { type: "search", id: "q-cotes", placeholder: "Chercher un objet", value: cotF.q, "aria-label": "Chercher un objet" });
-  q.addEventListener("input", () => { cotF.q = q.value; cotF.n = 100; clearTimeout(q._t); q._t = setTimeout(render, 250); });
-  const typeSel = h("select", { id: "cotes-type", "aria-label": "Catégorie" }, h("option", { value: "" }, "Toutes les catégories"), types.map(([t, name, n]) => h("option", { value: t, selected: String(t) === String(cotF.type) }, name + " (" + n + ")")));
-  typeSel.addEventListener("change", () => { cotF.type = typeSel.value; cotF.n = 100; render(); });
-  const sortSel = h("select", { id: "cotes-sort", "aria-label": "Trier" }, [["nom", "Par nom"], ["prixd", "Prix décroissant"], ["prixa", "Prix croissant"], ["hausse", "Plus fortes hausses"], ["baisse", "Plus fortes baisses"], ["niveau", "Niveau décroissant"]].map(([v, l]) => h("option", { value: v, selected: cotF.sort === v }, l)));
-  sortSel.addEventListener("change", () => { cotF.sort = sortSel.value; render(); });
-  const lv = (key, ph) => { const el = h("input", { type: "number", id: "cotes-" + key, min: 1, max: 200, placeholder: ph, value: cotF[key], "aria-label": ph }); el.addEventListener("change", () => { cotF[key] = el.value; cotF.n = 100; render(); }); return el; };
-  const suspCb = h("input", { type: "checkbox", id: "cotes-susp", checked: cotF.susp }); suspCb.addEventListener("change", () => { cotF.susp = suspCb.checked; cotF.n = 100; render(); });
-  const favCb = h("input", { type: "checkbox", id: "cotes-fav", checked: cotF.fav }); favCb.addEventListener("change", () => { cotF.fav = favCb.checked; cotF.n = 100; render(); });
-  const shown = rows.slice(0, cotF.n);
-  return h("div", { class: "stack" },
-    h("section", { class: "panel" },
-      h("div", { class: "row between" }, h("h2", { text: "Cotes HDV d'Orukam" }), h("span", { class: "chip", text: fmt.format(rows.length) + " objet" + (rows.length > 1 ? "s" : "") })),
-      h("div", { class: "filters" }, h("div", { class: "search" }, q), typeSel, lv("min", "Niv. min"), lv("max", "Niv. max"), sortSel, h("label", { class: "check" }, favCb, "Mes objets suivis (" + favs().length + ")"), h("label", { class: "check" }, suspCb, "À vérifier (" + kmSuspects().length + ")")),
-      shown.length ? h("div", { class: "tablewrap" }, h("table", {},
-        h("thead", {}, h("tr", {}, h("th", {}), h("th", { text: "Objet" }), h("th", { class: "n", text: "Prix" }), h("th", { class: "hide-m", text: "Source" }), h("th", { class: "n", text: "7 j" }), h("th", { class: "n hide-m", text: "30 j" }), h("th", { class: "hide-m", text: "30 derniers jours" }))),
-        h("tbody", {}, shown.map(r => h("tr", {},
-          h("td", {}, favBtn(r.id)),
-          h("td", {}, itemLink(r.id, typeName(r.id) + " · niv. " + item(r.id)[1], 26)),
-          r.o ? h("td", { class: "n" }, h("strong", { style: "color:var(--kamas)", text: k(r.p) }), oddOf(r.id, r.o) ? h("span", { style: "display:block" }, oddChip(r.id, r.o)) : null, r.o.src !== "km" && Math.round(r.o.lo) !== Math.round(r.o.hi) ? h("small", { class: "muted", style: "display:block", text: range(r.o.lo, r.o.hi) }) : null, h("small", { class: "muted show-m", text: r.o.src === "km" ? "Kamamaster" : "groupe" }))
-            : h("td", { class: "n" }, h("span", { class: "chip warn", title: doubtText(r.id), text: "douteuse" }), h("small", { class: "muted", style: "display:block", text: kk(kmDoubt(r.id)[0]) + " ₭ ?" })),
-          h("td", { class: "small muted hide-m", text: r.o ? srcLabel(r.o) + (oddOf(r.id, r.o) ? " · " + oddText(r.id) : "") : doubtText(r.id) }),
-          varCell(r.v7), (c => { c.classList.add("hide-m"); return c; })(varCell(r.v30)),
-          h("td", { class: "hide-m" }, sparkSeries(r.ser))))))) :
-        h("div", { class: "empty" }, h("strong", { text: cotF.fav && !favs().length ? "Tu ne suis encore aucun objet" : "Aucun objet ne correspond" }), h("span", { text: cotF.fav && !favs().length ? "Clique sur l'étoile d'un objet pour le suivre : tu retrouveras ici sa cote et sa tendance." : "Change la recherche ou les filtres." })),
-      rows.length > shown.length ? h("div", { class: "row", style: "justify-content:center" }, h("button", { type: "button", class: "btn", onclick: () => { cotF.n += 200; render(); } }, "Afficher plus (" + fmt.format(rows.length - shown.length) + " restants)")) : null,
-      h("p", { class: "note", text: "Prix : le dernier relevé du groupe s'il existe, sinon la cote Kamamaster d'Orukam. Une cote Kamamaster qui s'écarte de plus de 3 fois de ses derniers jours est marquée douteuse : relève-la à l'HDV. Les variations comparent au prix d'il y a 7 et 30 jours" + (span < 7 ? " ; l'historique a commencé il y a " + span + " jour" + (span > 1 ? "s" : "") + ", elles se rempliront au fil des jours" : "") + ". Clique sur un objet pour sa courbe complète et saisir un relevé." })));
-}
 
 let djF = { q: "", min: "", max: "", an: false, sort: "kh", n: 40, open: new Set() };
 const djMin = d => +(S.settings.djmin || {})[d.id] || (KMD && KMD.params.min) || 30;
@@ -5097,27 +5035,49 @@ const IC = {
 };
 const svgI = name => { const el = s("svg", { class: "i", viewBox: "0 0 24 24", "aria-hidden": "true" }); for (const d of IC[name].split(" M")) el.append(s("path", { d: d.startsWith("M") ? d : "M" + d })); return el; };
 const TABS = [
-  ["accueil", "Accueil", "home", "--c-home"], ["plan", "Plan de craft", "hammer", "--c-craft", "c-plan"], ["rentabilite", "Rentabilité", "trend", "--c-gold"],
-  ["prix", "Prix HDV", "coins", "--c-gold", "c-prix"], ["tournee", "Tournée HDV", "route", "--c-gold", "c-tour"], ["journal", "Journal", "ledger", "--c-journal"], ["alertes", "Alertes", "bell", "--c-gold", "c-alert"], ["farm", "Farm", "leaf", "--c-farm"], ["metiers", "Métiers", "up", "--c-craft"], ["brisage", "Brisage", "rune", "--c-alm"], ["serveur", "Vue d'ensemble", "globe", "--c-oru"], ["almanax", "Almanax", "calendar", "--c-alm"], ["carte", "Carte", "map", "--c-oru"], ["cotes", "Cotes HDV", "chart", "--c-oru"], ["tendances", "Tendances", "trend", "--c-oru"], ["donjons", "Donjons", "castle", "--c-oru"], ["builds", "Builds", "shield", "--c-build", "c-builds"], ["comparer", "Comparer", "compare", "--c-build"], ["cosmetiques", "Cosmétiques", "shield", "--c-build"],
+  ["accueil", "Accueil", "home", "--c-home"], ["plan", "Plan de craft", "hammer", "--c-craft", "c-plan"], ["rentabilite", "Crafts rentables", "trend", "--c-gold"],
+  ["prix", "Prix", "coins", "--c-gold", "c-prix"], ["tournee", "Tournée HDV", "route", "--c-gold", "c-tour"], ["journal", "Journal", "ledger", "--c-journal"], ["alertes", "Alertes", "bell", "--c-gold", "c-alert"], ["farm", "Farm", "leaf", "--c-farm"], ["metiers", "Métiers", "up", "--c-craft"], ["brisage", "Brisage", "rune", "--c-alm"], ["serveur", "Vue d'ensemble", "globe", "--c-oru"], ["almanax", "Almanax", "calendar", "--c-alm"], ["carte", "Carte", "map", "--c-oru"], ["cotes", "Cotes HDV", "chart", "--c-oru"], ["tendances", "Tendances", "trend", "--c-oru"], ["donjons", "Donjons", "castle", "--c-oru"], ["builds", "Builds", "shield", "--c-build", "c-builds"], ["comparer", "Comparer", "compare", "--c-build"], ["cosmetiques", "Cosmétiques", "shield", "--c-build"],
   ["stock", "Inventaire", "bag", "--c-stock", "c-stock"], ["groupe", "Groupe", "user", "--c-craft", "c-groupe"], ["encyclopedie", "Encyclopédie", "book", "--c-ency"], ["compte", "Compte", "user", "--c-save"],
 ];
 // Sections regroupées : menu latéral (bureau), barre du bas + sous-onglets (téléphone)
+// 6 rubriques, 15 pages ; certaines pages ont des onglets internes (PAGES) qui gardent le nom des anciens écrans
 const GROUPS = [
   ["accueil", "Accueil", "home", "--c-home", ["accueil", "almanax"]],
-  ["marche", "Marché", "coins", "--c-gold", ["prix", "tournee", "rentabilite", "journal", "alertes"]],
-  ["orukam", "Orukam", "globe", "--c-oru", ["serveur", "cotes", "tendances", "donjons", "carte", "brisage"]],
-  ["production", "Production", "hammer", "--c-craft", ["plan", "metiers", "farm", "stock", "groupe"]],
-  ["equipement", "Équipement", "shield", "--c-build", ["builds", "comparer", "cosmetiques", "encyclopedie"]],
-  ["compte", "Compte", "user", "--c-save", ["compte"]],
+  ["marche", "Marché", "coins", "--c-gold", ["prix", "tendances", "journal", "alertes"]],
+  ["kamas", "Kamas", "trend", "--c-oru", ["rentabilite", "brisage", "donjons"]],
+  ["production", "Production", "hammer", "--c-craft", ["plan", "metiers", "farm"]],
+  ["equipement", "Équipement", "shield", "--c-build", ["builds", "encyclopedie"]],
+  ["groupe", "Groupe", "user", "--c-save", ["groupe", "compte"]],
 ];
+const PAGES = {
+  prix: [["prix", "Liste des prix"], ["tournee", "Tournée de relevés"]],
+  plan: [["plan", "Plan de craft"], ["stock", "Inventaire"]],
+  farm: [["farm", "Liste de farm"], ["carte", "Carte"]],
+  builds: [["builds", "Mes builds"], ["comparer", "Comparer"], ["cosmetiques", "Apparence et cosmétiques"]],
+};
+// Anciennes adresses (liens, favoris) -> page actuelle
+const ALIAS = { sauvegarde: "compte", orukam: "accueil", serveur: "accueil", cotes: "prix" };
+const pageOf = v => Object.keys(PAGES).find(pg => PAGES[pg].some(m => m[0] === v)) || v;
 const tabOf = v => TABS.find(t => t[0] === v);
-const groupOf = v => GROUPS.find(g => g[4].includes(v)) || GROUPS[0];
+const groupOf = v => GROUPS.find(g => g[4].includes(pageOf(v))) || GROUPS[0];
+// Onglets internes d'une page (ex. Prix : liste / tournée)
+function modeSeg(v) {
+  const pg = pageOf(v), modes = PAGES[pg];
+  if (!modes) return null;
+  const cnt = { tournee: () => (TOUR && TOUR.i < TOUR.ids.length ? TOUR.ids.length - TOUR.i : tourCandidates().ids.length), stock: () => Object.keys(S.stock).length, comparer: () => 0 };
+  return h("nav", { class: "seg wrap pagemodes", "aria-label": "Onglets de la page" }, modes.map(([m, l]) => {
+    const n = cnt[m] ? cnt[m]() : 0;
+    return h("a", { href: "#" + m, role: "button", "aria-pressed": m === v ? "true" : "false" }, l + (n ? " (" + n + ")" : ""));
+  }));
+}
+// Recherche toujours visible : ouvre la fiche de n'importe quel objet
+const globalSearch = () => h("div", { class: "gsearch" }, searchBox("Chercher un objet, une ressource, un équipement…", {}, id => openSheet(id), "q-global"));
 let lastInGroup = {};
 try { lastInGroup = JSON.parse(localStorage.getItem("atelier-nav") || "{}"); } catch {}
 // Icônes du jeu pour les menus (objets de Dofus, planche d'icônes locale) ; dessin de secours sinon
 const GI = { accueil: 548, almanax: 21014, marche: 8425, prix: 8425, tournee: 14978, rentabilite: 745, journal: 678, alertes: 1339,
   orukam: 737, serveur: 737, cotes: 489, tendances: 1328, donjons: 8437, carte: 15378, brisage: 1519,
-  production: 147, plan: 147, groupe: 1575, metiers: 14146, farm: 289, stock: 1699, equipement: 2411, builds: 2411, comparer: 22444, cosmetiques: 8069, encyclopedie: 2337, compte: 11270 };
+  production: 147, plan: 147, groupe: 1575, kamas: 745, metiers: 14146, farm: 289, stock: 1699, equipement: 2411, builds: 2411, comparer: 22444, cosmetiques: 8069, encyclopedie: 2337, compte: 11270 };
 // Icônes des menus : petite planche dédiée (data/icons/menu.webp, tools/build_menu_icons.py, même ordre que GI)
 // au lieu d'une vingtaine de grandes planches d'icônes chargées au démarrage
 const MENU_IDS = [...new Set(Object.values(GI))];
@@ -5142,7 +5102,7 @@ function buildTabs() {
   document.getElementById("tabs").replaceChildren(...GROUPS.map(([g, label, , , tabs]) =>
     tabs.length === 1 ? h("div", { class: "grp" }, navLink(tabs[0])) : h("div", { class: "grp" }, h("span", { class: "gl", text: label }), tabs.map(v => navLink(v)))));
   document.getElementById("bottom").replaceChildren(...GROUPS.map(([g, label, ic, c, tabs]) => {
-    const a = h("a", { href: "#" + (lastInGroup[g] && tabs.includes(lastInGroup[g]) ? lastInGroup[g] : tabs[0]), "data-g": g }, h("span", { class: "ib" }, gameIcon(g, ic, 28)), h("span", { text: label }), g === "marche" ? h("span", { class: "dot", id: "dot-marche", hidden: true }) : null);
+    const a = h("a", { href: "#" + (lastInGroup[g] && tabs.includes(pageOf(lastInGroup[g])) ? lastInGroup[g] : tabs[0]), "data-g": g }, h("span", { class: "ib" }, gameIcon(g, ic, 28)), h("span", { text: label }), g === "marche" ? h("span", { class: "dot", id: "dot-marche", hidden: true }) : null);
     a.style.setProperty("--c", "var(" + c + ")");
     return a;
   }));
@@ -5152,7 +5112,7 @@ function subTabs(v) {
   if (g[4].length < 2) return null;
   return h("nav", { class: "subtabs", "aria-label": g[1] }, g[4].map(x => {
     const [, label, ic, c] = tabOf(x);
-    const a = h("a", { href: "#" + x, "aria-current": x === v ? "page" : null }, gameIcon(x, ic, 22), label);
+    const a = h("a", { href: "#" + x, "aria-current": x === pageOf(v) ? "page" : null }, gameIcon(x, ic, 22), label);
     a.style.setProperty("--c", "var(" + c + ")");
     return a;
   }));
@@ -5182,13 +5142,13 @@ function heroFor(v) {
   const bsel = S.builds.find(x => x.id === buildSel) || S.builds[S.builds.length - 1];
   const H = {
     accueil: ["Bienvenue dans l'atelier", n.toLocaleDateString("fr-FR", { weekday: "long", day: "numeric", month: "long" }) + " · " + Object.keys(prices()).length + " prix suivis par le groupe", "home", alm],
-    plan: ["Plan de craft", "Ce que tu veux fabriquer, et tout ce qu'il faut réunir pour y arriver.", "hammer", S.targets.flatMap(t => [t.id, ...(recipe(t.id)?.[1] || []).map(x => x[0])])],
-    rentabilite: ["Rentabilité", "Crafter ou acheter, farmer ou capturer : ce qui rapporte vraiment, taxe et investissement déduits.", "trend", Object.keys(prices()).map(Number).filter(id => recipe(id))],
-    prix: ["Prix du groupe", SH ? "Chaque relevé est partagé en direct avec tout le groupe." : "Tes relevés de fourchettes de prix à l'HDV.", "coins", Object.keys(prices()).map(Number)],
-    farm: ["Liste de farm", "Où récolter, quels monstres taper, quels donjons faire.", "leaf", []],
+    plan: ["Plan de craft", "Ce que tu veux fabriquer, tout ce qu'il faut réunir pour y arriver, et ton inventaire.", "hammer", S.targets.flatMap(t => [t.id, ...(recipe(t.id)?.[1] || []).map(x => x[0])])],
+    rentabilite: ["Crafts rentables", "Crafter ou acheter, farmer ou capturer : ce qui rapporte vraiment, taxe et investissement déduits.", "trend", Object.keys(prices()).map(Number).filter(id => recipe(id))],
+    prix: ["Prix", "Tous les prix d'Orukam : les relevés du groupe d'abord, sinon les cotes Kamamaster. Relève, compare et repère ce qui est à vérifier.", "coins", Object.keys(prices()).map(Number)],
+    farm: ["Farm", "Ce qu'il te manque, où le récolter, quels monstres taper, et la carte des ressources.", "leaf", []],
     brisage: ["Brisage", "Les équipements à crafter puis briser pour revendre les runes, aux prix d'Orukam.", "rune", [...new Set(Object.values(RUNES).map(r => r[1]))].filter(id => priceAt(id)).slice(0, 8)],
     comparer: ["Comparer deux builds", "Pièces, statistiques et coût côte à côte, pour choisir la meilleure variante.", "compare", [...new Set(S.builds.flatMap(b => b.items))]],
-    builds: ["Builds", "Importe un build, vois ses stats, son coût et ce qu'il faut farmer.", "shield", bsel ? bsel.items : []],
+    builds: ["Builds", "Importe un build, vois ses stats et son coût, compare tes variantes et choisis leur apparence.", "shield", bsel ? bsel.items : []],
     cosmetiques: ["Cosmétiques", "Apparats, objets vivants et montures d'apparat, avec leur prix à Orukam, et la garde-robe de tes builds.", "shield", cosmIds().filter(id => item(id)[3] >= 0 && item(id)[2] === 246).slice(0, 8)],
     stock: ["Inventaire", "Ce que tu as sous la main, valorisé au prix du groupe.", "bag", Object.keys(S.stock).map(Number)],
     groupe: ["Groupe", "Les métiers de chacun et les commandes entre membres : demande ce qu'il te manque à ceux qui savent le faire.", "user", ORD.map(o => o.item_id)],
@@ -5254,7 +5214,7 @@ function decorate(root, v) {
 // =====================================================================
 // Rendu et navigation
 // =====================================================================
-const VIEWS = { tendances: viewTendances, almanax: viewAlmanax, carte: viewCarte, serveur: viewServeur, cotes: viewCotes, donjons: viewDonjons, brisage: viewBrisage, comparer: viewComparer, alertes: viewAlertes, metiers: viewMetiers, journal: viewJournal, tournee: viewTournee, farm: viewFarm, builds: viewBuilds, cosmetiques: viewCosmetiques, accueil: viewAccueil, plan: viewPlan, rentabilite: viewRentabilite, prix: viewPrix, stock: viewStock, groupe: viewGroupe, encyclopedie: viewEncyclopedie, compte: viewSauvegarde };
+const VIEWS = { tendances: viewTendances, almanax: viewAlmanax, carte: viewCarte, donjons: viewDonjons, brisage: viewBrisage, comparer: viewComparer, alertes: viewAlertes, metiers: viewMetiers, journal: viewJournal, tournee: viewTournee, farm: viewFarm, builds: viewBuilds, cosmetiques: viewCosmetiques, accueil: viewAccueil, plan: viewPlan, rentabilite: viewRentabilite, prix: viewPrix, stock: viewStock, groupe: viewGroupe, encyclopedie: viewEncyclopedie, compte: viewSauvegarde };
 function renderCounts() {
   const set = (id, n) => { const el = document.getElementById(id); if (el) { el.textContent = n; el.dataset.z = n ? "0" : "1"; } };
   set("c-plan", S.targets.length);
@@ -5274,20 +5234,24 @@ function render() {
   document.getElementById("bottom").hidden = NEED_LOGIN;
   if (NEED_LOGIN) { const root = document.getElementById("view"); root.dataset.sec = "accueil"; root.replaceChildren(h("div", { class: "stack" }, viewLogin())); return; }
   const a = document.activeElement, focusId = a && a.id, caret = a && a.selectionStart;
-  document.querySelectorAll(".sidenav a").forEach(x => { if (x.dataset.v === view) x.setAttribute("aria-current", "page"); else x.removeAttribute("aria-current"); });
+  document.querySelectorAll(".sidenav a").forEach(x => { if (x.dataset.v === pageOf(view)) x.setAttribute("aria-current", "page"); else x.removeAttribute("aria-current"); });
   const grp = groupOf(view)[0];
   lastInGroup[grp] = view; try { localStorage.setItem("atelier-nav", JSON.stringify(lastInGroup)); } catch {}
   document.querySelectorAll(".bottom a").forEach(x => { if (x.dataset.g === grp) { x.setAttribute("aria-current", "page"); x.setAttribute("href", "#" + view); } else x.removeAttribute("aria-current"); });
   const root = document.getElementById("view");
   root.dataset.sec = view;
-  root.replaceChildren(h("div", { class: "stack" }, subTabs(view), heroFor(view), VIEWS[view]()));
+  root.replaceChildren(h("div", { class: "stack" }, globalSearch(), subTabs(view), heroFor(pageOf(view)), modeSeg(view), VIEWS[view]()));
   decorate(root, view);
   renderCounts();
   if (focusId && /^(q-|enc-)/.test(focusId)) { const el = document.getElementById(focusId); if (el) { el.focus(); try { if (caret != null) el.setSelectionRange(caret, caret); } catch {} } }
   if (sheet.open) renderSheet();
   checkAlertsSoon();
 }
-function route() { let v = location.hash.slice(1); if (v === "sauvegarde") v = "compte"; if (v === "orukam") v = "serveur"; view = VIEWS[v] ? v : "accueil"; render(); window.scrollTo(0, 0); }
+function route() {
+  let v = location.hash.slice(1);
+  if (ALIAS[v]) { v = ALIAS[v]; try { history.replaceState(null, "", "#" + v); } catch {} }
+  view = VIEWS[v] ? v : "accueil"; render(); window.scrollTo(0, 0);
+}
 window.addEventListener("hashchange", route);
 
 fetch(PATH.core).then(r => r.json()).then(d => {

@@ -713,3 +713,11 @@ li.fx-pass strong { color: var(--kamas); }
 table.free .chip { white-space: nowrap; }
 .protgrid { display: grid; gap: 8px; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); margin-top: 8px; }
 @media (max-width: 720px) { .protgrid { grid-template-columns: 1fr; } }
+
+/* Réorganisation : recherche toujours visible et onglets internes des pages */
+.gsearch { position: relative; z-index: 5; }
+.gsearch input[type="search"] { width: 100%; font-size: 1rem; padding: 11px 14px 11px 40px; border-radius: 14px; }
+.pagemodes { align-self: flex-start; max-width: 100%; flex-wrap: wrap; }
+.pagemodes a { text-decoration: none; color: var(--muted); font: 800 .88rem var(--f-body); padding: 7px 14px; border-radius: 9px; }
+.pagemodes a[aria-pressed="true"] { background: var(--surface); color: color-mix(in srgb, var(--sec) 80%, var(--fg)); box-shadow: 0 1px 3px rgb(0 0 0 / .12); }
+@media (max-width: 720px) { .pagemodes { display: flex; width: 100%; } .pagemodes a { flex: 1 1 auto; text-align: center; } }
