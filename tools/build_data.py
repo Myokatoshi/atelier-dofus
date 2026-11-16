@@ -98,6 +98,37 @@ def bag_contents(item_refs, core_items):
     return bags
 
 
+def cond_drops(monster_refs, tr, subs, boss_dj, core_items, mons, drops):
+    """Drops soumis à des conditions simples, ajoutés à drops sous la forme [monstre, taux, taux, 0, 0, niv. min, niv. max, [zones]] :
+    fragments de carte (« Mt=0&Ms=0 », parfois limités à la zone du combat « PB=zone »), équipements lâchés selon le niveau
+    du personnage (« PL>a&PL<b », niveau a+1 à b-1), avec « (SC!n|ST!n) » (type de serveur) ignoré. 0 = pas de limite, [] = toutes les zones."""
+    tok = re.compile(r"^(Mt=0|Ms=0|PB=\d+|PL>\d+|PL<\d+|SC!\d+|ST!\d+)$")
+    n = 0
+    for m in (x["data"] for x in monster_refs):
+        if "drops" not in m:
+            continue
+        name = tr(m["nameId"])
+        for d_ in m["drops"]["Array"]:
+            cr, oid = d_.get("criterions") or "", d_["objectId"]
+            if not d_.get("hasCriterions") or oid not in core_items:
+                continue
+            parts = [p for p in re.split(r"[&|()]+", cr) if p]
+            if not parts or not all(tok.match(p) for p in parts):
+                continue
+            if "|" in cr.replace("(SC!", "").replace("|ST!", "") and not re.fullmatch(r"[^|]*(\(PB=\d+(\|PB=\d+)*\))?[^|]*", cr.replace("(SC!5|ST!5)", "")):
+                continue  # « ou » autre que sur les zones ou le type de serveur : non géré
+            pl = [int(x) for x in re.findall(r"PL>(\d+)", cr)]; ph = [int(x) for x in re.findall(r"PL<(\d+)", cr)]
+            pbs = [int(x) for x in re.findall(r"PB=(\d+)", cr)]
+            if not name:
+                continue
+            lv = [g["level"] for g in m["grades"]["Array"]] or [0]
+            mons.setdefault(m["id"], [name, min(lv), max(lv), [x for x in m["subareas"]["Array"] if x in subs], boss_dj.get(m["id"], 0)])
+            pc = [d_["percentDropForGrade%d" % g] for g in range(1, 6)]
+            drops.setdefault(oid, []).append([m["id"], round(min(pc), 3), round(max(pc), 3), 0, 0, pl[0] + 1 if pl else 0, ph[0] - 1 if ph else 0, pbs])
+            n += 1
+    return n
+
+
 def archi_monsters(monster_refs):
     """Archimonstres (race 78) : rares, mis à part dans le calcul des zones de farm (F.arch)."""
     return sorted(x["data"]["id"] for x in monster_refs if x["data"].get("race") == 78 and "id" in x["data"])
@@ -283,6 +314,7 @@ def main():
                 harvest[it_][2].append(s_["id"])
     bags = bag_contents(refs("items.json"), core_items)
     job_drops(refs("monsters.json"), tr, subs, boss_dj, core_items, harvest, mons, drops, bags)
+    cond_drops(refs("monsters.json"), tr, subs, boss_dj, core_items, mons, drops)
     farm = {"mons": mons, "drops": drops, "subs": subs, "areas": areas, "dungeons": dungeons, "harvest": harvest, "bags": bags,
             "arch": [m for m in archi_monsters(refs("monsters.json")) if m in mons]}
     json.dump(farm, open(OUT / "farm.json", "w", encoding="utf-8"), ensure_ascii=False, separators=(",", ":"))

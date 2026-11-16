@@ -1707,10 +1707,13 @@ function sourcesEl(id, full, qty) {
         h("thead", {}, h("tr", {}, h("th", { text: "Monstre" }), h("th", { class: "n", text: "Niveau" }), h("th", { class: "n", text: "Taux" }), h("th", { class: "n", text: "Avec " + ppOf() + " PP" }), h("th", { text: "Où" }))),
         h("tbody", {}, dr.map(d => {
           const [mid, a, b] = d, m = F.mons[mid];
-          const where = (m[5] ? "zones de récolte de " + item(m[5])[0] + " : " : "") + m[3].slice(0, 4).map(subLabel).join(", ") + (m[3].length > 4 ? " +" + (m[3].length - 4) : "");
+          const zs = d[7] && d[7].length ? d[7] : m[3];
+          const where = (m[5] ? "zones de récolte de " + item(m[5])[0] + " : " : "") + zs.slice(0, 4).map(subLabel).join(", ") + (zs.length > 4 ? " +" + (zs.length - 4) : "");
           return h("tr", {},
             h("td", {}, h("span", { class: "nm", text: m[0] }), m[4] ? h("span", { class: "chip warn", style: "margin-left:6px", text: "Boss · " + djName(m[4]) }) : null,
-              d[3] ? h("span", { class: "chip job", style: "margin-left:6px", text: jobLabel(d[3]) + jobTag(d, true) }) : null),
+              d[3] ? h("span", { class: "chip job", style: "margin-left:6px", text: jobLabel(d[3]) + jobTag(d, true) }) : null,
+              !d[3] && (d[5] || d[6]) ? h("span", { class: "chip", style: "margin-left:6px", text: "perso niv. " + (d[5] || 1) + "–" + (d[6] || 200) }) : null,
+              !d[3] && d[7] && d[7].length ? h("span", { class: "chip", style: "margin-left:6px", text: "seulement : " + d[7].map(subName).join(", ") }) : null),
             h("td", { class: "n", text: m[1] === m[2] ? m[1] : m[1] + "–" + m[2] }),
             h("td", { class: "n", text: pctTxt(a, b) }),
             h("td", { class: "n", text: pctTxt(dropChance((a + b) / 2) * 100, dropChance((a + b) / 2) * 100) }),
@@ -1740,7 +1743,7 @@ function zonesFor(ids) {
   for (const id of ids) {
     const s_ = sourcesOf(id); if (!s_) continue;
     if (s_.hv) for (const sid of s_.hv[2]) add(sid, id, "récolte");
-    for (const d of s_.dr) { const [mid, , b] = d; if (b < 1) continue; const m = F.mons[mid]; for (const sid of m[3]) add(sid, id, (d[3] === 41 ? "chasse : " : d[3] ? "protecteur : " : "") + m[0] + " " + pctTxt(b, b)); }
+    for (const d of s_.dr) { const [mid, , b] = d; if (b < 1) continue; const m = F.mons[mid]; for (const sid of (d[7] && d[7].length ? d[7] : m[3])) add(sid, id, (d[3] === 41 ? "chasse : " : d[3] ? "protecteur : " : "") + m[0] + " " + pctTxt(b, b)); }
   }
   return [...z.entries()].map(([sid, m]) => ({ sid, res: [...m.entries()] })).sort((a, b) => b.res.length - a.res.length || anomalyOf(b.sid) - anomalyOf(a.sid) || (F.subs[a.sid][2] - F.subs[b.sid][2])).slice(0, 12);
 }
@@ -4391,7 +4394,7 @@ let ZIDX = null;
 function zoneIndex() {
   if (ZIDX || !F) return ZIDX;
   const arch = new Set(F.arch || []), loot = new Map();
-  for (const [it, ds] of Object.entries(F.drops)) for (const d of ds) if (!d[3] && D.items[it]) { const l = loot.get(d[0]) || []; l.push([+it, (d[1] + d[2]) / 2]); loot.set(d[0], l); }
+  for (const [it, ds] of Object.entries(F.drops)) for (const d of ds) if (!d[3] && D.items[it]) { const l = loot.get(d[0]) || []; l.push([+it, (d[1] + d[2]) / 2, d[5] || 0, d[6] || 0, d[7] || []]); loot.set(d[0], l); }
   const zones = new Map();
   for (const [mid, m] of Object.entries(F.mons)) {
     if (m[4] || !loot.has(+mid)) continue;
@@ -4406,6 +4409,9 @@ function zoneIndex() {
 }
 let znF = { q: "", min: "", max: "", an: false, sort: "kh", n: 40, open: new Set(), target: {} };
 const znP = () => { const z = S.settings.zn || {}; return { ch: Math.max(1, Math.min(8, +S.settings.djc || 1)), an: z.an ?? null, bonus: +z.bonus || 0, min: +z.min > 0 ? +z.min : 2, mobs: +z.mobs > 0 ? +z.mobs : 4 }; };
+// Drop conditionné : équipement selon le niveau du personnage, fragment de carte limité à certaines zones
+const charLvl = () => Math.max(1, Math.min(200, +S.settings.lvl || 200));
+const lootOk = (l, sid) => (!l[2] || charLvl() >= l[2]) && (!l[3] || charLvl() <= l[3]) && (!l[4] || !l[4].length || l[4].includes(+sid));
 const setZn = patch => { S.settings.zn = { ...(S.settings.zn || {}), ...patch }; persist("plan"); };
 function zoneCalc(z) {
   const P = znP(), an = P.an != null ? P.an : anomalyOf(z.sid), fac = ppOf() / 100 * (1 + an / 100) * (1 + P.bonus / 100);
@@ -4413,11 +4419,12 @@ function zoneCalc(z) {
   // valeur d'un monstre (un personnage) et chance de chaque ressource
   const monVal = z.mons.map(mid => {
     let v = 0, miss = 0;
-    for (const [it, pct] of ZIDX.loot.get(mid)) { const p = resale(it); if (p == null) miss++; else v += Math.min(1, pct / 100 * fac) * p; }
+    for (const l of ZIDX.loot.get(mid)) { if (!lootOk(l, z.sid)) continue; const [it, pct] = l, p = resale(it); if (p == null) miss++; else v += Math.min(1, pct / 100 * fac) * p; }
     return { mid, v, miss };
   }).sort((a, b) => b.v - a.v);
   const per = new Map(); // ressource -> { q: quantité par combat, src: monstres }
-  for (const mid of mons) for (const [it, pct] of ZIDX.loot.get(mid)) {
+  for (const mid of mons) for (const l of ZIDX.loot.get(mid)) {
+    if (!lootOk(l, z.sid)) continue; const [it, pct] = l;
     const ch = Math.min(1, pct / 100 * fac), e = per.get(it) || { q: 0, rate: 0, src: [] };
     e.q += ch * P.mobs / mons.length * P.ch; e.rate = Math.max(e.rate, ch * 100); e.src.push(mid); per.set(it, e);
   }
@@ -4488,12 +4495,13 @@ function viewZones() {
         h("span", { class: "label", text: "Personnages" }), numInput(P.ch, v => { const n = Math.round(+v); S.settings.djc = n >= 1 ? Math.min(8, n) : 1; persist("plan"); }, { sm: true, label: "Personnages", id: "zn-ch" }),
         h("span", { class: "label", text: "Prospection" }), numInput(ppOf(), v => { const n = Math.round(+String(v).replace(/\s/g, "")); S.settings.pp = n > 0 ? Math.min(1000, n) : 100; persist("plan"); }, { sm: true, label: "Prospection", id: "zn-pp" }),
         h("span", { class: "label", text: "Anomalie" }), num(P.an, v => setZn({ an: v }), "Anomalie en %", "zn-anv", "actuelle"), h("span", { class: "small muted", text: "%" }),
-        h("span", { class: "label", text: "Bonus butin" }), num(P.bonus || null, v => setZn({ bonus: v }), "Bonus butin en %", "zn-bonus", "0"), h("span", { class: "small muted", text: "%" })),
+        h("span", { class: "label", text: "Bonus butin" }), num(P.bonus || null, v => setZn({ bonus: v }), "Bonus butin en %", "zn-bonus", "0"), h("span", { class: "small muted", text: "%" }),
+        h("span", { class: "label", text: "Niveau des persos" }), numInput(charLvl(), v => { const n = Math.round(+v); S.settings.lvl = n >= 1 ? Math.min(200, n) : 200; persist("plan"); }, { sm: true, label: "Niveau des personnages", id: "zn-lvl" })),
       h("div", { class: "row", style: "gap:8px" },
         h("span", { class: "label", text: "Durée d'un combat" }), num(P.min, v => setZn({ min: v }), "Minutes par combat", "zn-min", "2"), h("span", { class: "small muted", text: "min → " + fmt.format(Math.round(60 / P.min * 10) / 10) + " combats par heure" }),
         h("span", { class: "label", text: "Monstres par combat" }), num(P.mobs, v => setZn({ mobs: v }), "Monstres par combat", "zn-mobs", "4")),
       h("div", { class: "filters" }, h("div", { class: "search" }, q), lv("min", "Niv. min"), lv("max", "Niv. max"), h("label", { class: "check" }, anCb, "En anomalie seulement"), sortSeg),
-      h("p", { class: "note", text: "Par combat : " + P.mobs + " monstres de la zone (ou le monstre ciblé). Chaque ressource tombe avec son taux × prospection ÷ 100 × (1 + anomalie) × (1 + bonus butin), plafonné à 100 %, pour chacun des " + P.ch + " personnage" + (P.ch > 1 ? "s" : "") + " (comme pour les donjons). Anomalie vide = anomalie actuelle de chaque zone. Prix actuels d'Orukam, cotes « à vérifier » non comptées. Donjons et archimonstres à part." })),
+      h("p", { class: "note", text: "Par combat : " + P.mobs + " monstres de la zone (ou le monstre ciblé). Chaque ressource tombe avec son taux × prospection ÷ 100 × (1 + anomalie) × (1 + bonus butin), plafonné à 100 %, pour chacun des " + P.ch + " personnage" + (P.ch > 1 ? "s" : "") + " (comme pour les donjons). Anomalie vide = anomalie actuelle de chaque zone. Équipements lâchés seulement si le niveau des personnages est dans leur fourchette, fragments de carte seulement dans leur zone. Prix actuels d'Orukam, cotes « à vérifier » non comptées. Donjons et archimonstres à part." })),
     rows.length ? h("div", { class: "djlist" }, rows.slice(0, znF.n).map(card)) : h("div", { class: "empty" }, h("strong", { text: "Aucune zone ne correspond" }), h("span", { text: "Change la recherche ou les filtres." })),
     rows.length > znF.n ? h("div", { class: "row", style: "justify-content:center" }, h("button", { type: "button", class: "btn", onclick: () => { znF.n += 40; render(); } }, "Afficher plus (" + (rows.length - znF.n) + " restantes)")) : null);
 }
