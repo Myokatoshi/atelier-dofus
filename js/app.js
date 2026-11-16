@@ -4382,6 +4382,121 @@ function djCalc(d) {
   }).sort((a, b) => (b.v ?? -1) - (a.v ?? -1));
   return { tot, kh: tot * 60 / min, min, drops, missing, an };
 }
+// =====================================================================
+// Zones de farm (Kamas › Zones) : comme les donjons, mais pour les sous-zones hors donjon. Par combat : N monstres
+// pris parmi ceux de la zone (ou le monstre ciblé), chacun lâche ses ressources avec un taux × prospection ÷ 100
+// × (1 + anomalie) × (1 + bonus butin), plafonné à 100 %, pour chaque personnage. Archimonstres (F.arch) à part.
+// =====================================================================
+let ZIDX = null;
+function zoneIndex() {
+  if (ZIDX || !F) return ZIDX;
+  const arch = new Set(F.arch || []), loot = new Map();
+  for (const [it, ds] of Object.entries(F.drops)) for (const d of ds) if (!d[3] && D.items[it]) { const l = loot.get(d[0]) || []; l.push([+it, (d[1] + d[2]) / 2]); loot.set(d[0], l); }
+  const zones = new Map();
+  for (const [mid, m] of Object.entries(F.mons)) {
+    if (m[4] || !loot.has(+mid)) continue;
+    for (const sid of m[3]) {
+      const z = F.subs[sid]; if (!z || (z[3] || 0) > 0 || /^Expédition/i.test(z[0]) || /^Expéditions$/i.test(F.areas[z[1]] || "")) continue;
+      const e = zones.get(sid) || { sid: +sid, mons: [], arch: [] };
+      (arch.has(+mid) ? e.arch : e.mons).push(+mid); zones.set(sid, e);
+    }
+  }
+  ZIDX = { loot, zones: [...zones.values()].filter(z => z.mons.length) };
+  return ZIDX;
+}
+let znF = { q: "", min: "", max: "", an: false, sort: "kh", n: 40, open: new Set(), target: {} };
+const znP = () => { const z = S.settings.zn || {}; return { ch: Math.max(1, Math.min(8, +S.settings.djc || 1)), an: z.an ?? null, bonus: +z.bonus || 0, min: +z.min > 0 ? +z.min : 2, mobs: +z.mobs > 0 ? +z.mobs : 4 }; };
+const setZn = patch => { S.settings.zn = { ...(S.settings.zn || {}), ...patch }; persist("plan"); };
+function zoneCalc(z) {
+  const P = znP(), an = P.an != null ? P.an : anomalyOf(z.sid), fac = ppOf() / 100 * (1 + an / 100) * (1 + P.bonus / 100);
+  const t = znF.target[z.sid], mons = t && z.mons.includes(t) ? [t] : z.mons;
+  // valeur d'un monstre (un personnage) et chance de chaque ressource
+  const monVal = z.mons.map(mid => {
+    let v = 0, miss = 0;
+    for (const [it, pct] of ZIDX.loot.get(mid)) { const p = resale(it); if (p == null) miss++; else v += Math.min(1, pct / 100 * fac) * p; }
+    return { mid, v, miss };
+  }).sort((a, b) => b.v - a.v);
+  const per = new Map(); // ressource -> { q: quantité par combat, src: monstres }
+  for (const mid of mons) for (const [it, pct] of ZIDX.loot.get(mid)) {
+    const ch = Math.min(1, pct / 100 * fac), e = per.get(it) || { q: 0, rate: 0, src: [] };
+    e.q += ch * P.mobs / mons.length * P.ch; e.rate = Math.max(e.rate, ch * 100); e.src.push(mid); per.set(it, e);
+  }
+  const fph = 60 / P.min;
+  let tot = 0, missing = 0;
+  const drops = [...per.entries()].map(([id, e]) => { const p = resale(id), qh = e.q * fph; if (p == null) missing++; else tot += qh * p; return { id, rate: e.rate, qf: e.q, qh, p, vh: p == null ? null : qh * p, src: e.src, o: priceAt(id) }; })
+    .sort((a, b) => (b.vh ?? -1) - (a.vh ?? -1));
+  return { kh: tot, an, fph, drops, missing, monVal, target: mons.length === 1 && t ? t : null };
+}
+function viewZones() {
+  if (!F) { ensureFarm().then(d => { if (d && view === "zones") render(); }); return h("div", { class: "loading", text: "Chargement des monstres et des zones…" }); }
+  const ZI = zoneIndex(), P = znP(), nq = norm(znF.q || "");
+  const match = z => !nq || norm(F.subs[z.sid][0]).includes(nq) || norm(F.areas[F.subs[z.sid][1]] || "").includes(nq)
+    || z.mons.some(m => norm(F.mons[m][0]).includes(nq) || ZI.loot.get(m).some(([it]) => norm(item(it)[0]).includes(nq)));
+  let rows = ZI.zones.filter(z => match(z) && (!znF.min || F.subs[z.sid][2] >= +znF.min) && (!znF.max || F.subs[z.sid][2] <= +znF.max) && (!znF.an || anomalyOf(z.sid)))
+    .map(z => { const c = zoneCalc(z); c.focus = nq ? c.drops.filter(x => norm(item(x.id)[0]).includes(nq)) : []; return { z, c }; });
+  // Recherche d'une ressource : zones classées selon ce qu'elle rapporte
+  const byRes = nq && rows.some(r => r.c.focus.length);
+  const fv = r => r.c.focus.reduce((t, x) => t + (x.vh ?? x.qh / 1e6), 0);
+  rows.sort(znF.sort === "lv" ? (a, b) => F.subs[b.z.sid][2] - F.subs[a.z.sid][2] || b.c.kh - a.c.kh : byRes ? (a, b) => fv(b) - fv(a) || b.c.kh - a.c.kh : (a, b) => b.c.kh - a.c.kh);
+  const num = (val, set, label, id, ph) => numInput(val ?? "", v => { const t = String(v).replace(/[%\s]/g, ""); set(t === "" ? null : +t); }, { sm: true, label, id, ph });
+  const q = h("input", { type: "search", id: "q-zones", placeholder: "Zone, monstre ou ressource", value: znF.q, "aria-label": "Chercher une zone, un monstre ou une ressource" });
+  q.addEventListener("input", () => { znF.q = q.value; znF.n = 40; clearTimeout(q._t); q._t = setTimeout(render, 250); });
+  const lv = (key, ph) => { const el = h("input", { type: "number", id: "zn-" + key, min: 1, max: 200, placeholder: ph, value: znF[key], "aria-label": ph }); el.addEventListener("change", () => { znF[key] = el.value; znF.n = 40; render(); }); return el; };
+  const anCb = h("input", { type: "checkbox", id: "zn-an", checked: znF.an }); anCb.addEventListener("change", () => { znF.an = anCb.checked; znF.n = 40; render(); });
+  const sortSeg = h("span", { class: "seg", role: "group", "aria-label": "Tri" }, [["kh", "Kamas / heure"], ["lv", "Niveau"]].map(([v, l]) =>
+    h("button", { type: "button", "aria-pressed": znF.sort === v ? "true" : "false", onclick: () => { znF.sort = v; render(); } }, l)));
+  const card = ({ z, c }, i) => {
+    const sb = F.subs[z.sid], lvs = z.mons.map(m => F.mons[m]), lo = Math.min(...lvs.map(m => m[1])), hi = Math.max(...lvs.map(m => m[2]));
+    const det = h("details", { class: "dj", open: znF.open.has(z.sid) });
+    det.addEventListener("toggle", () => { if (det.open) znF.open.add(z.sid); else znF.open.delete(z.sid); });
+    const best = c.monVal[0];
+    const tSel = h("select", { "aria-label": "Monstre ciblé", id: "zn-t-" + z.sid }, h("option", { value: "" }, "Tous les monstres de la zone (moyenne)"),
+      c.monVal.map(x => h("option", { value: x.mid, selected: c.target === x.mid }, F.mons[x.mid][0] + " · ≈ " + kk(x.v) + " ₭ par monstre")));
+    tSel.addEventListener("change", () => { const v = +tSel.value; znF.target = { ...znF.target }; if (v) znF.target[z.sid] = v; else delete znF.target[z.sid]; render(); });
+    det.append(
+      h("summary", {},
+        h("span", { class: "rank", text: i + 1 }),
+        h("span", { class: "djn" }, h("strong", { text: sb[0] }), h("small", { class: "muted", text: (F.areas[sb[1]] && F.areas[sb[1]] !== sb[0] ? F.areas[sb[1]] + " · " : "") + "zone niv. " + sb[2] + " · monstres niv. " + lo + "–" + hi + " · " + z.mons.length + " monstre" + (z.mons.length > 1 ? "s" : "") })),
+        h("span", { class: "djd" }, c.drops.slice(0, 3).map(x => icon(x.id, 26))),
+        h("span", { class: "djc" }, c.focus && c.focus.length ? c.focus.slice(0, 2).map(x => h("span", { class: "chip up", text: item(x.id)[0] + " : " + (x.qh < 10 ? x.qh.toFixed(1).replace(".", ",") : k(Math.round(x.qh))) + " / h" })) : null,
+          c.an ? h("span", { class: "chip kamas", text: "Anomalie +" + c.an + " %" }) : null, c.target ? h("span", { class: "chip job", text: "cible : " + F.mons[c.target][0] }) : null),
+        h("span", { class: "djv" }, h("strong", { text: kk(c.kh) + " ₭/h" }), h("small", { class: "muted", text: fmt.format(Math.round(c.fph * 10) / 10) + " combats/h" }))),
+      h("div", { class: "djbody" },
+        h("div", { class: "row", style: "gap:8px" }, h("span", { class: "label", text: "Monstre ciblé" }), tSel),
+        best && best.v > 0 ? h("p", { class: "small pos", text: "Le plus rentable à cibler : " + F.mons[best.mid][0] + " (niv. " + F.mons[best.mid][1] + "–" + F.mons[best.mid][2] + ", ≈ " + kk(best.v) + " ₭ par monstre et par personnage)" }) : null,
+        h("div", { class: "tablewrap" }, h("table", {},
+          h("thead", {}, h("tr", {}, h("th", { text: "Ressource" }), h("th", { class: "n", text: "Taux" }), h("th", { class: "n", text: "Par heure" }), h("th", { class: "n hide-m", text: "Prix" }), h("th", { class: "n", text: "₭ / heure" }))),
+          h("tbody", {}, c.drops.map(x => h("tr", {},
+            h("td", {}, itemLink(x.id, x.src.map(m => F.mons[m][0]).slice(0, 3).join(", ") + (x.src.length > 3 ? " +" + (x.src.length - 3) : ""), 24), oddChip(x.id, x.o)),
+            h("td", { class: "n", text: (x.rate < 10 ? x.rate.toFixed(2) : x.rate.toFixed(1)).replace(".", ",") + " %" }),
+            h("td", { class: "n", text: x.qh < 10 ? x.qh.toFixed(1).replace(".", ",") : k(Math.round(x.qh)) }),
+            h("td", { class: "n hide-m" }, x.p == null ? h("span", { class: "muted", text: "—" }) : k(x.p)),
+            h("td", { class: "n" }, x.vh == null ? h("span", { class: "muted", text: "sans prix" }) : h("strong", { text: kk(x.vh) }))))))),
+        h("details", { class: "small" }, h("summary", { text: "Valeur de chaque monstre de la zone" }),
+          h("div", { class: "tablewrap" }, h("table", {}, h("tbody", {}, c.monVal.map(x => h("tr", {},
+            h("td", {}, h("strong", { text: F.mons[x.mid][0] }), h("small", { class: "muted", style: "display:block", text: "niv. " + F.mons[x.mid][1] + "–" + F.mons[x.mid][2] + (x.miss ? " · " + x.miss + " drop(s) sans prix" : "") })),
+            h("td", { class: "n" }, kk(x.v) + " ₭ / monstre"),
+            h("td", {}, h("button", { type: "button", class: "btn sm", onclick: () => { znF.target = { ...znF.target, [z.sid]: x.mid }; render(); } }, "Cibler")))))))),
+        z.arch.length ? h("p", { class: "note", text: "Archimonstres possibles dans la zone (rares, non comptés) : " + z.arch.map(m => F.mons[m][0]).join(", ") + "." } ) : null,
+        c.missing ? h("p", { class: "note", text: c.missing + " ressource(s) sans prix connu : relève leur prix pour affiner le total." }) : null));
+    return det;
+  };
+  return h("div", { class: "stack" },
+    h("section", { class: "panel" },
+      h("div", { class: "row between" }, h("h2", { text: "Zones de farm rentables" }), h("span", { class: "chip", text: rows.length + " zones" })),
+      h("div", { class: "row", style: "gap:8px" },
+        h("span", { class: "label", text: "Personnages" }), numInput(P.ch, v => { const n = Math.round(+v); S.settings.djc = n >= 1 ? Math.min(8, n) : 1; persist("plan"); }, { sm: true, label: "Personnages", id: "zn-ch" }),
+        h("span", { class: "label", text: "Prospection" }), numInput(ppOf(), v => { const n = Math.round(+String(v).replace(/\s/g, "")); S.settings.pp = n > 0 ? Math.min(1000, n) : 100; persist("plan"); }, { sm: true, label: "Prospection", id: "zn-pp" }),
+        h("span", { class: "label", text: "Anomalie" }), num(P.an, v => setZn({ an: v }), "Anomalie en %", "zn-anv", "actuelle"), h("span", { class: "small muted", text: "%" }),
+        h("span", { class: "label", text: "Bonus butin" }), num(P.bonus || null, v => setZn({ bonus: v }), "Bonus butin en %", "zn-bonus", "0"), h("span", { class: "small muted", text: "%" })),
+      h("div", { class: "row", style: "gap:8px" },
+        h("span", { class: "label", text: "Durée d'un combat" }), num(P.min, v => setZn({ min: v }), "Minutes par combat", "zn-min", "2"), h("span", { class: "small muted", text: "min → " + fmt.format(Math.round(60 / P.min * 10) / 10) + " combats par heure" }),
+        h("span", { class: "label", text: "Monstres par combat" }), num(P.mobs, v => setZn({ mobs: v }), "Monstres par combat", "zn-mobs", "4")),
+      h("div", { class: "filters" }, h("div", { class: "search" }, q), lv("min", "Niv. min"), lv("max", "Niv. max"), h("label", { class: "check" }, anCb, "En anomalie seulement"), sortSeg),
+      h("p", { class: "note", text: "Par combat : " + P.mobs + " monstres de la zone (ou le monstre ciblé). Chaque ressource tombe avec son taux × prospection ÷ 100 × (1 + anomalie) × (1 + bonus butin), plafonné à 100 %, pour chacun des " + P.ch + " personnage" + (P.ch > 1 ? "s" : "") + " (comme pour les donjons). Anomalie vide = anomalie actuelle de chaque zone. Prix actuels d'Orukam, cotes « à vérifier » non comptées. Donjons et archimonstres à part." })),
+    rows.length ? h("div", { class: "djlist" }, rows.slice(0, znF.n).map(card)) : h("div", { class: "empty" }, h("strong", { text: "Aucune zone ne correspond" }), h("span", { text: "Change la recherche ou les filtres." })),
+    rows.length > znF.n ? h("div", { class: "row", style: "justify-content:center" }, h("button", { type: "button", class: "btn", onclick: () => { znF.n += 40; render(); } }, "Afficher plus (" + (rows.length - znF.n) + " restantes)")) : null);
+}
 // Protecteurs des ressources dans l'onglet Donjons : butin attendu par combat (sac à 100 %, ressource rare selon la prospection)
 let djP = { job: 0, open: false };
 // Tous les protecteurs avec leur butin et sa valeur attendue par combat, du plus rentable au moins rentable
@@ -5036,7 +5151,7 @@ const IC = {
 const svgI = name => { const el = s("svg", { class: "i", viewBox: "0 0 24 24", "aria-hidden": "true" }); for (const d of IC[name].split(" M")) el.append(s("path", { d: d.startsWith("M") ? d : "M" + d })); return el; };
 const TABS = [
   ["accueil", "Accueil", "home", "--c-home"], ["plan", "Plan de craft", "hammer", "--c-craft", "c-plan"], ["rentabilite", "Crafts rentables", "trend", "--c-gold"],
-  ["prix", "Prix", "coins", "--c-gold", "c-prix"], ["tournee", "Tournée HDV", "route", "--c-gold", "c-tour"], ["journal", "Journal", "ledger", "--c-journal"], ["alertes", "Alertes", "bell", "--c-gold", "c-alert"], ["farm", "Farm", "leaf", "--c-farm"], ["metiers", "Métiers", "up", "--c-craft"], ["brisage", "Brisage", "rune", "--c-alm"], ["serveur", "Vue d'ensemble", "globe", "--c-oru"], ["almanax", "Almanax", "calendar", "--c-alm"], ["carte", "Carte", "map", "--c-oru"], ["cotes", "Cotes HDV", "chart", "--c-oru"], ["tendances", "Tendances", "trend", "--c-oru"], ["donjons", "Donjons", "castle", "--c-oru"], ["builds", "Builds", "shield", "--c-build", "c-builds"], ["comparer", "Comparer", "compare", "--c-build"], ["cosmetiques", "Cosmétiques", "shield", "--c-build"],
+  ["prix", "Prix", "coins", "--c-gold", "c-prix"], ["tournee", "Tournée HDV", "route", "--c-gold", "c-tour"], ["journal", "Journal", "ledger", "--c-journal"], ["alertes", "Alertes", "bell", "--c-gold", "c-alert"], ["farm", "Farm", "leaf", "--c-farm"], ["metiers", "Métiers", "up", "--c-craft"], ["brisage", "Brisage", "rune", "--c-alm"], ["serveur", "Vue d'ensemble", "globe", "--c-oru"], ["almanax", "Almanax", "calendar", "--c-alm"], ["carte", "Carte", "map", "--c-oru"], ["cotes", "Cotes HDV", "chart", "--c-oru"], ["tendances", "Tendances", "trend", "--c-oru"], ["donjons", "Donjons", "castle", "--c-oru"], ["zones", "Zones", "map", "--c-oru"], ["builds", "Builds", "shield", "--c-build", "c-builds"], ["comparer", "Comparer", "compare", "--c-build"], ["cosmetiques", "Cosmétiques", "shield", "--c-build"],
   ["stock", "Inventaire", "bag", "--c-stock", "c-stock"], ["groupe", "Groupe", "user", "--c-craft", "c-groupe"], ["encyclopedie", "Encyclopédie", "book", "--c-ency"], ["compte", "Compte", "user", "--c-save"],
 ];
 // Sections regroupées : menu latéral (bureau), barre du bas + sous-onglets (téléphone)
@@ -5044,7 +5159,7 @@ const TABS = [
 const GROUPS = [
   ["accueil", "Accueil", "home", "--c-home", ["accueil", "almanax"]],
   ["marche", "Marché", "coins", "--c-gold", ["prix", "tendances", "journal", "alertes"]],
-  ["kamas", "Kamas", "trend", "--c-oru", ["rentabilite", "brisage", "donjons"]],
+  ["kamas", "Kamas", "trend", "--c-oru", ["rentabilite", "brisage", "donjons", "zones"]],
   ["production", "Production", "hammer", "--c-craft", ["plan", "metiers", "farm"]],
   ["equipement", "Équipement", "shield", "--c-build", ["builds", "encyclopedie"]],
   ["groupe", "Groupe", "user", "--c-save", ["groupe", "compte"]],
@@ -5077,7 +5192,7 @@ try { lastInGroup = JSON.parse(localStorage.getItem("atelier-nav") || "{}"); } c
 // Icônes du jeu pour les menus (objets de Dofus, planche d'icônes locale) ; dessin de secours sinon
 const GI = { accueil: 548, almanax: 21014, marche: 8425, prix: 8425, tournee: 14978, rentabilite: 745, journal: 678, alertes: 1339,
   orukam: 737, serveur: 737, cotes: 489, tendances: 1328, donjons: 8437, carte: 15378, brisage: 1519,
-  production: 147, plan: 147, groupe: 1575, kamas: 745, metiers: 14146, farm: 289, stock: 1699, equipement: 2411, builds: 2411, comparer: 22444, cosmetiques: 8069, encyclopedie: 2337, compte: 11270 };
+  production: 147, plan: 147, groupe: 1575, kamas: 745, zones: 384, metiers: 14146, farm: 289, stock: 1699, equipement: 2411, builds: 2411, comparer: 22444, cosmetiques: 8069, encyclopedie: 2337, compte: 11270 };
 // Icônes des menus : petite planche dédiée (data/icons/menu.webp, tools/build_menu_icons.py, même ordre que GI)
 // au lieu d'une vingtaine de grandes planches d'icônes chargées au démarrage
 const MENU_IDS = [...new Set(Object.values(GI))];
@@ -5162,6 +5277,7 @@ function heroFor(v) {
     serveur: ["Orukam en direct", "Le marché du serveur : cotes, tendances, donjons rentables et zones en anomalie.", "globe", (KM ? Object.keys(KM.prices).map(Number) : []).filter(id => D.items[id] && item(id)[1] >= 150).slice(0, 8)],
     tendances: ["Tendances du marché", "La courbe de prix de chaque rune et de chaque ressource d'Orukam, avec hausses, baisses et comparaison.", "trend", (KM ? Object.keys(KM.prices).map(Number) : []).filter(id => D.items[id] && RUNE_TYPES.has(item(id)[2])).slice(0, 8)],
     cotes: ["Cotes HDV", "Tous les objets cotés sur Orukam, leur tendance et les objets que tu suis.", "chart", favs().length ? favs() : (KM ? Object.keys(KM.prices).map(Number) : []).filter(id => D.items[id] && recipe(id)).slice(0, 8)],
+    zones: ["Zones de farm", "Ce que rapporte chaque zone en kamas par heure : monstres à cibler, ressources lâchées, à ta prospection et aux prix d'Orukam.", "map", []],
     donjons: ["Donjons rentables", "Ce que rapporte chaque donjon en kamas par heure, à ta prospection et aux prix d'Orukam.", "castle", KMD ? KMD.list.flatMap(d => d.drops.slice(0, 1).map(x => x[0])).slice(0, 8) : []],
     compte: ["Compte", "Ton pseudo, ton mot de passe et la sauvegarde de tes données.", "user", []],
   }[v];
@@ -5214,7 +5330,7 @@ function decorate(root, v) {
 // =====================================================================
 // Rendu et navigation
 // =====================================================================
-const VIEWS = { tendances: viewTendances, almanax: viewAlmanax, carte: viewCarte, donjons: viewDonjons, brisage: viewBrisage, comparer: viewComparer, alertes: viewAlertes, metiers: viewMetiers, journal: viewJournal, tournee: viewTournee, farm: viewFarm, builds: viewBuilds, cosmetiques: viewCosmetiques, accueil: viewAccueil, plan: viewPlan, rentabilite: viewRentabilite, prix: viewPrix, stock: viewStock, groupe: viewGroupe, encyclopedie: viewEncyclopedie, compte: viewSauvegarde };
+const VIEWS = { tendances: viewTendances, almanax: viewAlmanax, carte: viewCarte, donjons: viewDonjons, zones: viewZones, brisage: viewBrisage, comparer: viewComparer, alertes: viewAlertes, metiers: viewMetiers, journal: viewJournal, tournee: viewTournee, farm: viewFarm, builds: viewBuilds, cosmetiques: viewCosmetiques, accueil: viewAccueil, plan: viewPlan, rentabilite: viewRentabilite, prix: viewPrix, stock: viewStock, groupe: viewGroupe, encyclopedie: viewEncyclopedie, compte: viewSauvegarde };
 function renderCounts() {
   const set = (id, n) => { const el = document.getElementById(id); if (el) { el.textContent = n; el.dataset.z = n ? "0" : "1"; } };
   set("c-plan", S.targets.length);

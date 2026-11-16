@@ -98,6 +98,11 @@ def bag_contents(item_refs, core_items):
     return bags
 
 
+def archi_monsters(monster_refs):
+    """Archimonstres (race 78) : rares, mis à part dans le calcul des zones de farm (F.arch)."""
+    return sorted(x["data"]["id"] for x in monster_refs if x["data"].get("race") == 78 and "id" in x["data"])
+
+
 def refs(name):
     return json.load(open(CACHE / name, encoding="utf-8"))["references"]["RefIds"]
 
@@ -278,7 +283,8 @@ def main():
                 harvest[it_][2].append(s_["id"])
     bags = bag_contents(refs("items.json"), core_items)
     job_drops(refs("monsters.json"), tr, subs, boss_dj, core_items, harvest, mons, drops, bags)
-    farm = {"mons": mons, "drops": drops, "subs": subs, "areas": areas, "dungeons": dungeons, "harvest": harvest, "bags": bags}
+    farm = {"mons": mons, "drops": drops, "subs": subs, "areas": areas, "dungeons": dungeons, "harvest": harvest, "bags": bags,
+            "arch": [m for m in archi_monsters(refs("monsters.json")) if m in mons]}
     json.dump(farm, open(OUT / "farm.json", "w", encoding="utf-8"), ensure_ascii=False, separators=(",", ":"))
     print(f"farm : {len(mons)} monstres, {len(drops)} objets droppables, {len(harvest)} ressources récoltables, {len(subs)} zones, {len(dungeons)} donjons")
     print(f"{len(core_items)} objets, {len(recipes)} recettes, {len(alm)} jours d'Almanax, {len(icon_ids)} icônes, version {version}")
