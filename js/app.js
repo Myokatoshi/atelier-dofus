@@ -200,6 +200,7 @@ async function startOnline(session) {
     await loadVolumes();
     await loadHxp();
     await loadGroup();
+    await loadBreed();
     await loadCoefs();
     loadKm();
     // données de farm en arrière-plan : protecteurs, sacs et contrôle des cotes des ressources récoltables
@@ -253,7 +254,7 @@ async function resync() {
     }
     for (const id of new Set(redo)) aggregate(id);
     if (redo.length) persist(...new Set(redo.map(id => "s:" + id)));
-    await loadCoefs(); await loadObtain(); await loadVolumes(); await loadHxp(); await loadGroup(); await loadKm();
+    await loadCoefs(); await loadObtain(); await loadVolumes(); await loadHxp(); await loadGroup(); await loadBreed(); await loadKm();
     softRender();
   } catch (e) { console.error(e); RAW = before; for (const id in RAW) aggregate(id); }
   finally { syncing = false; }
@@ -275,6 +276,16 @@ function subscribePrices() {
       if (p.eventType === "DELETE") delete COEF[p.old.item_id]; else COEF[p.new.item_id] = { coef: +p.new.coef, by: p.new.updated_by, t: p.new.updated_at };
       try { localStorage.setItem("atelier-coef", JSON.stringify(COEF)); } catch {}
       softRender();
+    })
+    .on("postgres_changes", { event: "*", schema: "public", table: "breed_recipes" }, p => {
+      const r = p.eventType === "DELETE" ? p.old : p.new, l = (ELVR[r.mount_id] || []).filter(x => !(x[0] === r.parent_a && x[1] === r.parent_b));
+      if (p.eventType !== "DELETE") l.push([r.parent_a, r.parent_b, r.noted_by]);
+      ELVR[r.mount_id] = l; softRender();
+    })
+    .on("postgres_changes", { event: "*", schema: "public", table: "breed_gens" }, p => {
+      const r = p.eventType === "DELETE" ? p.old : p.new;
+      if (p.eventType === "DELETE") delete ELVG[r.family + "|" + r.color]; else ELVG[r.family + "|" + r.color] = { gen: r.gen, by: r.noted_by, t: r.updated_at };
+      ELV = null; softRender();
     })
     .on("postgres_changes", { event: "*", schema: "public", table: "member_jobs" }, p => {
       if (p.eventType === "DELETE") { const r = p.old; if (MJ[r.user_id]) delete MJ[r.user_id][r.job_id]; }
@@ -3653,7 +3664,44 @@ const ELV_FAM = {
   332: { n: "Muldo", pl: "Muldos", gen: { "Doré": 1, "Pourpre": 1, "Indigo": 1, "Ébène": 1, "Orchidée": 1, "Amande": 3, "Roux": 3, "Ivoire": 5, "Turquoise": 5, "Émeraude": 7, "Prune": 7, "Ambre": 9, "Corail": 9, "Azur": 9, "Aigue-marine": 9 }, rec: {} },
   333: { n: "Volkorne", pl: "Volkornes", gen: { "Ébène": 1, "Indigo": 1, "Pourpre": 1, "Orchidée": 1, "Amande": 3, "Roux": 3, "Ivoire": 3, "Turquoise": 3, "Émeraude": 5, "Prune": 5, "Doré": 7, "Jade": 9, "Rubis": 9, "Saphir": 9, "Améthyste": 9 }, rec: {} },
 };
-let ELV = null;
+// Partagé par le groupe : recettes notées (table breed_recipes) et générations confirmées / corrigées (table breed_gens)
+let ELVR = {}, ELVG = {};
+async function loadBreed() {
+  if (!SB) return;
+  const [{ data: rs, error: e1 }, { data: gs, error: e2 }] = await Promise.all([
+    SB.from("breed_recipes").select("mount_id,parent_a,parent_b,noted_by"), SB.from("breed_gens").select("family,color,gen,noted_by,updated_at")]);
+  if (e1 || e2) { console.error(e1 || e2); return; }
+  ELVR = {}; for (const r of rs || []) (ELVR[r.mount_id] = ELVR[r.mount_id] || []).push([r.parent_a, r.parent_b, r.noted_by]);
+  ELVG = {}; for (const g of gs || []) ELVG[g.family + "|" + g.color] = { gen: g.gen, by: g.noted_by, t: g.updated_at };
+  ELV = null;
+  // recettes notées avant le partage (réglage personnel) : envoyées au groupe, puis retirées du réglage
+  const mine = Object.entries(S.settings.elvRec || {});
+  if (mine.length && ME) {
+    for (const [m, l] of mine) for (const [a, b] of l) await breedRecipeSet(+m, a, b, true, true);
+    S.settings.elvRec = {}; persist("plan");
+  }
+}
+async function breedRecipeSet(m, a, b, on, quiet) {
+  const pa = Math.min(a, b), pb = Math.max(a, b), l = (ELVR[m] || []).filter(x => !(x[0] === pa && x[1] === pb));
+  if (on) l.push([pa, pb, ME]);
+  ELVR[m] = l; if (!quiet) render();
+  if (!SB || !ME) return;
+  const { error } = on ? await SB.from("breed_recipes").upsert({ mount_id: m, parent_a: pa, parent_b: pb, noted_by: ME, noted_at: new Date().toISOString() })
+    : await SB.from("breed_recipes").delete().eq("mount_id", m).eq("parent_a", pa).eq("parent_b", pb);
+  if (error) { console.error(error); if (!quiet) toast("Recette non enregistrée pour le groupe"); }
+}
+async function breedGenSet(t, color, gen) {
+  const k = t + "|" + color;
+  if (gen == null) delete ELVG[k]; else ELVG[k] = { gen, by: ME, t: new Date().toISOString() };
+  ELV = null; render();
+  if (!SB || !ME) return;
+  const { error } = gen == null ? await SB.from("breed_gens").delete().eq("family", t).eq("color", color)
+    : await SB.from("breed_gens").upsert({ family: t, color, gen, noted_by: ME, updated_at: new Date().toISOString() });
+  if (error) { console.error(error); toast("Génération non enregistrée pour le groupe"); }
+}
+// Génération d'une couleur : celle notée par le groupe, sinon celle des guides
+const elvGen = (t, c) => (ELVG[t + "|" + c] || {}).gen ?? ELV_FAM[t].gen[c];
+let ELV = null, elvGenOpen = true;
 function elvIndex() {
   if (ELV) return ELV;
   ELV = { by: {}, list: {}, key: {} };
@@ -3661,7 +3709,7 @@ function elvIndex() {
     const F = ELV_FAM[it[2]]; if (!F || !it[0].startsWith(F.n + " ")) continue;
     const cols = it[0].slice(F.n.length + 1).split(" et ");
     if (cols.length > 2 || !cols.every(c => F.gen[c])) continue; // « à Plumes », « en armure » : pas de couleur d'élevage
-    const m = { id: +id, t: it[2], cols, gen: cols.length === 1 ? F.gen[cols[0]] : Math.max(...cols.map(c => F.gen[c])) + 1 };
+    const m = { id: +id, t: it[2], cols, gen: cols.length === 1 ? elvGen(it[2], cols[0]) : Math.max(...cols.map(c => elvGen(it[2], c))) + 1 };
     ELV.by[id] = m; (ELV.list[it[2]] = ELV.list[it[2]] || []).push(m);
     ELV.key[it[2] + "|" + [...cols].sort().join("|")] = m;
   }
@@ -3679,7 +3727,7 @@ function elvRecipes(m) {
   const out = [];
   if (m.cols.length === 2) { const a = elvOf(m.t, [m.cols[0]]), b = elvOf(m.t, [m.cols[1]]); if (a && b) out.push([a.id, b.id, "jeu"]); }
   else { const r = ELV_FAM[m.t].rec[m.cols[0]]; if (r) { const a = elvOf(m.t, r[0]), b = elvOf(m.t, r[1]); if (a && b) out.push([a.id, b.id, "jeu"]); } }
-  for (const [a, b] of (S.settings.elvRec || {})[m.id] || []) if (ELV.by[a] && ELV.by[b] && !out.some(r => (r[0] === a && r[1] === b) || (r[0] === b && r[1] === a))) out.push([a, b, "noté"]);
+  for (const [a, b] of [...(ELVR[m.id] || []), ...((S.settings.elvRec || {})[m.id] || [])]) if (ELV.by[a] && ELV.by[b] && !out.some(r => (r[0] === a && r[1] === b) || (r[0] === b && r[1] === a))) out.push([a, b, "noté"]);
   return out;
 }
 // Montures que peut donner un couple (plusieurs = la chance de la génération cible est partagée entre elles)
@@ -3744,6 +3792,46 @@ function elvSteps(goal, cost) {
   };
   walk(goal, 1, 0);
   return [...need.values()].sort((a, b) => ELV.by[b.id].gen - ELV.by[a.id].gen);
+}
+// Schéma de l'arbre généalogique : une rangée par génération (monture visée en haut, captures en bas), une carte par
+// monture (chance, prix HDV, coût moyen, quantité), traits parent -> bébé dessinés après la mise en page
+function elvDiagram(G, cost, steps) {
+  const q = new Map(steps.map(x => [x.id, x.q])), order = [], seen = new Set();
+  const dfs = id => { if (seen.has(id)) return; seen.add(id); order.push(id); const n = cost(id); if (n.how === "breed") n.rec.forEach(dfs); };
+  dfs(G.id);
+  const rows = new Map(); for (const id of order) { const g = ELV.by[id].gen; if (!rows.has(g)) rows.set(g, []); rows.get(g).push(id); }
+  const gens = [...rows.keys()].sort((a, b) => b - a);
+  const card = id => {
+    const m = ELV.by[id], n = cost(id), pr = resale(id), qq = q.get(id) || 1;
+    const how = n.how === "breed" ? ["Croiser", elvPct(n.p), "breed"] : n.how === "buy" ? ["Acheter", "", "buy"] : n.how === "capture" ? ["Capture", "", "cap"] : ["Sans recette", "", "none"];
+    return h("div", { class: "elvn " + how[2] + (id === G.id ? " goal" : ""), "data-id": id, role: "button", tabindex: "0", onclick: () => openSheet(id), title: "Ouvrir la fiche de " + item(id)[0] },
+      h("div", { class: "elvh" }, icon(id, 30), h("span", {}, h("strong", { text: elvName(m) }), h("small", { class: "muted", text: "G" + m.gen + (qq > 1.01 ? " · × " + fmtQ(qq) : "") }))),
+      h("div", { class: "elvc" }, h("span", { class: "chip " + (how[2] === "breed" ? "up" : how[2] === "buy" ? "kamas" : how[2] === "cap" ? "job" : "warn"), text: how[0] + (how[1] ? " · " + how[1] : "") })),
+      h("div", { class: "elvp" },
+        h("span", {}, h("small", { class: "muted", text: "HDV " }), h("b", { class: "num", text: pr != null ? kk(pr) : "—" })),
+        h("span", {}, h("small", { class: "muted", text: "coût " }), h("b", { class: "num", text: n.c != null ? (n.c === 0 ? "gratuit" : kk(n.c)) : "—" }))));
+  };
+  const svg = s("svg", { class: "elvsvg", "aria-hidden": "true" });
+  const box = h("div", { class: "elvdia" }, svg, ...gens.map(g => h("div", { class: "elvrow" }, h("span", { class: "elvg", text: "G" + g }), h("div", { class: "elvcards" }, rows.get(g).map(card)))));
+  // traits : du haut de chaque parent vers le bas de son bébé, avec la chance au milieu
+  const draw = () => {
+    if (!box.isConnected) return;
+    const R = box.getBoundingClientRect(); svg.setAttribute("width", R.width); svg.setAttribute("height", R.height); svg.replaceChildren();
+    const at = id => box.querySelector('.elvn[data-id="' + id + '"]');
+    for (const id of order) {
+      const n = cost(id); if (n.how !== "breed") continue;
+      const c = at(id); if (!c) continue; const cr = c.getBoundingClientRect(), cx = cr.left + cr.width / 2 - R.left, cy = cr.bottom - R.top;
+      for (const pid of n.rec) {
+        const pe = at(pid); if (!pe) continue; const pr = pe.getBoundingClientRect(), px = pr.left + pr.width / 2 - R.left, py = pr.top - R.top, my = (cy + py) / 2;
+        svg.append(s("path", { d: `M${px},${py} C${px},${my} ${cx},${my} ${cx},${cy}`, class: "elvl" }));
+      }
+    }
+  };
+  requestAnimationFrame(() => requestAnimationFrame(draw));
+  if (!window.__elvRz) { window.__elvRz = true; window.addEventListener("resize", () => document.querySelectorAll(".elvdia").forEach(d => d.__draw && d.__draw())); }
+  box.__draw = draw;
+  return h("div", { class: "elvwrap" }, box,
+    h("p", { class: "small muted", text: "Lis de bas en haut : chaque monture est obtenue en croisant les deux reliées en dessous. « Croiser · % » = chance d'obtenir la génération visée à chaque accouplement ; × = nombre moyen à obtenir (échecs compris) ; HDV = prix relevé ; coût = coût moyen d'une monture (le moins cher entre élever et acheter). Touche une carte pour ouvrir sa fiche." }));
 }
 const elvPct = p => p == null ? "—" : (Math.round(p * 1000) / 10).toLocaleString("fr-FR") + " %";
 const elvOpt = (m, sel) => h("option", { value: m.id, selected: sel === m.id }, "G" + m.gen + " · " + elvName(m));
@@ -3833,7 +3921,8 @@ function viewElevage() {
         tl("Captures", fmtQ(caps), "montures de génération 1"),
         tl("Prix HDV de " + elvName(G), resale(G.id) != null ? kk(resale(G.id)) + " ₭" : "—", resale(G.id) != null && gc.c != null && gc.how === "breed" ? (resale(G.id) - gc.c >= 0 ? "+" : "−") + kk(Math.abs(resale(G.id) - gc.c)) + " ₭ si tu la revends" : "relève son prix plus bas")),
       unknown.length ? h("p", { class: "small", style: "color:var(--bad)", text: "Sans recette ni prix : " + unknown.map(s2 => elvName(ELV.by[s2.id])).join(", ") + ". Note la recette vue en jeu ou relève leur prix pour compléter le calcul." }) : null,
-      h("div", { class: "tree" }, h("ul", { style: "border-left:0;padding-left:0" }, node(G.id, 1, 0))),
+      elvDiagram(G, cost, steps),
+      h("details", { class: "tree" }, h("summary", { text: "Arbre détaillé en liste" }), h("ul", { style: "border-left:0;padding-left:0" }, node(G.id, 1, 0))),
       h("details", { class: "tree" }, h("summary", { text: "Liste des étapes (" + steps.length + " montures)" }),
         h("div", { class: "tablewrap" }, h("table", {},
           h("thead", {}, h("tr", {}, h("th", { text: "Monture" }), h("th", { text: "Comment" }), h("th", { class: "n", text: "Quantité" }), h("th", { class: "n", text: "Croisements" }), h("th", { class: "n", text: "Coût unitaire" }))),
@@ -3853,22 +3942,20 @@ function viewElevage() {
   // --- Recettes notées (Muldos, Volkornes) ---
   let recPanel = null;
   if (t !== 331) {
-    const R = S.settings.elvRec || {};
+    const R = {}; for (const [m, l] of Object.entries(ELVR)) if (l.length) R[m] = l;
     const noted = list.filter(m => (R[m.id] || []).length);
     const nf = elvF;
     if (nf.t !== t) { nf.t = t; nf.m = nf.a = nf.b = null; }
     const add = () => {
       if (!nf.m || !nf.a || !nf.b) { toast("Choisis la monture obtenue et ses deux parents"); return; }
       if (nf.m === nf.a || nf.m === nf.b) { toast("Une monture ne peut pas être son propre parent"); return; }
-      const rr = { ...(S.settings.elvRec || {}) }, l = (rr[nf.m] || []).slice(), a = Math.min(nf.a, nf.b), b = Math.max(nf.a, nf.b);
-      if (!l.some(x => x[0] === a && x[1] === b)) l.push([a, b]);
-      rr[nf.m] = l; S.settings.elvRec = rr; persist("plan"); toast("Recette notée : " + elvName(ELV.by[nf.m])); nf.a = nf.b = null; render();
+      breedRecipeSet(nf.m, nf.a, nf.b, true); toast("Recette notée pour le groupe : " + elvName(ELV.by[nf.m])); nf.a = nf.b = null;
     };
-    const del = (m, i) => { const rr = { ...(S.settings.elvRec || {}) }; rr[m] = (rr[m] || []).filter((_, j) => j !== i); if (!rr[m].length) delete rr[m]; S.settings.elvRec = rr; persist("plan"); render(); };
+    const del = (m, i) => { const r = (R[m] || [])[i]; if (r) breedRecipeSet(+m, r[0], r[1], false); };
     const pures = list.filter(m => m.cols.length === 1 && m.gen > 1);
     recPanel = h("section", { class: "panel" },
       h("h2", { text: "Recettes des monocolores" }),
-      h("p", { class: "small muted", text: "Depuis la 3.5, les " + F.pl + " monocolores ont plusieurs recettes possibles. Note celles que tu vois dans l'interface génétique de l'enclos (ou par clic droit sur une monture) : elles servent au simulateur et à l'arbre généalogique. Les bicolores, elles, s'obtiennent toujours en croisant leurs deux couleurs." }),
+      h("p", { class: "small muted", text: "Depuis la 3.5, les " + F.pl + " monocolores ont plusieurs recettes possibles. Note celles que tu vois dans l'interface génétique de l'enclos (ou par clic droit sur une monture) : elles sont partagées avec le groupe et servent au simulateur et à l'arbre généalogique. Les bicolores, elles, s'obtiennent toujours en croisant leurs deux couleurs." }),
       h("div", { class: "filters" },
         elvSelect(t, nf.m, v => { nf.m = v; render(); }, "Monture obtenue", m => m.cols.length === 1 && m.gen > 1),
         h("span", { class: "label", text: "=" }), elvSelect(t, nf.a, v => { nf.a = v; }, "Parent 1", m => !ELV.by[nf.m] || m.gen < ELV.by[nf.m].gen),
@@ -3877,10 +3964,31 @@ function viewElevage() {
       h("div", { class: "chips" }, pures.map(m => {
         const l = R[m.id] || [];
         return h("span", { class: "chip" + (l.length ? " job" : "") }, icon(m.id, 20), " " + elvName(m) + " (G" + m.gen + ") : ",
-          l.length ? l.map(([a, b], i) => h("span", {}, (i ? " · " : "") + elvName(ELV.by[a]) + " × " + elvName(ELV.by[b]) + " ",
+          l.length ? l.map(([a, b, by], i) => h("span", { title: by ? "noté par " + whoName(by) : "" }, (i ? " · " : "") + elvName(ELV.by[a]) + " × " + elvName(ELV.by[b]) + (by && NAMES[by] && by !== ME ? " (" + NAMES[by] + ")" : "") + " ",
             h("button", { type: "button", class: "x", "aria-label": "Retirer cette recette", onclick: () => del(m.id, i) }, "×"))) : "à noter");
       })),
       noted.length ? null : h("p", { class: "small muted", text: "Aucune recette notée pour l'instant : sans recette, une monocolore est comptée à son prix HDV." }));
+  }
+
+  // --- Générations des monocolores : confirmées ou corrigées en jeu par le groupe (Muldos, Volkornes) ---
+  let genPanel = null;
+  if (t !== 331) {
+    const cols = Object.keys(F.gen).sort((a, b) => elvGen(t, a) - elvGen(t, b) || a.localeCompare(b, "fr"));
+    const done = cols.filter(c => ELVG[t + "|" + c]).length;
+    genPanel = h("details", { class: "panel dj", open: done < cols.length && elvGenOpen },
+      h("summary", {}, h("strong", { text: "Générations des " + F.pl + " monocolores" }), h("span", { class: "chip " + (done === cols.length ? "up" : "warn"), style: "margin-left:8px", text: done + " / " + cols.length + " confirmées" })),
+      h("p", { class: "note", text: "Ces générations viennent des guides de la 3.5. Vérifie-les dans l'enclos (fiche de la monture) : « Confirmer » si c'est juste, ou corrige le nombre. C'est partagé avec le groupe et recalcule les bicolores, les chances et les coûts." }),
+      h("div", { class: "tablewrap" }, h("table", {}, h("tbody", {}, cols.map(c => {
+        const g = ELVG[t + "|" + c], m = elvOf(t, [c]);
+        return h("tr", {},
+          h("td", {}, m ? itemLink(m.id, null, 24) : h("strong", { text: c })),
+          h("td", { class: "n" }, numInput(elvGen(t, c), v => { const n = Math.round(+v); breedGenSet(t, c, n >= 1 && n <= 20 ? n : null); }, { sm: true, label: "Génération " + c, id: "elv-g-" + t + "-" + c.replace(/\W/g, "") })),
+          h("td", {}, g ? h("span", { class: "chip " + (g.gen === F.gen[c] ? "up" : "kamas"), text: (g.gen === F.gen[c] ? "confirmée" : "corrigée (guide : G" + F.gen[c] + ")") + (g.by ? " par " + (g.by === ME ? "toi" : whoName(g.by)) : "") }) : h("span", { class: "chip warn", text: "à confirmer" })),
+          h("td", {}, h("div", { class: "row", style: "gap:6px;justify-content:flex-end" },
+            !g ? h("button", { type: "button", class: "btn sm", onclick: () => breedGenSet(t, c, F.gen[c]) }, "Confirmer") : null,
+            g ? h("button", { type: "button", class: "btn sm", title: "Revenir à la génération des guides", onclick: () => breedGenSet(t, c, null) }, "Annuler") : null)));
+      })))));
+    genPanel.addEventListener("toggle", () => { elvGenOpen = genPanel.open; });
   }
 
   // --- Prix des montures ---
@@ -3911,7 +4019,7 @@ function viewElevage() {
     rows.length > shown.length ? h("div", { class: "row", style: "justify-content:center" }, h("button", { type: "button", class: "btn", onclick: () => { elvN += 80; render(); } }, "Afficher plus (" + (rows.length - shown.length) + " restantes)")) : null,
     h("p", { class: "note", text: "Prix d'Orukam : relevé du groupe (saisi ici ou dans Prix), sinon cote Kamamaster. Coût d'élevage = coût moyen pour obtenir la monture à partir de ses parents (voir l'arbre généalogique), aux réglages ci-dessus ; gain = prix HDV − coût d'élevage." }));
   tree.id = "elv-tree";
-  return h("div", { class: "stack" }, settings, tiles, sim, tree, recPanel, prices);
+  return h("div", { class: "stack" }, settings, tiles, sim, tree, genPanel, recPanel, prices);
 }
 let elvF = { t: null, m: null, a: null, b: null };
 

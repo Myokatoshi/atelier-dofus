@@ -721,3 +721,21 @@ table.free .chip { white-space: nowrap; }
 .pagemodes a { text-decoration: none; color: var(--muted); font: 800 .88rem var(--f-body); padding: 7px 14px; border-radius: 9px; }
 .pagemodes a[aria-pressed="true"] { background: var(--surface); color: color-mix(in srgb, var(--sec) 80%, var(--fg)); box-shadow: 0 1px 3px rgb(0 0 0 / .12); }
 @media (max-width: 720px) { .pagemodes { display: flex; width: 100%; } .pagemodes a { flex: 1 1 auto; text-align: center; } }
+
+/* Élevage : schéma de l'arbre généalogique (une rangée par génération, traits parent -> bébé) */
+.elvdia { position: relative; display: grid; gap: 34px; padding: 6px 0; }
+.elvsvg { position: absolute; inset: 0; pointer-events: none; overflow: hidden; }
+.elvl { fill: none; stroke: color-mix(in srgb, var(--good) 55%, var(--line)); stroke-width: 2; opacity: .8; }
+.elvrow { display: grid; grid-template-columns: 34px 1fr; gap: 8px; align-items: center; position: relative; z-index: 1; }
+.elvg { font: 800 .8rem var(--f-data); color: var(--muted); text-align: center; background: var(--sunk); border-radius: 8px; padding: 4px 0; }
+.elvcards { display: flex; flex-wrap: wrap; gap: 10px; justify-content: center; }
+.elvn { width: 172px; max-width: 100%; display: grid; gap: 5px; padding: 8px 10px; border-radius: 12px; border: 1.5px solid var(--line); background: var(--surface); cursor: pointer; }
+.elvn:hover, .elvn:focus-visible { border-color: color-mix(in srgb, var(--good) 60%, var(--line)); }
+.elvn.goal { border-color: var(--kamas); box-shadow: 0 0 0 2px color-mix(in srgb, var(--kamas) 30%, transparent); }
+.elvn.buy { border-style: dashed; }
+.elvh { display: flex; gap: 8px; align-items: center; min-width: 0; }
+.elvh strong { display: block; font-size: .86rem; line-height: 1.15; }
+.elvh small { display: block; }
+.elvc .chip { font-size: .72rem; }
+.elvp { display: flex; justify-content: space-between; gap: 6px; font-size: .78rem; }
+@media (max-width: 720px) { .elvn { width: calc(50% - 5px); padding: 7px 8px; } .elvrow { grid-template-columns: 1fr; } .elvg { justify-self: start; padding: 2px 8px; } .elvdia { gap: 28px; } }
