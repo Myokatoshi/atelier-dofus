@@ -51,7 +51,8 @@ img { max-width: 100%; }
 .secvars, [data-sec] { --sec-soft: color-mix(in srgb, var(--sec) 13%, var(--surface)); --sec-line: color-mix(in srgb, var(--sec) 35%, var(--line)); }
 
 * { box-sizing: border-box; }
-html { -webkit-text-size-adjust: 100%; }
+html { -webkit-text-size-adjust: 100%; overflow-x: clip; }
+body { overflow-x: clip; }
 body { background: var(--bg); color: var(--fg); font-family: var(--f-body); font-size: 15px; line-height: 1.5; }
 .wrap { max-width: 1260px; margin: 0 auto; padding-block: 14px 56px; padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); display: grid; gap: 16px; }
 h1, h2, h3 { font-family: var(--f-display); margin: 0; text-wrap: balance; line-height: 1.15; }
@@ -215,7 +216,8 @@ textarea { width: 100%; min-height: 140px; font: .82rem var(--f-data); backgroun
 .filters { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
 .filters .search { flex: 1 1 240px; }
 .filters input[type="number"] { width: 82px; font: 600 .95rem var(--f-data); padding: 9px; border: 1.5px solid var(--line); border-radius: 12px; background: var(--bg); color: var(--fg); }
-label.check { display: inline-flex; gap: 6px; align-items: center; font-size: .9rem; font-weight: 700; cursor: pointer; }
+label.check { display: inline-flex; gap: 6px; align-items: center; font-size: .9rem; font-weight: 700; cursor: pointer; min-width: 0; max-width: 100%; overflow-wrap: anywhere; }
+label.check input { flex: none; }
 
 /* Almanax */
 .alm-card { --sec: var(--c-alm); --sec-soft: color-mix(in srgb, var(--c-alm) 13%, var(--surface)); --sec-line: color-mix(in srgb, var(--c-alm) 35%, var(--line));
@@ -558,7 +560,7 @@ tr.today td { background: color-mix(in srgb, var(--kamas) 10%, transparent); }
 .ichart-line { fill: none; stroke: var(--sec); stroke-width: 2; stroke-linejoin: round; }
 .ichart-area { fill: color-mix(in srgb, var(--sec) 14%, transparent); }
 .ichart-dot { fill: var(--sec); }
-.check.small { font-size: .78rem; white-space: nowrap; }
+.check.small { font-size: .78rem; }
 details.panel > summary { cursor: pointer; list-style: none; }
 details.panel > summary::-webkit-details-marker { display: none; }
 @media (max-width: 720px) { .icards { grid-template-columns: minmax(0, 1fr); } }
@@ -723,9 +725,23 @@ table.free .chip { white-space: nowrap; }
 @media (max-width: 720px) { .pagemodes { display: flex; width: 100%; } .pagemodes a { flex: 1 1 auto; text-align: center; } }
 
 /* Élevage : schéma de l'arbre généalogique (une rangée par génération, traits parent -> bébé) */
-.elvdia { position: relative; display: grid; gap: 34px; padding: 6px 0; }
+.elvdia { position: relative; display: grid; gap: 40px; padding: 6px 0; }
 .elvsvg { position: absolute; inset: 0; pointer-events: none; overflow: hidden; }
-.elvl { fill: none; stroke: color-mix(in srgb, var(--good) 55%, var(--line)); stroke-width: 2; opacity: .8; }
+.elvl { fill: none; stroke: var(--cc, var(--good)); stroke-width: 2.2; opacity: .75; transition: opacity .15s, stroke-width .15s; }
+.elvx circle { fill: var(--surface); stroke: var(--cc); stroke-width: 2; }
+.elvx text { fill: var(--cc); font: 800 12px var(--f-body); }
+.elvdia.sel .elvk:not(.on) .elvl { opacity: .1; } .elvdia.sel .elvx:not(.on) { opacity: .15; }
+.elvdia.sel .elvk.on .elvl { opacity: 1; stroke-width: 3.2; }
+.elvdia.sel .elvn:not(.on) { opacity: .4; }
+.elvn.me { box-shadow: 0 0 0 2px var(--cc, var(--good)); }
+.elvn.breed { border-top: 3px solid var(--cc, var(--line)); }
+.elvn { transition: opacity .15s; }
+.elvi { border: 0; padding: 0; background: none; cursor: pointer; border-radius: 8px; flex: none; line-height: 0; }
+.elvi:focus-visible { outline: 2px solid var(--accent); }
+.elvpar { display: flex; flex-wrap: wrap; gap: 2px 5px; align-items: baseline; font-size: .76rem; color: var(--muted); min-width: 0; overflow-wrap: anywhere; }
+.elvpar b { color: var(--fg); font-weight: 700; }
+.elvdot { flex: none; width: 9px; height: 9px; border-radius: 50%; background: var(--cc); align-self: center; }
+.elvto { font-size: .74rem; color: var(--muted); font-weight: 700; overflow-wrap: anywhere; }
 .elvrow { display: grid; grid-template-columns: 34px 1fr; gap: 8px; align-items: center; position: relative; z-index: 1; }
 .elvg { font: 800 .8rem var(--f-data); color: var(--muted); text-align: center; background: var(--sunk); border-radius: 8px; padding: 4px 0; }
 .elvcards { display: flex; flex-wrap: wrap; gap: 10px; justify-content: center; }
@@ -738,4 +754,12 @@ table.free .chip { white-space: nowrap; }
 .elvh small { display: block; }
 .elvc .chip { font-size: .72rem; }
 .elvp { display: flex; justify-content: space-between; gap: 6px; font-size: .78rem; }
-@media (max-width: 720px) { .elvn { width: calc(50% - 5px); padding: 7px 8px; } .elvrow { grid-template-columns: 1fr; } .elvg { justify-self: start; padding: 2px 8px; } .elvdia { gap: 28px; } }
+@media (max-width: 720px) { .elvn { width: calc(50% - 5px); padding: 7px 8px; } .elvrow { grid-template-columns: 1fr; } .elvg { justify-self: start; padding: 2px 8px; } .elvdia { gap: 36px; } }
+
+/* Téléphone : aucun texte ne sort de sa case (étiquettes, boutons, puces passent à la ligne si besoin) */
+@media (max-width: 720px) {
+  .chip, .btn, .verdict, label.check { white-space: normal; max-width: 100%; overflow-wrap: anywhere; }
+  .chip, .verdict { border-radius: 10px; }
+  summary { min-width: 0; overflow-wrap: anywhere; }
+}
+tr.hl td { background: color-mix(in srgb, var(--good) 8%, transparent); }
