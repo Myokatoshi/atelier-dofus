@@ -2472,7 +2472,7 @@ function viewJournal() {
 let XPR = null, xprLoading = null;
 function ensureXpRatios() {
   if (XPR || xprLoading) return xprLoading;
-  xprLoading = fetch("data/xp.json").then(r => r.ok ? r.json() : null).then(j => { XPR = j || { types: {}, items: {} }; ALMJ = null; ALMDAY = new Map(); if (["metiers", "almanax", "accueil"].includes(view)) render(); }).catch(() => { XPR = { types: {}, items: {} }; });
+  xprLoading = fetch("data/xp.json").then(r => r.ok ? r.json() : null).then(j => { XPR = j || { types: {}, items: {} }; ALMJ = null; ALMDAY = new Map(); if (["metiers", "almanax", "accueil", "elevage"].includes(view)) render(); }).catch(() => { XPR = { types: {}, items: {} }; });
   return xprLoading;
 }
 const lvToXp = n => n * (n - 1) * 10;
@@ -3635,6 +3635,285 @@ function fmSection(b, jet) {
     })));
 }
 const FM_OPEN = new Set();
+
+// =====================================================================
+// Élevage (Production › Élevage) : Dragodindes, Muldos, Volkornes (objets de types 331 à 333)
+// Génération de chaque couleur, croisements de la 3.5 et leurs chances, arbre généalogique jusqu'aux captures,
+// prix des montures (relevés du groupe) et coût d'élevage estimé
+// =====================================================================
+// Monocolores : génération d'après les guides d'élevage de la 3.5 ; bicolore « A et B » = génération max(A, B) + 1,
+// obtenue en croisant A × B. Dragodindes : chaque monocolore (sauf génération 1) naît d'un seul couple de bicolores.
+// Muldos et Volkornes : plusieurs recettes possibles par monocolore depuis la 3.5, notées par chacun (S.settings.elvRec)
+const ELV_FAM = {
+  331: { n: "Dragodinde", pl: "Dragodindes", gen: { "Dorée": 1, "Amande": 1, "Rousse": 1, "Indigo": 3, "Ébène": 3, "Pourpre": 5, "Orchidée": 5, "Ivoire": 7, "Turquoise": 7, "Émeraude": 9, "Prune": 9 },
+    rec: { "Indigo": [["Amande", "Rousse"], ["Amande", "Dorée"]], "Ébène": [["Amande", "Dorée"], ["Dorée", "Rousse"]],
+      "Pourpre": [["Ébène", "Indigo"], ["Amande", "Rousse"]], "Orchidée": [["Ébène", "Indigo"], ["Dorée", "Rousse"]],
+      "Ivoire": [["Orchidée", "Pourpre"], ["Indigo", "Pourpre"]], "Turquoise": [["Orchidée", "Pourpre"], ["Ébène", "Orchidée"]],
+      "Émeraude": [["Ivoire", "Turquoise"], ["Ivoire", "Pourpre"]], "Prune": [["Ivoire", "Turquoise"], ["Turquoise", "Orchidée"]] } },
+  332: { n: "Muldo", pl: "Muldos", gen: { "Doré": 1, "Pourpre": 1, "Indigo": 1, "Ébène": 1, "Orchidée": 1, "Amande": 3, "Roux": 3, "Ivoire": 5, "Turquoise": 5, "Émeraude": 7, "Prune": 7, "Ambre": 9, "Corail": 9, "Azur": 9, "Aigue-marine": 9 }, rec: {} },
+  333: { n: "Volkorne", pl: "Volkornes", gen: { "Ébène": 1, "Indigo": 1, "Pourpre": 1, "Orchidée": 1, "Amande": 3, "Roux": 3, "Ivoire": 3, "Turquoise": 3, "Émeraude": 5, "Prune": 5, "Doré": 7, "Jade": 9, "Rubis": 9, "Saphir": 9, "Améthyste": 9 }, rec: {} },
+};
+let ELV = null;
+function elvIndex() {
+  if (ELV) return ELV;
+  ELV = { by: {}, list: {}, key: {} };
+  for (const [id, it] of Object.entries(D.items)) {
+    const F = ELV_FAM[it[2]]; if (!F || !it[0].startsWith(F.n + " ")) continue;
+    const cols = it[0].slice(F.n.length + 1).split(" et ");
+    if (cols.length > 2 || !cols.every(c => F.gen[c])) continue; // « à Plumes », « en armure » : pas de couleur d'élevage
+    const m = { id: +id, t: it[2], cols, gen: cols.length === 1 ? F.gen[cols[0]] : Math.max(...cols.map(c => F.gen[c])) + 1 };
+    ELV.by[id] = m; (ELV.list[it[2]] = ELV.list[it[2]] || []).push(m);
+    ELV.key[it[2] + "|" + [...cols].sort().join("|")] = m;
+  }
+  for (const l of Object.values(ELV.list)) l.sort((a, b) => a.gen - b.gen || a.cols.length - b.cols.length || item(a.id)[0].localeCompare(item(b.id)[0], "fr"));
+  return ELV;
+}
+const elvOf = (t, cols) => elvIndex().key[t + "|" + [...cols].sort().join("|")];
+const elvName = m => m.cols.join(" et ");
+const ELV_DEF = { t: 331, lv: 100, la: null, lb: null, opti: false, alm: false, buy: true, a: null, b: null, goal: null, sort: "gen", g: "" };
+// Réglages complétés sur place : les boutons de la page gardent une référence à cet objet
+const elvS = () => { const e = S.settings.elv || (S.settings.elv = {}); for (const [k2, v] of Object.entries(ELV_DEF)) if (!(k2 in e)) e[k2] = v; return e; };
+let elvN = 40;
+// Couples de parents qui donnent une monture : recette du jeu (bicolores, Dragodindes) + recettes notées
+function elvRecipes(m) {
+  const out = [];
+  if (m.cols.length === 2) { const a = elvOf(m.t, [m.cols[0]]), b = elvOf(m.t, [m.cols[1]]); if (a && b) out.push([a.id, b.id, "jeu"]); }
+  else { const r = ELV_FAM[m.t].rec[m.cols[0]]; if (r) { const a = elvOf(m.t, r[0]), b = elvOf(m.t, r[1]); if (a && b) out.push([a.id, b.id, "jeu"]); } }
+  for (const [a, b] of (S.settings.elvRec || {})[m.id] || []) if (ELV.by[a] && ELV.by[b] && !out.some(r => (r[0] === a && r[1] === b) || (r[0] === b && r[1] === a))) out.push([a, b, "noté"]);
+  return out;
+}
+// Montures que peut donner un couple (plusieurs = la chance de la génération cible est partagée entre elles)
+function elvPairs(t) {
+  const P = new Map();
+  for (const m of elvIndex().list[t] || []) for (const [a, b] of elvRecipes(m)) { const k = Math.min(a, b) + "|" + Math.max(a, b); if (!P.has(k)) P.set(k, []); P.get(k).push(m); }
+  return P;
+}
+const elvTargets = (P, a, b) => P.get(Math.min(a, b) + "|" + Math.max(a, b)) || [];
+// Chance d'obtenir la génération cible (3.5) : 30 % + 0,15 % par niveau des deux parents, + 10 % Optimakina, + 20 % bonus Almanax « Génération montante »
+const elvChance = (la, lb, E = elvS()) => Math.max(0, Math.min(1, 0.30 + 0.0015 * ((+la || 0) + (+lb || 0)) + (E.opti ? 0.10 : 0) + (E.alm ? 0.20 : 0)));
+// Résultat d'un croisement : [[monture, probabilité]] ; un échec donne la couleur d'un des parents (moitié-moitié, estimation)
+function elvCross(P, a, b, la, lb) {
+  if (a.id === b.id) return { p: null, T: [], out: [[a, 1]] };
+  const T = elvTargets(P, a.id, b.id);
+  if (!T.length) return { p: null, T, out: [[a, .5], [b, .5]] };
+  const p = elvChance(la, lb);
+  return { p, T, out: [...T.map(m => [m, p / T.length]), [a, (1 - p) / 2], [b, (1 - p) / 2]] };
+}
+// Prochain jour du bonus Almanax « Génération montante » (+20 % sur la génération cible)
+function elvNextBonus() {
+  if (!XPR || !XPR.almanax) { ensureXpRatios(); return null; }
+  const t0 = dayStart(new Date());
+  for (let i = 0; i < 400; i++) { const d = new Date(t0); d.setDate(t0.getDate() + i); if (almDay(d).some(b => /accouplements? de montures/i.test(b.text || ""))) return d; }
+  return null;
+}
+// Coût d'une monture : la moins chère entre l'acheter (prix HDV) et l'élever (parents consommés ÷ chance).
+// Chaque essai consomme les deux parents (ils deviennent stériles) ; un échec rend un bébé de la couleur d'un parent,
+// donc par réussite il faut en moyenne (1 + p) / (2 p) exemplaires de chaque parent. Génération 1 = capture.
+function elvCoster(t, E) {
+  const P = elvPairs(t), memo = new Map(), lv = +E.lv || 0;
+  const cost = id => {
+    if (memo.has(id)) return memo.get(id);
+    memo.set(id, { c: null, how: "none" }); // garde-fou contre une recette notée circulaire
+    const m = ELV.by[id], pr = resale(id);
+    let r;
+    if (m.gen === 1) r = { c: pr ?? 0, how: "capture", buy: pr };
+    else {
+      let best = null;
+      for (const [a, b] of elvRecipes(m)) {
+        const ca = cost(a).c, cb = cost(b).c; if (ca == null || cb == null) continue;
+        const p = elvChance(lv, lv, E) / elvTargets(P, a, b).length, f = (1 + p) / (2 * p);
+        const c = (ca + cb) * f;
+        if (!best || c < best.c) best = { c, rec: [a, b], p, f };
+      }
+      if (best && !(E.buy && pr != null && pr < best.c)) r = { c: best.c, how: "breed", rec: best.rec, p: best.p, f: best.f, breed: best.c, buy: pr };
+      else if (pr != null) r = { c: pr, how: "buy", buy: pr, breed: best ? best.c : null, rec: best ? best.rec : null, p: best ? best.p : null, f: best ? best.f : null };
+      else r = { c: null, how: "none", breed: null };
+    }
+    memo.set(id, r);
+    return r;
+  };
+  return { P, cost };
+}
+// Étapes d'un plan : quantités moyennes à obtenir de chaque monture, croisements, captures, achats
+function elvSteps(goal, cost) {
+  const need = new Map();
+  const walk = (id, q, d) => {
+    const n = cost(id), e = need.get(id) || { id, q: 0, n };
+    e.q += q; need.set(id, e);
+    if (n.how === "breed" && d < 30) { walk(n.rec[0], q * n.f, d + 1); walk(n.rec[1], q * n.f, d + 1); }
+  };
+  walk(goal, 1, 0);
+  return [...need.values()].sort((a, b) => ELV.by[b.id].gen - ELV.by[a.id].gen);
+}
+const elvPct = p => p == null ? "—" : (Math.round(p * 1000) / 10).toLocaleString("fr-FR") + " %";
+const elvOpt = (m, sel) => h("option", { value: m.id, selected: sel === m.id }, "G" + m.gen + " · " + elvName(m));
+function elvSelect(t, val, onPick, label, filter) {
+  const list = (elvIndex().list[t] || []).filter(filter || (() => true));
+  const el = h("select", { "aria-label": label }, h("option", { value: "" }, label + "…"), list.map(m => elvOpt(m, val)));
+  el.addEventListener("change", () => onPick(el.value ? +el.value : null));
+  return el;
+}
+
+function viewElevage() {
+  const E = elvS(), t = E.t, F = ELV_FAM[t];
+  elvIndex();
+  const list = ELV.list[t] || [];
+  if (!list.length) return h("div", { class: "empty" }, h("strong", { text: "Aucune monture trouvée" }), h("span", { text: "Les données du jeu ne contiennent pas cette famille de montures." }));
+  const set = (kk2, v) => { E[kk2] = v; persist("plan"); render(); };
+  const { P, cost } = elvCoster(t, E);
+  const pLv = elvChance(E.lv, E.lv, E), next = elvNextBonus();
+  const priced = list.filter(m => resale(m.id) != null);
+  const margins = list.map(m => { const n = cost(m.id), pr = resale(m.id); return { m, pr, br: n.breed ?? (n.how === "breed" ? n.c : null) }; }).filter(x => x.pr != null && x.br != null && x.m.gen > 1).map(x => ({ ...x, g: x.pr - x.br })).sort((a, b) => b.g - a.g);
+  const fam = h("span", { class: "seg", role: "group", "aria-label": "Famille" }, Object.entries(ELV_FAM).map(([k2, f]) =>
+    h("button", { type: "button", "aria-pressed": +k2 === t ? "true" : "false", onclick: () => { E.t = +k2; E.a = E.b = E.goal = null; elvN = 40; persist("plan"); render(); } }, f.pl + " (" + (ELV.list[k2] || []).length + ")")));
+  const lvIn = numInput(E.lv, v => { E.lv = Math.max(1, Math.min(200, Math.round(+v || 1))); persist("plan"); }, { sm: true, label: "Niveau des parents", id: "elv-lv" });
+  const cb = (key, txt) => { const c = h("input", { type: "checkbox", checked: !!E[key] }); c.addEventListener("change", () => set(key, c.checked)); return h("label", { class: "check small" }, c, txt); };
+  const tl = (label, v, sub, cls) => h("div", { class: "tile" + (cls ? " " + cls : "") }, h("span", { class: "label", text: label }), h("span", { class: "v", text: v }), h("span", { class: "small muted", text: sub }));
+  const settings = h("section", { class: "panel" },
+    h("div", { class: "row between" }, h("h2", { text: "Réglages d'élevage" }), fam),
+    h("div", { class: "filters" }, h("span", { class: "label", text: "Niveau des parents" }), lvIn,
+      cb("opti", "Optimakina (+10 %)"), cb("alm", "Bonus Almanax « Génération montante » (+20 %)"), cb("buy", "Acheter une monture quand c'est moins cher que l'élever")),
+    h("p", { class: "note", text: "Chance d'obtenir la génération visée (règles de la 3.5) : 30 % + 0,15 % par niveau des deux parents additionnés" + (E.opti ? " + 10 % (Optimakina)" : "") + (E.alm ? " + 20 % (Almanax)" : "") + ", au plus 100 %. Un accouplement donne un seul bébé et rend les deux parents stériles ; en cas d'échec, le bébé prend la couleur d'un des parents (compté moitié-moitié). L'interface génétique de l'enclos affiche la chance exacte avant chaque accouplement : elle fait foi." }));
+  const tiles = h("div", { class: "tiles" },
+    tl("Chance de génération visée", elvPct(pLv), "parents niveau " + E.lv + " et " + E.lv, pLv >= .8 ? "kamas" : ""),
+    tl("Prochain bonus Almanax", next ? (dayStart(next).getTime() === dayStart(new Date()).getTime() ? "Aujourd'hui" : next.getDate() + " " + MOIS[next.getMonth()]) : "—", "« Génération montante » : +20 % aux accouplements"),
+    tl(F.pl + " avec un prix", priced.length + " / " + list.length, priced.length ? "relevés du groupe ou cotes d'Orukam" : "relève les prix en bas de page", priced.length ? "" : "warn"),
+    tl("Plus rentable à élever", margins[0] ? elvName(margins[0].m) : "—", margins[0] ? "+" + kk(margins[0].g) + " ₭ par monture (prix − coût d'élevage)" : "il faut les prix des montures et de leurs parents", margins[0] && margins[0].g > 0 ? "kamas" : ""));
+
+  // --- Simulateur de croisement ---
+  const A = ELV.by[E.a], B = ELV.by[E.b];
+  const la = E.la ?? E.lv, lb = E.lb ?? E.lv;
+  let simOut = h("p", { class: "muted", text: "Choisis les deux parents pour voir ce que peut donner l'accouplement et avec quelle chance." });
+  if (A && B && A.t === t && B.t === t) {
+    const X = elvCross(P, A, B, la, lb);
+    const ev = X.out.reduce((s2, [m, p]) => s2 + p * (resale(m.id) ?? 0), 0), noP = X.out.filter(([m]) => resale(m.id) == null).length;
+    const par = (resale(A.id) ?? 0) + (resale(B.id) ?? 0);
+    simOut = h("div", { class: "stack" },
+      X.T.length ? h("p", {}, "Génération visée : ", h("strong", { text: "G" + X.T[0].gen }), " · chance ", h("strong", { class: "pos", text: elvPct(X.p) }), X.T.length > 1 ? " (partagée entre " + X.T.length + " couleurs)" : "")
+        : h("p", { class: "muted", text: A.id === B.id ? "Deux parents de la même couleur donnent un bébé de cette couleur." : "Ce couple ne donne aucune nouvelle couleur" + (F.n === "Dragodinde" || A.cols.length + B.cols.length === 2 ? "" : " connue (note la recette vue en jeu plus bas si elle existe)") + " : le bébé prendra la couleur d'un des parents." }),
+      h("div", { class: "tablewrap" }, h("table", {},
+        h("thead", {}, h("tr", {}, h("th", { text: "Bébé possible" }), h("th", { class: "n", text: "Chance" }), h("th", { class: "n", text: "Prix HDV" }))),
+        h("tbody", {}, X.out.map(([m, p]) => h("tr", {},
+          h("td", {}, itemLink(m.id, "Génération " + m.gen + (X.T.includes(m) ? " · génération visée" : " · couleur d'un parent"), 28)),
+          h("td", { class: "n" }, h("strong", { class: X.T.includes(m) ? "pos" : "", text: elvPct(p) })),
+          h("td", { class: "n", text: resale(m.id) != null ? k(resale(m.id)) + " ₭" : "—" })))))),
+      h("p", { class: "small" }, "Valeur moyenne du bébé : ", h("strong", { class: "num", text: kk(ev) + " ₭" }), noP ? " (" + noP + " sans prix)" : "",
+        " · valeur des deux parents, qui deviennent stériles : ", h("strong", { class: "num", text: kk(par) + " ₭" }),
+        par || ev ? h("span", { class: ev - par >= 0 ? "pos" : "neg", text: " · " + (ev - par >= 0 ? "+" : "−") + kk(Math.abs(ev - par)) + " ₭" }) : null));
+  }
+  const lvA = numInput(E.la ?? "", v => { E.la = v === "" ? null : Math.max(1, Math.min(200, Math.round(+v || 1))); persist("plan"); }, { sm: true, ph: String(E.lv), label: "Niveau du parent 1", id: "elv-la" });
+  const lvB = numInput(E.lb ?? "", v => { E.lb = v === "" ? null : Math.max(1, Math.min(200, Math.round(+v || 1))); persist("plan"); }, { sm: true, ph: String(E.lv), label: "Niveau du parent 2", id: "elv-lb" });
+  const sim = h("section", { class: "panel" },
+    h("h2", { text: "Simulateur de croisement" }),
+    h("div", { class: "filters" }, h("span", { class: "label", text: "Parent 1" }), elvSelect(t, A && A.t === t ? A.id : null, v => set("a", v), "Parent 1"), h("span", { class: "label", text: "niv." }), lvA,
+      h("span", { class: "label", text: "Parent 2" }), elvSelect(t, B && B.t === t ? B.id : null, v => set("b", v), "Parent 2"), h("span", { class: "label", text: "niv." }), lvB),
+    simOut);
+
+  // --- Arbre généalogique d'une couleur visée ---
+  const G = ELV.by[E.goal] && ELV.by[E.goal].t === t ? ELV.by[E.goal] : null;
+  let treeEl = h("p", { class: "muted", text: "Choisis la monture que tu veux obtenir : l'arbre remonte chaque croisement jusqu'aux captures, avec la chance de chaque étape, les prix et le coût moyen." });
+  if (G) {
+    const howChip = n => n.how === "capture" ? h("span", { class: "chip job", text: "Capture" }) : n.how === "buy" ? h("span", { class: "chip kamas", text: "Acheter" }) : n.how === "breed" ? h("span", { class: "chip", text: "Croiser · " + elvPct(n.p) }) : h("span", { class: "chip warn", text: "Recette inconnue" });
+    const head = (id, q) => { const n = cost(id), m = ELV.by[id];
+      return h("span", { class: "row", style: "gap:8px;flex-wrap:wrap;display:inline-flex" }, icon(id, 26), h("strong", { text: elvName(m) }), h("span", { class: "small muted", text: "G" + m.gen + (q > 1.01 ? " · × " + fmtQ(q) : "") }), howChip(n),
+        n.c != null ? h("span", { class: "small num", text: (n.how === "capture" && !n.buy ? "gratuit" : kk(n.c) + " ₭") }) : null,
+        n.how === "buy" && n.breed != null ? h("span", { class: "small muted", text: "(élever : " + kk(n.breed) + " ₭)" }) : null); };
+    const node = (id, q, d) => { const n = cost(id);
+      if (n.how !== "breed") return h("li", {}, head(id, q));
+      return h("li", {}, h("details", { open: d < 2 }, h("summary", {}, head(id, q)), h("ul", {}, n.rec.map(x => node(x, q * n.f, d + 1))))); };
+    const steps = elvSteps(G.id, cost), gc = cost(G.id);
+    const cross = steps.filter(s2 => s2.n.how === "breed").reduce((a, s2) => a + s2.q / s2.n.p, 0);
+    const caps = steps.filter(s2 => s2.n.how === "capture").reduce((a, s2) => a + s2.q, 0);
+    const buys = steps.filter(s2 => s2.n.how === "buy");
+    const unknown = steps.filter(s2 => s2.n.how === "none");
+    treeEl = h("div", { class: "stack" },
+      h("div", { class: "tiles" },
+        tl("Coût moyen", gc.c != null ? kk(gc.c) + " ₭" : "—", gc.how === "buy" ? "moins cher à l'achat" : "captures et achats au prix d'Orukam", "kamas"),
+        tl("Croisements à prévoir", fmtQ(cross), "en moyenne, échecs compris"),
+        tl("Captures", fmtQ(caps), "montures de génération 1"),
+        tl("Prix HDV de " + elvName(G), resale(G.id) != null ? kk(resale(G.id)) + " ₭" : "—", resale(G.id) != null && gc.c != null && gc.how === "breed" ? (resale(G.id) - gc.c >= 0 ? "+" : "−") + kk(Math.abs(resale(G.id) - gc.c)) + " ₭ si tu la revends" : "relève son prix plus bas")),
+      unknown.length ? h("p", { class: "small", style: "color:var(--bad)", text: "Sans recette ni prix : " + unknown.map(s2 => elvName(ELV.by[s2.id])).join(", ") + ". Note la recette vue en jeu ou relève leur prix pour compléter le calcul." }) : null,
+      h("div", { class: "tree" }, h("ul", { style: "border-left:0;padding-left:0" }, node(G.id, 1, 0))),
+      h("details", { class: "tree" }, h("summary", { text: "Liste des étapes (" + steps.length + " montures)" }),
+        h("div", { class: "tablewrap" }, h("table", {},
+          h("thead", {}, h("tr", {}, h("th", { text: "Monture" }), h("th", { text: "Comment" }), h("th", { class: "n", text: "Quantité" }), h("th", { class: "n", text: "Croisements" }), h("th", { class: "n", text: "Coût unitaire" }))),
+          h("tbody", {}, steps.map(s2 => h("tr", {},
+            h("td", {}, itemLink(s2.id, "Génération " + ELV.by[s2.id].gen + (s2.n.how === "breed" ? " · " + s2.n.rec.map(x => elvName(ELV.by[x])).join(" × ") : ""), 26)),
+            h("td", {}, howChip(s2.n)),
+            h("td", { class: "n", text: fmtQ(s2.q) }),
+            h("td", { class: "n", text: s2.n.how === "breed" ? fmtQ(s2.q / s2.n.p) : "—" }),
+            h("td", { class: "n", text: s2.n.c != null ? kk(s2.n.c) + " ₭" : "—" }))))))),
+      buys.length ? h("p", { class: "small muted", text: "À acheter : " + buys.map(s2 => fmtQ(s2.q) + " × " + elvName(ELV.by[s2.id])).join(", ") + "." } ) : null);
+  }
+  const tree = h("section", { class: "panel" },
+    h("div", { class: "row between" }, h("h2", { text: "Arbre généalogique" }), elvSelect(t, G ? G.id : null, v => set("goal", v), "Monture visée", m => m.gen > 1)),
+    treeEl,
+    h("p", { class: "note", text: "Quantités et coûts moyens : par réussite, il faut en moyenne (1 + p) ÷ (2 p) exemplaires de chaque parent, car un échec rend un bébé de la couleur d'un parent, réutilisable. Montures de génération 1 : capturées (comptées au prix d'Orukam si le groupe l'a relevé, sinon gratuites). " + (E.buy ? "Une monture est achetée quand son prix est inférieur à son coût d'élevage." : "Tout est élevé, sauf les montures sans recette.") }));
+
+  // --- Recettes notées (Muldos, Volkornes) ---
+  let recPanel = null;
+  if (t !== 331) {
+    const R = S.settings.elvRec || {};
+    const noted = list.filter(m => (R[m.id] || []).length);
+    const nf = elvF;
+    if (nf.t !== t) { nf.t = t; nf.m = nf.a = nf.b = null; }
+    const add = () => {
+      if (!nf.m || !nf.a || !nf.b) { toast("Choisis la monture obtenue et ses deux parents"); return; }
+      if (nf.m === nf.a || nf.m === nf.b) { toast("Une monture ne peut pas être son propre parent"); return; }
+      const rr = { ...(S.settings.elvRec || {}) }, l = (rr[nf.m] || []).slice(), a = Math.min(nf.a, nf.b), b = Math.max(nf.a, nf.b);
+      if (!l.some(x => x[0] === a && x[1] === b)) l.push([a, b]);
+      rr[nf.m] = l; S.settings.elvRec = rr; persist("plan"); toast("Recette notée : " + elvName(ELV.by[nf.m])); nf.a = nf.b = null; render();
+    };
+    const del = (m, i) => { const rr = { ...(S.settings.elvRec || {}) }; rr[m] = (rr[m] || []).filter((_, j) => j !== i); if (!rr[m].length) delete rr[m]; S.settings.elvRec = rr; persist("plan"); render(); };
+    const pures = list.filter(m => m.cols.length === 1 && m.gen > 1);
+    recPanel = h("section", { class: "panel" },
+      h("h2", { text: "Recettes des monocolores" }),
+      h("p", { class: "small muted", text: "Depuis la 3.5, les " + F.pl + " monocolores ont plusieurs recettes possibles. Note celles que tu vois dans l'interface génétique de l'enclos (ou par clic droit sur une monture) : elles servent au simulateur et à l'arbre généalogique. Les bicolores, elles, s'obtiennent toujours en croisant leurs deux couleurs." }),
+      h("div", { class: "filters" },
+        elvSelect(t, nf.m, v => { nf.m = v; render(); }, "Monture obtenue", m => m.cols.length === 1 && m.gen > 1),
+        h("span", { class: "label", text: "=" }), elvSelect(t, nf.a, v => { nf.a = v; }, "Parent 1", m => !ELV.by[nf.m] || m.gen < ELV.by[nf.m].gen),
+        h("span", { class: "label", text: "×" }), elvSelect(t, nf.b, v => { nf.b = v; }, "Parent 2", m => !ELV.by[nf.m] || m.gen < ELV.by[nf.m].gen),
+        h("button", { type: "button", class: "btn sm primary", onclick: add }, "Noter la recette")),
+      h("div", { class: "chips" }, pures.map(m => {
+        const l = R[m.id] || [];
+        return h("span", { class: "chip" + (l.length ? " job" : "") }, icon(m.id, 20), " " + elvName(m) + " (G" + m.gen + ") : ",
+          l.length ? l.map(([a, b], i) => h("span", {}, (i ? " · " : "") + elvName(ELV.by[a]) + " × " + elvName(ELV.by[b]) + " ",
+            h("button", { type: "button", class: "x", "aria-label": "Retirer cette recette", onclick: () => del(m.id, i) }, "×"))) : "à noter");
+      })),
+      noted.length ? null : h("p", { class: "small muted", text: "Aucune recette notée pour l'instant : sans recette, une monocolore est comptée à son prix HDV." }));
+  }
+
+  // --- Prix des montures ---
+  const nq = norm(E.q || "");
+  let rows = list.filter(m => (!E.g || m.gen === +E.g) && (!nq || norm(item(m.id)[0]).includes(nq))).map(m => { const n = cost(m.id), pr = resale(m.id), br = m.gen === 1 ? null : (n.breed ?? (n.how === "breed" ? n.c : null)); return { m, n, pr, br, g: pr != null && br != null ? pr - br : null }; });
+  if (E.sort === "marge") rows.sort((a, b) => (b.g ?? -1e15) - (a.g ?? -1e15));
+  else if (E.sort === "prix") rows.sort((a, b) => (b.pr ?? -1) - (a.pr ?? -1));
+  const gens = [...new Set(list.map(m => m.gen))].sort((a, b) => a - b);
+  const gSel = h("select", { "aria-label": "Génération" }, h("option", { value: "" }, "Toutes les générations"), gens.map(g => h("option", { value: g, selected: +E.g === g }, "Génération " + g)));
+  gSel.addEventListener("change", () => { E.g = gSel.value; elvN = 40; persist("plan"); render(); });
+  const sSel = h("select", { "aria-label": "Trier" }, [["gen", "Par génération"], ["prix", "Prix décroissant"], ["marge", "Plus rentables à élever"]].map(([v, l]) => h("option", { value: v, selected: E.sort === v }, l)));
+  sSel.addEventListener("change", () => set("sort", sSel.value));
+  const q = h("input", { type: "search", id: "q-elv", placeholder: "Chercher une couleur…", value: E.q || "", "aria-label": "Chercher une monture" });
+  q.addEventListener("input", () => { E.q = q.value; elvN = 40; clearTimeout(q._t); q._t = setTimeout(render, 250); });
+  const shown = rows.slice(0, elvN);
+  const prices = h("section", { class: "panel" },
+    h("div", { class: "row between" }, h("h2", { text: "Prix des " + F.pl }), h("span", { class: "small muted", text: rows.length + " monture" + (rows.length > 1 ? "s" : "") })),
+    h("div", { class: "filters" }, h("div", { class: "search" }, q), gSel, sSel),
+    h("div", { class: "tablewrap" }, h("table", {},
+      h("thead", {}, h("tr", {}, h("th", { text: "Monture" }), h("th", { class: "n", text: "Prix HDV" }), h("th", { class: "n", text: "Coût d'élevage" }), h("th", { class: "n", text: "Gain" }), h("th", { class: "hide-m", text: "" }), h("th", { text: "Ton relevé (basse · haute · actuel)" }))),
+      h("tbody", {}, shown.map(r => h("tr", {},
+        h("td", {}, itemLink(r.m.id, "Génération " + r.m.gen + (r.m.gen === 1 ? " · capture" : r.n.rec ? " · " + r.n.rec.map(x => elvName(ELV.by[x])).join(" × ") : " · recette à noter"), 28)),
+        h("td", { class: "n" }, r.pr != null ? h("strong", { class: "num", text: k(r.pr) + " ₭" }) : h("span", { class: "muted", text: "—" })),
+        h("td", { class: "n", text: r.br != null ? kk(r.br) + " ₭" : "—" }),
+        h("td", { class: "n" }, r.g != null ? h("span", { class: r.g >= 0 ? "pos" : "neg", text: (r.g >= 0 ? "+" : "−") + kk(Math.abs(r.g)) + " ₭" }) : h("span", { class: "muted", text: "—" })),
+        h("td", { class: "hide-m" }, r.m.gen > 1 ? h("button", { type: "button", class: "btn sm", onclick: () => { E.goal = r.m.id; persist("plan"); render(); document.getElementById("elv-tree")?.scrollIntoView({ behavior: "smooth" }); } }, "Arbre") : null),
+        h("td", {}, quickObs(r.m.id))))))),
+    rows.length > shown.length ? h("div", { class: "row", style: "justify-content:center" }, h("button", { type: "button", class: "btn", onclick: () => { elvN += 80; render(); } }, "Afficher plus (" + (rows.length - shown.length) + " restantes)")) : null,
+    h("p", { class: "note", text: "Prix d'Orukam : relevé du groupe (saisi ici ou dans Prix), sinon cote Kamamaster. Coût d'élevage = coût moyen pour obtenir la monture à partir de ses parents (voir l'arbre généalogique), aux réglages ci-dessus ; gain = prix HDV − coût d'élevage." }));
+  tree.id = "elv-tree";
+  return h("div", { class: "stack" }, settings, tiles, sim, tree, recPanel, prices);
+}
+let elvF = { t: null, m: null, a: null, b: null };
 
 // =====================================================================
 // Cosmétiques : apparats, objets vivants, montures d'apparat ; garde-robe par build (b.skin = {"case-n°": objet})
@@ -5159,7 +5438,7 @@ const IC = {
 const svgI = name => { const el = s("svg", { class: "i", viewBox: "0 0 24 24", "aria-hidden": "true" }); for (const d of IC[name].split(" M")) el.append(s("path", { d: d.startsWith("M") ? d : "M" + d })); return el; };
 const TABS = [
   ["accueil", "Accueil", "home", "--c-home"], ["plan", "Plan de craft", "hammer", "--c-craft", "c-plan"], ["rentabilite", "Crafts rentables", "trend", "--c-gold"],
-  ["prix", "Prix", "coins", "--c-gold", "c-prix"], ["tournee", "Tournée HDV", "route", "--c-gold", "c-tour"], ["journal", "Journal", "ledger", "--c-journal"], ["alertes", "Alertes", "bell", "--c-gold", "c-alert"], ["farm", "Farm", "leaf", "--c-farm"], ["metiers", "Métiers", "up", "--c-craft"], ["brisage", "Brisage", "rune", "--c-alm"], ["serveur", "Vue d'ensemble", "globe", "--c-oru"], ["almanax", "Almanax", "calendar", "--c-alm"], ["carte", "Carte", "map", "--c-oru"], ["cotes", "Cotes HDV", "chart", "--c-oru"], ["tendances", "Tendances", "trend", "--c-oru"], ["donjons", "Donjons", "castle", "--c-oru"], ["zones", "Zones", "map", "--c-oru"], ["builds", "Builds", "shield", "--c-build", "c-builds"], ["comparer", "Comparer", "compare", "--c-build"], ["cosmetiques", "Cosmétiques", "shield", "--c-build"],
+  ["prix", "Prix", "coins", "--c-gold", "c-prix"], ["tournee", "Tournée HDV", "route", "--c-gold", "c-tour"], ["journal", "Journal", "ledger", "--c-journal"], ["alertes", "Alertes", "bell", "--c-gold", "c-alert"], ["farm", "Farm", "leaf", "--c-farm"], ["metiers", "Métiers", "up", "--c-craft"], ["elevage", "Élevage", "leaf", "--c-farm"], ["brisage", "Brisage", "rune", "--c-alm"], ["serveur", "Vue d'ensemble", "globe", "--c-oru"], ["almanax", "Almanax", "calendar", "--c-alm"], ["carte", "Carte", "map", "--c-oru"], ["cotes", "Cotes HDV", "chart", "--c-oru"], ["tendances", "Tendances", "trend", "--c-oru"], ["donjons", "Donjons", "castle", "--c-oru"], ["zones", "Zones", "map", "--c-oru"], ["builds", "Builds", "shield", "--c-build", "c-builds"], ["comparer", "Comparer", "compare", "--c-build"], ["cosmetiques", "Cosmétiques", "shield", "--c-build"],
   ["stock", "Inventaire", "bag", "--c-stock", "c-stock"], ["groupe", "Groupe", "user", "--c-craft", "c-groupe"], ["encyclopedie", "Encyclopédie", "book", "--c-ency"], ["compte", "Compte", "user", "--c-save"],
 ];
 // Sections regroupées : menu latéral (bureau), barre du bas + sous-onglets (téléphone)
@@ -5168,7 +5447,7 @@ const GROUPS = [
   ["accueil", "Accueil", "home", "--c-home", ["accueil", "almanax"]],
   ["marche", "Marché", "coins", "--c-gold", ["prix", "tendances", "journal", "alertes"]],
   ["kamas", "Kamas", "trend", "--c-oru", ["rentabilite", "brisage", "donjons", "zones"]],
-  ["production", "Production", "hammer", "--c-craft", ["plan", "metiers", "farm"]],
+  ["production", "Production", "hammer", "--c-craft", ["plan", "metiers", "farm", "elevage"]],
   ["equipement", "Équipement", "shield", "--c-build", ["builds", "encyclopedie"]],
   ["groupe", "Groupe", "user", "--c-save", ["groupe", "compte"]],
 ];
@@ -5200,7 +5479,7 @@ try { lastInGroup = JSON.parse(localStorage.getItem("atelier-nav") || "{}"); } c
 // Icônes du jeu pour les menus (objets de Dofus, planche d'icônes locale) ; dessin de secours sinon
 const GI = { accueil: 548, almanax: 21014, marche: 8425, prix: 8425, tournee: 14978, rentabilite: 745, journal: 678, alertes: 1339,
   orukam: 737, serveur: 737, cotes: 489, tendances: 1328, donjons: 8437, carte: 15378, brisage: 1519,
-  production: 147, plan: 147, groupe: 1575, kamas: 745, zones: 384, metiers: 14146, farm: 289, stock: 1699, equipement: 2411, builds: 2411, comparer: 22444, cosmetiques: 8069, encyclopedie: 2337, compte: 11270 };
+  production: 147, plan: 147, groupe: 1575, kamas: 745, zones: 384, metiers: 14146, farm: 289, elevage: 33001, stock: 1699, equipement: 2411, builds: 2411, comparer: 22444, cosmetiques: 8069, encyclopedie: 2337, compte: 11270 };
 // Icônes des menus : petite planche dédiée (data/icons/menu.webp, tools/build_menu_icons.py, même ordre que GI)
 // au lieu d'une vingtaine de grandes planches d'icônes chargées au démarrage
 const MENU_IDS = [...new Set(Object.values(GI))];
@@ -5268,6 +5547,7 @@ function heroFor(v) {
     plan: ["Plan de craft", "Ce que tu veux fabriquer, tout ce qu'il faut réunir pour y arriver, et ton inventaire.", "hammer", S.targets.flatMap(t => [t.id, ...(recipe(t.id)?.[1] || []).map(x => x[0])])],
     rentabilite: ["Crafts rentables", "Crafter ou acheter, farmer ou capturer : ce qui rapporte vraiment, taxe et investissement déduits.", "trend", Object.keys(prices()).map(Number).filter(id => recipe(id))],
     prix: ["Prix", "Tous les prix d'Orukam : les relevés du groupe d'abord, sinon les cotes Kamamaster. Relève, compare et repère ce qui est à vérifier.", "coins", Object.keys(prices()).map(Number)],
+    elevage: ["Élevage", "Dragodindes, Muldos et Volkornes : chances de chaque croisement, arbre généalogique jusqu'aux captures, prix et coût d'élevage des montures.", "leaf", (ELV_FAM[elvS().t] ? (elvIndex().list[elvS().t] || []).map(m => m.id).filter(id => resale(id) != null).concat((elvIndex().list[elvS().t] || []).filter(m => m.gen >= 7).map(m => m.id)) : [])],
     farm: ["Farm", "Ce qu'il te manque, où le récolter, quels monstres taper, et la carte des ressources.", "leaf", []],
     brisage: ["Brisage", "Les équipements à crafter puis briser pour revendre les runes, aux prix d'Orukam.", "rune", [...new Set(Object.values(RUNES).map(r => r[1]))].filter(id => priceAt(id)).slice(0, 8)],
     comparer: ["Comparer deux builds", "Pièces, statistiques et coût côte à côte, pour choisir la meilleure variante.", "compare", [...new Set(S.builds.flatMap(b => b.items))]],
@@ -5289,7 +5569,7 @@ function heroFor(v) {
     donjons: ["Donjons rentables", "Ce que rapporte chaque donjon en kamas par heure, à ta prospection et aux prix d'Orukam.", "castle", KMD ? KMD.list.flatMap(d => d.drops.slice(0, 1).map(x => x[0])).slice(0, 8) : []],
     compte: ["Compte", "Ton pseudo, ton mot de passe et la sauvegarde de tes données.", "user", []],
   }[v];
-  const fill = { farm: e => supOfE(e) === 9, builds: e => [1, 3, 10, 11].includes(supOfE(e)), encyclopedie: e => supOfE(e) === 13 || supOfE(e) === 12, compte: e => supOfE(e) === 13 };
+  const fill = { elevage: e => [331, 332, 333].includes(e.type), farm: e => supOfE(e) === 9, builds: e => [1, 3, 10, 11].includes(supOfE(e)), encyclopedie: e => supOfE(e) === 13 || supOfE(e) === 12, compte: e => supOfE(e) === 13 };
   let ids = [...new Set(H[3])].filter(id => item(id)[3] >= 0).slice(0, 8);
   if (ids.length < 8) ids = ids.concat(sampleIds(fill[v] || (e => !!D.recipes[e.id]), 8 - ids.length, v).filter(x => !ids.includes(x)));
   return h("section", { class: "hero", "data-sec": v },
@@ -5338,7 +5618,7 @@ function decorate(root, v) {
 // =====================================================================
 // Rendu et navigation
 // =====================================================================
-const VIEWS = { tendances: viewTendances, almanax: viewAlmanax, carte: viewCarte, donjons: viewDonjons, zones: viewZones, brisage: viewBrisage, comparer: viewComparer, alertes: viewAlertes, metiers: viewMetiers, journal: viewJournal, tournee: viewTournee, farm: viewFarm, builds: viewBuilds, cosmetiques: viewCosmetiques, accueil: viewAccueil, plan: viewPlan, rentabilite: viewRentabilite, prix: viewPrix, stock: viewStock, groupe: viewGroupe, encyclopedie: viewEncyclopedie, compte: viewSauvegarde };
+const VIEWS = { tendances: viewTendances, almanax: viewAlmanax, carte: viewCarte, donjons: viewDonjons, zones: viewZones, brisage: viewBrisage, comparer: viewComparer, alertes: viewAlertes, metiers: viewMetiers, journal: viewJournal, tournee: viewTournee, farm: viewFarm, elevage: viewElevage, builds: viewBuilds, cosmetiques: viewCosmetiques, accueil: viewAccueil, plan: viewPlan, rentabilite: viewRentabilite, prix: viewPrix, stock: viewStock, groupe: viewGroupe, encyclopedie: viewEncyclopedie, compte: viewSauvegarde };
 function renderCounts() {
   const set = (id, n) => { const el = document.getElementById(id); if (el) { el.textContent = n; el.dataset.z = n ? "0" : "1"; } };
   set("c-plan", S.targets.length);
