@@ -5117,7 +5117,7 @@ function viewAlmanax() {
 let MAPD = null, mapLoading = null;
 function ensureMap() {
   if (MAPD || mapLoading) return mapLoading;
-  const empty = () => ({ worlds: [], byW: new Map(), res: [], spawns: {}, hints: [], resById: new Map(), subW: new Map() });
+  const empty = () => ({ worlds: [], byW: new Map(), res: [], spawns: {}, hints: [], mines: [], resById: new Map(), subW: new Map() });
   mapLoading = fetch("data/map.json").then(r => r.ok ? r.json() : null).then(d => {
     if (!d || !d.worlds) { MAPD = empty(); return; }
     d.byW = new Map(); d.subW = new Map();
@@ -5130,6 +5130,9 @@ function ensureMap() {
       if (!d.subW.has(sa)) d.subW.set(sa, wid);
     }
     d.resById = new Map(d.res.map(r => [r[0], r]));
+    // Mines : [sous-zone, nom, zone, salles, [[x, y], …] (entrée = 1re), {minerai: quantité}] ; repère à l'entrée
+    d.mines = (d.mines || []).map(([sa, name, area, rooms, cs, ores]) => ({ sa, name, area, rooms, cs, ores: Object.entries(ores).map(([r, q]) => [+r, q]), q: Object.values(ores).reduce((t, v) => t + v, 0) }));
+    for (const m of d.mines) d.hints.push([m.cs[0][0], m.cs[0][1], 1, "mine", 0, "Mine : " + m.name]);
     MAPD = d; if (view === "carte") render();
   }).catch(() => { MAPD = empty(); });
   return mapLoading;
@@ -5137,7 +5140,7 @@ function ensureMap() {
 const MAP_COLORS = ["#ffd166", "#4cc9f0", "#f72585", "#90be6d", "#f8961e", "#c77dff"];
 // Calques de repères : zaaps, autres transports, ateliers, HDV et banques
 const HINT_LAYERS = [["zaap", "Zaaps", h => /^zaap/i.test(h[5])], ["trans", "Transports", h => h[3] === 9 && !/^zaap/i.test(h[5])],
-  ["atelier", "Ateliers", h => h[3] === 3], ["hdv", "HDV et banques", h => h[3] === 2 || /banque/i.test(h[5])]];
+  ["atelier", "Ateliers", h => h[3] === 3], ["hdv", "HDV et banques", h => h[3] === 2 || /banque/i.test(h[5])], ["mine", "Entrées de mines", h => h[3] === "mine"]];
 let mapF = { sel: [], job: "", q: "", an: true, cell: null, world: 1, layers: { zaap: true } };
 try { const s = JSON.parse(localStorage.getItem("atelier-carte") || "null"); if (s) { if (Array.isArray(s.sel)) mapF.sel = s.sel.slice(0, 6); if (s.world) mapF.world = s.world; if (s.layers) mapF.layers = s.layers; } } catch {}
 const saveMapSel = () => { try { localStorage.setItem("atelier-carte", JSON.stringify({ sel: mapF.sel, world: mapF.world, layers: mapF.layers })); } catch {} };
@@ -5150,7 +5153,7 @@ const worldHints = () => MAPD.hints.filter(h => h[2] === MW().id);
 const worldSpawns = rid => (MAPD.spawns[rid] || []).filter(s => (s[3] || 1) === MW().id);
 function mapCellInfo(x, y) {
   const W = MW(), sa = W.idx.get(x + "," + y);
-  const res = mapF.sel.map((rid, i) => { const sp = worldSpawns(rid).find(s => s[0] === x && s[1] === y); return sp ? { rid, q: sp[2], c: MAP_COLORS[i] } : null; }).filter(Boolean);
+  const res = mapF.sel.map((rid, i) => { const sp = worldSpawns(rid).find(s => s[0] === x && s[1] === y); return sp ? { rid, q: sp[2], c: MAP_COLORS[i], u: sp[4] === 1 } : null; }).filter(Boolean);
   const hints = worldHints().filter(h => h[0] === x && h[1] === y).map(h => h[5]);
   return { x, y, sa, an: sa != null ? anomalyOf(sa) : 0, res, hints };
 }
@@ -5225,10 +5228,12 @@ function drawMap(cv) {
   mapF.sel.forEach((rid, i) => {
     const list = worldSpawns(rid); if (!list.length) return;
     const mx = Math.max(...list.map(p => p[2]));
-    for (const [x, y, q] of list) {
+    for (const [x, y, q, , u] of list) {
       if (!vis(x, y)) continue;
-      const r = Math.max(2.2, (Math.min(s, sy) / 2 - 1) * (0.45 + 0.55 * Math.sqrt(q / mx)));
-      ctx.beginPath(); ctx.arc(X(x) + s / 2, Y(y) + sy / 2, r, 0, 7);
+      const r = Math.max(2.2, (Math.min(s, sy) / 2 - 1) * (0.45 + 0.55 * Math.sqrt(q / mx))), cx = X(x) + s / 2, cy = Y(y) + sy / 2;
+      ctx.beginPath();
+      if (u) { const d = r * 1.25; ctx.moveTo(cx, cy - d); ctx.lineTo(cx + d, cy); ctx.lineTo(cx, cy + d); ctx.lineTo(cx - d, cy); ctx.closePath(); } // sous terre
+      else ctx.arc(cx, cy, r, 0, 7);
       ctx.fillStyle = MAP_COLORS[i]; ctx.fill(); ctx.lineWidth = 1.2; ctx.strokeStyle = "rgba(0,0,0,.7)"; ctx.stroke();
     }
   });
@@ -5236,6 +5241,9 @@ function drawMap(cv) {
   const hs = Math.max(16, Math.min(30, Math.min(s, sy) * .9));
   for (const h of worldHints()) {
     if (!hintOn(h) || !vis(h[0], h[1])) continue;
+    if (h[3] === "mine") { const cx = X(h[0]) + s / 2, cy = Y(h[1]) + sy / 2, r = hs / 2;
+      ctx.beginPath(); ctx.arc(cx, cy, r, 0, 7); ctx.fillStyle = "#2b1d10"; ctx.fill(); ctx.lineWidth = 2; ctx.strokeStyle = "#e0a84e"; ctx.stroke();
+      ctx.font = "700 " + Math.round(r * 1.15) + "px sans-serif"; ctx.textAlign = "center"; ctx.textBaseline = "middle"; ctx.fillStyle = "#f3d9a4"; ctx.fillText("⛏", cx, cy + 1); continue; }
     const im = hintImg(h[4]), cx = X(h[0]) + s / 2, cy = Y(h[1]) + sy / 2;
     if (im.complete && im.naturalWidth) ctx.drawImage(im, cx - hs / 2, cy - hs / 2, hs, hs);
     else { ctx.beginPath(); ctx.arc(cx, cy, 5, 0, 7); ctx.fillStyle = "#6fd3ff"; ctx.fill(); }
@@ -5318,6 +5326,35 @@ function protCard(p, rid, onShow) {
       return h("button", { type: "button", class: "chip" + (b >= 100 ? "" : " kamas"), onclick: () => openSheet(it), title: bg ? "Contient " + bg[1] + " × " + item(bg[0])[0] : "" },
         icon(it, 18), item(it)[0] + " · " + pctTxt(a, b) + (v != null ? " · ≈ " + kk(v) + " ₭" : "")); })));
 }
+// Mines : minerais sous terre (data/map.json « mines », tools/build_mines.py). Le jeu n'a pas de plan des mines
+// (beaucoup de salles ont les mêmes coordonnées) : entrée, salles, minerais présents et zaap le plus proche.
+let minesAll = false;
+function minesPanel(nearZaap, zaapName) {
+  if (!MAPD || !MAPD.mines.length || mapF.world !== 1) return null;
+  const sel = mapF.sel.filter(rid => MAPD.mines.some(m => m.ores.some(o => o[0] === rid)));
+  const qSel = m => m.ores.reduce((t, [r, q]) => t + (sel.includes(r) ? q : 0), 0);
+  const list = (sel.length ? MAPD.mines.filter(m => qSel(m) > 0).sort((a, b) => qSel(b) * (1 + anomalyOf(b.sa) / 100) - qSel(a) * (1 + anomalyOf(a.sa) / 100)) : MAPD.mines);
+  const shown = minesAll ? list : list.slice(0, 8);
+  const W = MW(), surf = m => W.idx.get(m.cs[0][0] + "," + m.cs[0][1]);
+  const label = m => { const sa = surf(m); return /^souterrains?$/i.test(m.name) && sa != null ? "Souterrains · " + subName2(sa) : m.name; };
+  const go = m => { mapF.layers = { ...mapF.layers, mine: true }; mapF.cell = [m.cs[0][0], m.cs[0][1]]; saveMapSel(); render();
+    requestAnimationFrame(() => { mapCenter(m.cs[0][0], m.cs[0][1], 22); document.querySelector(".mapwrap")?.scrollIntoView({ block: "center", behavior: "smooth" }); }); };
+  const pick = rid => { if (!mapF.sel.includes(rid)) { if (mapF.sel.length >= 6) mapF.sel.shift(); mapF.sel.push(rid); saveMapSel(); } render(); };
+  return h("details", { class: "panel dj", id: "carte-mines", open: !!sel.length || mapF.job === "Mineur" },
+    h("summary", {}, h("strong", { text: "Mines" + (sel.length ? " · " + sel.map(r => item(r)[0]).join(", ") : "") }), h("span", { class: "chip djc", text: list.length + " mine" + (list.length > 1 ? "s" : "") })),
+    h("p", { class: "note", text: "La plupart des minerais poussent sous terre : sur la carte ils sont dessinés en losange ◆ à l'endroit de l'entrée de leur mine (⛏). Le jeu n'a pas de plan des mines : voici l'entrée, le nombre de salles et ce qu'on y trouve (quantités relevées par Kamamaster sur Orukam)" + (sel.length ? ", classées selon les minerais choisis, anomalie comprise." : ". Choisis un minerai pour classer les mines.") }),
+    list.length ? h("div", { class: "tablewrap" }, h("table", {}, h("tbody", {}, shown.map(m => {
+      const sa = surf(m), nz = sa != null ? nearZaap(sa) : null, an = anomalyOf(m.sa);
+      return h("tr", {},
+        h("td", {}, h("button", { type: "button", class: "link", onclick: () => go(m) }, h("strong", { text: "⛏ " + label(m) })),
+          h("small", { class: "muted", style: "display:block", text: [m.area, "entrée [" + m.cs[0].join(",") + "]", m.rooms + " salle" + (m.rooms > 1 ? "s" : ""), nz ? "zaap " + zaapName(nz.z) + " à " + Math.round(nz.d) + " case" + (nz.d >= 2 ? "s" : "") : ""].filter(Boolean).join(" · ") })),
+        h("td", {}, h("div", { class: "chips" }, m.ores.map(([r, q]) => { const i = mapF.sel.indexOf(r);
+          return h("button", { type: "button", class: "chip" + (i >= 0 ? " up" : ""), title: "Voir " + item(r)[0] + " sur la carte", style: i >= 0 ? "border:1px solid " + MAP_COLORS[i] : null, onclick: () => pick(r) },
+            icon(r, 16), " " + item(r)[0] + " × " + q); }))),
+        h("td", { class: "n" }, an ? h("span", { class: "chip warn", text: "+" + an + " %" }) : null));
+    })))) : h("p", { class: "muted", text: "Aucune mine connue pour ces minerais." }),
+    list.length > 8 ? h("button", { type: "button", class: "btn sm", onclick: () => { minesAll = !minesAll; render(); } }, minesAll ? "Voir moins" : "Voir les " + list.length + " mines") : null);
+}
 function viewCarte() {
   ensureMap();
   if (!F) ensureFarm().then(d => { if (d && view === "carte") render(); });
@@ -5381,7 +5418,7 @@ function viewCarte() {
       h("div", { class: "reslist" }, list.map(r => { const i = mapF.sel.indexOf(r[0]), n = inWorld(r[0]);
         return h("button", { type: "button", class: "reschip" + (i >= 0 ? " on" : "") + (n ? "" : " off"), style: i >= 0 ? "--rc:" + MAP_COLORS[i] : null, "aria-pressed": i >= 0 ? "true" : "false", title: r[1] + " · niv. " + r[3] + (protOf(r[0]).length ? " · protecteur : " + protOf(r[0]).map(p => p.name).join(", ") : "") + " · " + n + " carte(s) ici", onclick: () => toggle(r[0]) },
           icon(r[0], 22), h("span", { text: r[1] }), h("small", { class: "muted", text: r[3] })); })),
-      h("p", { class: "note", text: "Choisis jusqu'à 6 ressources : chaque point est une case où elle pousse, plus gros quand il y en a beaucoup (ressources estompées : absentes de cette carte). Zones en rouge : anomalie et son bonus. Repères du jeu : zaaps, transports, ateliers, HDV et banques. Glisse pour te déplacer, molette ou deux doigts pour zoomer, touche une case pour son détail." })),
+      h("p", { class: "note", text: "Choisis jusqu'à 6 ressources : chaque point est une case où elle pousse, plus gros quand il y en a beaucoup (ressources estompées : absentes de cette carte). Zones en rouge : anomalie et son bonus. ◆ = sous terre, dans une mine (entrée marquée ⛏) ; ● = en surface. Repères du jeu : zaaps, transports, ateliers, HDV, banques et entrées de mines. Glisse pour te déplacer, molette ou deux doigts pour zoomer, touche une case pour son détail." })),
     wrap,
     h("div", { class: "grid2 even" },
       h("section", { class: "panel" },
@@ -5391,7 +5428,7 @@ function viewCarte() {
             cellInf.an ? h("span", { class: "chip warn", text: "Anomalie +" + cellInf.an + " %" }) : h("span", { class: "chip", text: "pas d'anomalie" }),
             ...cellInf.hints.map(n => h("span", { class: "chip job", text: n }))),
           (() => { const nz = cellInf.sa != null ? nearZaap(cellInf.sa) : null; return nz ? h("p", { class: "small", text: "Zaap le plus proche : " + zaapName(nz.z) + " · " + Math.round(nz.d) + " case" + (nz.d >= 2 ? "s" : "") }) : null; })(),
-          cellInf.res.length ? cellInf.res.map(rr => h("div", { class: "row between" }, h("span", {}, h("span", { style: "color:" + rr.c, text: "● " }), itemLink(+rr.rid, protOf(rr.rid).length ? "protecteur : " + protOf(rr.rid).map(p => p.name).join(", ") : null, 24)), h("strong", { text: "× " + rr.q }))) :
+          cellInf.res.length ? cellInf.res.map(rr => h("div", { class: "row between" }, h("span", {}, h("span", { style: "color:" + rr.c, text: rr.u ? "◆ " : "● " }), itemLink(+rr.rid, [rr.u ? "dans la mine (sous terre)" : "", protOf(rr.rid).length ? "protecteur : " + protOf(rr.rid).map(p => p.name).join(", ") : ""].filter(Boolean).join(" · ") || null, 24)), h("strong", { text: "× " + rr.q }))) :
             h("p", { class: "muted", text: mapF.sel.length ? "Aucune des ressources choisies sur cette case." : "Choisis des ressources pour voir ce qui pousse ici." })) :
           h("p", { class: "muted", text: "Touche ou clique une case pour voir sa zone, son anomalie, ses repères et ses ressources." })),
       h("section", { class: "panel" },
@@ -5404,6 +5441,7 @@ function viewCarte() {
           : anomAll.length ? h("div", { style: "display:grid;gap:6px" }, anomAll.map(([sid, b]) => h("div", { class: "row between" },
             h("button", { type: "button", class: "link", onclick: () => centerOn(sid) }, subName2(+sid) + (MAPD.subW.get(+sid) && MAPD.subW.get(+sid) !== 1 ? " · " + (MAPD.byW.get(MAPD.subW.get(+sid))?.name || "") : "")), h("span", { class: "chip warn", text: "+" + b + " %" })))) : h("p", { class: "muted", text: "Aucune zone en anomalie en ce moment." }),
         h("p", { class: "note", text: mapF.sel.length ? "Classées par quantité totale, bonus d'anomalie compris, avec le zaap le plus proche. Clique une zone pour la centrer." : "Clique une zone pour la centrer sur la carte (et changer de carte si besoin)." }))),
+    minesPanel(nearZaap, zaapName),
     (() => {
       if (!F) return null;
       const selP = mapF.sel.flatMap(rid => protOf(rid).map(p => [rid, p]));
