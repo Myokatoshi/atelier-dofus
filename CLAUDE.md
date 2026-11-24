@@ -1,7 +1,6 @@
 # Atelier Dofus 3 : notes pour Claude
 
 - Application web statique (PWA), sans build : `index.html`, `css/app.css`, `js/app.js`, `sw.js`.
-- Le dossier `touch/` est une AUTRE appli, l'Atelier Touch (Dofus Touch, serveur Kelerog), voulue « vraiment à part » par l'utilisateur : ne rien y mélanger, voir `touch/CLAUDE.md`. Elle est publiée avec le site (https://myokatoshi.github.io/atelier-dofus/touch/). Le `sw.js` de Dofus 3 ignore les adresses `/touch/` et ne supprime que les caches `atelier-…` (ceux de l'Atelier Touch commencent par `touch-`).
 - Mise en ligne : chaque push sur `main` est recopié sur `gh-pages` (workflow « Mise en ligne »), publié sur https://myokatoshi.github.io/atelier-dofus/.
 - À chaque changement de l'appli, incrémenter `VERSION` dans `sw.js` (sinon les utilisateurs gardent l'ancienne version en cache). L'appli installée vérifie les mises à jour au démarrage, à chaque retour sur l'appli et toutes les 30 min (`index.html`), puis se recharge seule ; le numéro de version (« appli vNN », lu dans le nom du cache) est affiché en bas de page.
 - Commits signés avec l'adresse anonyme GitHub (configurée dans `.git/config` du dépôt), jamais l'adresse e-mail personnelle.

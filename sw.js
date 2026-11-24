@@ -1,6 +1,6 @@
 // Service worker : rend l'appli installable et utilisable hors connexion.
 // Pense à changer VERSION à chaque mise en ligne pour que tout le monde reçoive la mise à jour.
-const VERSION = "atelier-v90";
+const VERSION = "atelier-v89";
 const SHELL = ["./", "index.html", "css/app.css", "js/app.js", "config.js", "vendor/supabase.js", "manifest.webmanifest",
   "icons/icon.svg", "icons/icon-192.png", "icons/dofus-ocre.png", "data/core.json", "data/farm.json", "data/icons/menu.webp"];
 
@@ -8,13 +8,11 @@ self.addEventListener("install", e => {
   e.waitUntil(caches.open(VERSION).then(c => c.addAll(SHELL.map(u => new Request(u, { cache: "reload" })))).then(() => self.skipWaiting()));
 });
 self.addEventListener("activate", e => {
-  e.waitUntil(caches.keys().then(keys => Promise.all(keys.filter(k => k.startsWith("atelier-") && k !== VERSION).map(k => caches.delete(k)))).then(() => self.clients.claim()));
+  e.waitUntil(caches.keys().then(keys => Promise.all(keys.filter(k => k !== VERSION).map(k => caches.delete(k)))).then(() => self.clients.claim()));
 });
 self.addEventListener("fetch", e => {
   const url = new URL(e.request.url);
   if (e.request.method !== "GET") return;
-  // L'Atelier Touch (dossier touch/) est une appli à part, avec son propre service worker
-  if (url.pathname.includes("/touch/")) return;
   // Le serveur Supabase (prix, comptes) n'est jamais mis en cache
   if (url.hostname.endsWith("supabase.co") || url.pathname.includes("/auth/") || url.pathname.includes("/rest/")) return;
   const sameOrigin = url.origin === location.origin;
