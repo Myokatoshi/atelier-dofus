@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, minimum-scale=1, viewport-fit=cover">
+<title>Atelier Touch</title>
+<meta name="description" content="Encyclopédie, prix HDV, crafts rentables, métiers, builds, donjons, quêtes et Almanax pour Dofus Touch.">
+<meta name="theme-color" content="#0e1420">
+<meta name="color-scheme" content="dark">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icons/icon-192.png" type="image/png">
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Atelier Touch">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Baloo+2:wght@600;700;800&family=Nunito:wght@400;600;700;800&family=IBM+Plex+Mono:wght@400;500;600&display=swap">
+<link rel="stylesheet" href="css/app.css">
+</head>
+<body>
+<div class="shell">
+  <aside class="side" aria-label="Menu">
+    <a class="brand" href="#accueil" aria-label="Atelier Touch, accueil">
+      <img src="icons/logo.png" alt="" width="40" height="40">
+      <span><b>Atelier Touch</b><small>Dofus Touch · <span class="srv">Kelerog</span></small></span>
+    </a>
+    <nav class="sidenav" id="sidenav" aria-label="Sections"></nav>
+  </aside>
+  <div class="wrap">
+    <header class="appbar">
+      <a class="brand brand-m" href="#accueil" aria-label="Atelier Touch, accueil">
+        <img src="icons/logo.png" alt="" width="40" height="40">
+        <span><b>Atelier Touch</b><small>Dofus Touch · <span class="srv">Kelerog</span></small></span>
+      </a>
+      <div class="search gsearch"><input type="search" id="q-global" placeholder="Objet, monstre, quête…" aria-label="Rechercher dans l'encyclopédie" autocomplete="off"></div>
+    </header>
+    <nav class="subnav" id="subnav" aria-label="Pages de la rubrique"></nav>
+    <main id="view"><div class="loading">Chargement des données de Dofus Touch…</div></main>
+    <footer class="note">Données du jeu : client officiel de Dofus Touch (version <span id="ver">…</span>), images d'Ankama. Guides, donjons et quêtes : liens et informations de l'API publique du <a href="https://papycha.fr" target="_blank" rel="noopener">Bazar de Papycha</a>. Tes prix, ton inventaire, tes plans et tes builds restent sur cet appareil (sauvegarde à exporter dans Réglages). Application de fans, sans lien avec Ankama. <span id="appver"></span></footer>
+  </div>
+</div>
+<nav class="bottom" id="bottom" aria-label="Rubriques"></nav>
+<dialog id="sheet" aria-label="Fiche"><div class="sheet-in" id="sheet-in"></div></dialog>
+<div class="toast" id="toast" hidden></div>
+
+<script src="js/core.js"></script>
+<script src="js/ency.js"></script>
+<script src="js/market.js"></script>
+<script src="js/prod.js"></script>
+<script src="js/adventure.js"></script>
+<script src="js/build.js"></script>
+<script src="js/home.js"></script>
+<script>
+  if ("serviceWorker" in navigator) {
+    const hadController = !!navigator.serviceWorker.controller;
+    let reloaded = false;
+    navigator.serviceWorker.addEventListener("controllerchange", () => { if (hadController && !reloaded) { reloaded = true; location.reload(); } });
+    addEventListener("load", () => navigator.serviceWorker.register("sw.js", { updateViaCache: "none" }).then(r => {
+      r.update();
+      document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") r.update().catch(() => {}); });
+      setInterval(() => r.update().catch(() => {}), 30 * 60e3);
+    }).catch(() => {}));
+  }
+</script>
+</body>
+</html>
